@@ -1,0 +1,22 @@
+{
+  "name": "unfi-pco",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "app",
+    "functions",
+    "agent"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=app",
+    "build": "npm run build --workspace=shared && npm run build --workspace=app && npm run build --workspace=functions && npm run build --workspace=agent",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "agent:dev": "npm run dev --workspace=agent",
+    "functions:dev": "npm run dev --workspace=functions"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

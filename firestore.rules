@@ -1,0 +1,128 @@
+rules_version = '2';
+// Platform-level config (PCO OAuth app credentials) is stored in /platform_config
+// and is only accessible to super_admins. Cloud Functions use Admin SDK (bypasses rules).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helper Functions ────────────────────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.role == 'super_admin';
+    }
+
+    function getOrgRole(orgId) {
+      return request.auth.token.orgId == orgId ? request.auth.token.role : null;
+    }
+
+    function hasOrgRole(orgId, roles) {
+      return isSignedIn() && getOrgRole(orgId) in roles;
+    }
+
+    function isOrgAdmin(orgId) {
+      return hasOrgRole(orgId, ['org_admin']) || isSuperAdmin();
+    }
+
+    function isOrgManager(orgId) {
+      return hasOrgRole(orgId, ['org_admin', 'manager']) || isSuperAdmin();
+    }
+
+    function isOrgMember(orgId) {
+      return hasOrgRole(orgId, ['org_admin', 'manager', 'viewer']) || isSuperAdmin();
+    }
+
+    function isAgentForOrg(orgId) {
+      return isSignedIn()
+        && request.auth.token.agent == true
+        && request.auth.token.orgId == orgId;
+    }
+
+    // ─── Organizations ───────────────────────────────────────────────────────
+
+    match /organizations/{orgId} {
+      allow read: if isOrgMember(orgId);
+      allow create: if isSuperAdmin();
+      allow update: if isOrgAdmin(orgId);
+      allow delete: if isSuperAdmin();
+
+      // Settings: org admins can read/write; others read-only
+      match /settings/{doc} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isOrgAdmin(orgId);
+      }
+
+      // Mappings: managers can read; org admins can write
+      match /mappings/{mappingId} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isOrgAdmin(orgId);
+      }
+
+      // Doors: synced from agent; members can read; only agent can write
+      match /doors/{doorId} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isOrgAdmin(orgId) || isAgentForOrg(orgId);
+      }
+
+      // Schedule Windows: members can read; functions write
+      match /schedule_windows/{windowId} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isOrgAdmin(orgId);
+      }
+
+      // Door Commands: managers can read and create (manual overrides)
+      // Only the agent can update (to mark done/failed)
+      match /door_commands/{commandId} {
+        allow read: if isOrgManager(orgId);
+        allow create: if isOrgManager(orgId);
+        allow update: if isAgentForOrg(orgId) || isOrgAdmin(orgId);
+        allow delete: if isOrgAdmin(orgId);
+      }
+
+      // Audit Log: read-only for members, written by agent + functions
+      match /audit_log/{logId} {
+        allow read: if isOrgMember(orgId);
+        allow create: if isOrgManager(orgId) || isAgentForOrg(orgId);
+        allow update, delete: if false;
+      }
+    }
+
+    // ─── Users ───────────────────────────────────────────────────────────────
+
+    match /users/{uid} {
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid || isSuperAdmin()
+      );
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow update: if (isSignedIn() && request.auth.uid == uid)
+        || isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // ─── Agents ──────────────────────────────────────────────────────────────
+
+    match /agents/{agentId} {
+      allow read: if isSignedIn() && (
+        isOrgMember(resource.data.org_id) || isSuperAdmin()
+      );
+      // Agents register and update their own docs
+      allow create, update: if isAgentForOrg(resource.data.org_id)
+        || isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // ─── Platform Config (PCO OAuth app credentials) ──────────────────────────
+    // Only super_admins can read/write — Cloud Functions use Admin SDK
+    match /platform_config/{configId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    // ─── Deny everything else ─────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  agent:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount service account JSON as read-only
+      - ./service-account.json:/app/service-account.json:ro
+    # Use host networking so the agent can reach the UniFi console on the LAN
+    # without NAT or port-mapping complexity.
+    network_mode: host
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-files: '3'

@@ -1,0 +1,45 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "door_commands",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "execute_at", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "schedule_windows",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "unlock_at", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "schedule_windows",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "lock_at", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "audit_log",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "door_id", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "mappings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "source_type", "order": "ASCENDING" },
+        { "fieldPath": "enabled", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
