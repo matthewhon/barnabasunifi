@@ -8,10 +8,7 @@
     "strict": true,
     "target": "es2017",
     "esModuleInterop": true,
-    "skipLibCheck": true,
-    "paths": {
-      "@unfi-pco/shared": ["../shared/src/index.ts"]
-    }
+    "skipLibCheck": true
   },
   "compileOnSave": true,
   "include": ["src"],
