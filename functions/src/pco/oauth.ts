@@ -1,6 +1,7 @@
 import { onRequest } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import axios from 'axios';
+import { getPlatformConfig } from '../config/platform';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,22 +28,14 @@ interface PcoOAuthConfig {
 const PCO_TOKEN_URL = 'https://api.planningcenteronline.com/oauth/token';
 const PCO_AUTHORIZE_URL = 'https://api.planningcenteronline.com/oauth/authorize';
 
-function getPcoClientId(): string {
-  const id = process.env.PCO_CLIENT_ID;
-  if (!id) throw new Error('PCO_CLIENT_ID environment variable is not set.');
-  return id;
-}
-
-function getPcoClientSecret(): string {
-  const secret = process.env.PCO_CLIENT_SECRET;
-  if (!secret) throw new Error('PCO_CLIENT_SECRET environment variable is not set.');
-  return secret;
-}
-
-function getRedirectUri(): string {
-  const uri = process.env.PCO_REDIRECT_URI;
-  if (!uri) throw new Error('PCO_REDIRECT_URI environment variable is not set.');
-  return uri;
+// Credentials are loaded from Firestore platform_config/pco at runtime
+async function getPcoCredentials() {
+  const cfg = await getPlatformConfig();
+  return {
+    clientId: cfg.pco_client_id,
+    clientSecret: cfg.pco_client_secret,
+    redirectUri: cfg.redirect_uri,
+  };
 }
 
 function getAppBaseUrl(): string {
@@ -73,13 +66,15 @@ export async function refreshPcoToken(orgId: string): Promise<string> {
     throw new Error(`No PCO refresh token found for org ${orgId}`);
   }
 
+  const { clientId, clientSecret } = await getPcoCredentials();
+
   const response = await axios.post<PcoTokenResponse>(
     PCO_TOKEN_URL,
     new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: oauth.refresh_token,
-      client_id: getPcoClientId(),
-      client_secret: getPcoClientSecret(),
+      client_id: clientId,
+      client_secret: clientSecret,
     }),
     { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
   );
@@ -106,9 +101,11 @@ export const pcoOAuthStart = onRequest(async (req, res) => {
     return;
   }
 
+  const { clientId, redirectUri } = await getPcoCredentials();
+
   const params = new URLSearchParams({
-    client_id: getPcoClientId(),
-    redirect_uri: getRedirectUri(),
+    client_id: clientId,
+    redirect_uri: redirectUri,
     response_type: 'code',
     scope: 'services groups',
     state: orgId,
@@ -134,15 +131,17 @@ export const pcoOAuthCallback = onRequest(async (req, res) => {
   const db = getFirestore();
 
   try {
+    const { clientId, clientSecret, redirectUri } = await getPcoCredentials();
+
     // Exchange authorization code for tokens
     const tokenResponse = await axios.post<PcoTokenResponse>(
       PCO_TOKEN_URL,
       new URLSearchParams({
         grant_type: 'authorization_code',
         code,
-        client_id: getPcoClientId(),
-        client_secret: getPcoClientSecret(),
-        redirect_uri: getRedirectUri(),
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
       }),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
