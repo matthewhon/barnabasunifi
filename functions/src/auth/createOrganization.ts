@@ -4,7 +4,8 @@ import { getAuth } from 'firebase-admin/auth';
 
 interface CreateOrganizationRequest {
   orgName: string;
-  timezone: string;
+  displayName?: string;
+  timezone?: string;
 }
 
 interface CreateOrganizationResponse {
@@ -40,63 +41,85 @@ export const createOrganization = onCall<
     throw new HttpsError('unauthenticated', 'You must be signed in to create an organization.');
   }
 
-  const { orgName, timezone } = request.data;
+  const { orgName, displayName, timezone } = request.data;
   const uid = request.auth.uid;
+  const email = request.auth.token.email ?? '';
 
   // Validate inputs
   if (!orgName || typeof orgName !== 'string' || orgName.trim().length === 0) {
-    throw new HttpsError('invalid-argument', 'orgName must be a non-empty string.');
+    throw new HttpsError('invalid-argument', 'Organization name must be a non-empty string.');
   }
   const resolvedTimezone = timezone && typeof timezone === 'string' && timezone.trim() ? timezone.trim() : 'America/Chicago';
 
-  const db = getFirestore();
-  const auth = getAuth();
+  try {
+    const db = getFirestore();
+    const auth = getAuth();
 
-  // Generate a new Firestore document ID for the org
-  const orgRef = db.collection('organizations').doc();
-  const orgId = orgRef.id;
-  const slug = toSlug(orgName);
-  const now = FieldValue.serverTimestamp();
+    // Generate a new Firestore document ID for the org
+    const orgRef = db.collection('organizations').doc();
+    const orgId = orgRef.id;
+    const slug = toSlug(orgName);
+    const now = FieldValue.serverTimestamp();
 
-  // Run all writes in a batch for atomicity
-  const batch = db.batch();
+    // Fetch existing user doc if any
+    const userRef = db.collection('users').doc(uid);
+    const userSnap = await userRef.get();
+    const existingUserData = userSnap.exists ? userSnap.data() : {};
+    const existingMemberships = existingUserData?.org_memberships;
 
-  // 1. Create the organization document
-  batch.set(orgRef, {
-    name: orgName.trim(),
-    slug,
-    created_at: now,
-    pco_connected: false,
-  });
+    const mergedMemberships =
+      typeof existingMemberships === 'object' && !Array.isArray(existingMemberships)
+        ? { ...existingMemberships, [orgId]: { role: 'org_admin', joined_at: now } }
+        : { [orgId]: { role: 'org_admin', joined_at: now } };
 
-  // 2. Create the settings/config document with defaults
-  const configRef = orgRef.collection('settings').doc('config');
-  batch.set(configRef, {
-    unlock_buffer_before_min: 15,
-    lock_buffer_after_min: 15,
-    poll_interval_min: 30,
-    timezone: resolvedTimezone,
-  });
+    // Run all writes in a batch for atomicity
+    const batch = db.batch();
 
-  // 3. Create or update the user document with org_memberships
-  const userRef = db.collection('users').doc(uid);
-  batch.set(
-    userRef,
-    {
-      org_memberships: {
-        [orgId]: { role: 'org_admin', joined_at: now },
+    // 1. Create the organization document
+    batch.set(orgRef, {
+      name: orgName.trim(),
+      slug,
+      created_at: now,
+      pco_connected: false,
+    });
+
+    // 2. Create the settings/config document with defaults
+    const configRef = orgRef.collection('settings').doc('config');
+    batch.set(configRef, {
+      unlock_buffer_before_min: 15,
+      lock_buffer_after_min: 15,
+      poll_interval_min: 30,
+      timezone: resolvedTimezone,
+    });
+
+    // 3. Upsert the user profile document with org_memberships
+    batch.set(
+      userRef,
+      {
+        uid,
+        email: email || existingUserData?.email || '',
+        display_name: displayName?.trim() || existingUserData?.display_name || request.auth.token.name || 'Admin',
+        org_memberships: mergedMemberships,
+        created_at: existingUserData?.created_at ?? now,
       },
-    },
-    { merge: true }
-  );
+      { merge: true }
+    );
 
-  await batch.commit();
+    await batch.commit();
 
-  // 4. Set custom claims on the Firebase Auth user
-  await auth.setCustomUserClaims(uid, {
-    orgId,
-    role: 'org_admin',
-  });
+    // 4. Set custom claims on the Firebase Auth user
+    await auth.setCustomUserClaims(uid, {
+      orgId,
+      role: 'org_admin',
+    });
 
-  return { orgId, success: true };
+    return { orgId, success: true };
+  } catch (err: unknown) {
+    console.error('Error in createOrganization Cloud Function:', err);
+    if (err instanceof HttpsError) {
+      throw err;
+    }
+    const message = err instanceof Error ? err.message : 'An error occurred while creating the organization.';
+    throw new HttpsError('internal', message);
+  }
 });

@@ -40,12 +40,15 @@ export default function RegisterPage() {
           return 'Please enter a valid email address.';
         case 'auth/network-request-failed':
           return 'Network error. Check your connection and try again.';
+        case 'functions/internal':
+        case 'internal':
+          return message && message !== 'INTERNAL' ? message : 'Organization creation failed. Please make sure Firebase Cloud Functions are running or deployed.';
       }
-      if (message) {
+      if (message && message !== 'INTERNAL') {
         return message;
       }
     }
-    return 'An unexpected error occurred. Please try again.';
+    return 'An unexpected error occurred while setting up your organization. Please try again.';
   }
 
   async function handleSubmit(e: React.FormEvent) {
