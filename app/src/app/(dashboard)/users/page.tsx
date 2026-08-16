@@ -94,39 +94,26 @@ export default function UsersPage() {
 
   const isAdmin = currentRole === 'org_admin' || isSuperAdmin;
 
+  const fetchOrgUsers = useCallback(async () => {
+    if (!orgId) return;
+    try {
+      const getOrgUsers = httpsCallable<
+        { orgId: string },
+        { users: OrgUser[]; success: boolean }
+      >(functions, 'getOrgUsers');
+      const res = await getOrgUsers({ orgId });
+      setUsers(res.data.users || []);
+    } catch {
+      showToast('Failed to load users.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [orgId, showToast]);
+
   // Load org users
   useEffect(() => {
-    if (!orgId) return;
-
-    async function loadUsers() {
-      try {
-        const snap = await getDocs(collection(db, 'users'));
-        const allProfiles = snap.docs.map((d) => ({ uid: d.id, ...(d.data() as Omit<UserProfile, 'uid'>) }));
-
-        // Filter to users who are members of this org
-        const orgUsers: OrgUser[] = allProfiles
-          .filter((p) => p.org_memberships?.some((m) => m.org_id === orgId))
-          .map((p) => {
-            const membership = p.org_memberships.find((m) => m.org_id === orgId);
-            return {
-              uid: p.uid,
-              display_name: p.display_name,
-              email: p.email,
-              role: membership?.role ?? 'viewer',
-            };
-          });
-
-        setUsers(orgUsers);
-      } catch {
-        showToast('Failed to load users.', 'error');
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadUsers();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId]);
+    fetchOrgUsers();
+  }, [fetchOrgUsers]);
 
   const handleInvite = useCallback(async () => {
     if (!orgId || !inviteEmail.trim()) return;
@@ -141,13 +128,14 @@ export default function UsersPage() {
       setInviteOpen(false);
       setInviteEmail('');
       setInviteRole('viewer');
+      fetchOrgUsers();
     } catch (err: unknown) {
       const msg = (err as { message?: string }).message ?? 'Failed to send invitation.';
       showToast(msg, 'error');
     } finally {
       setInviting(false);
     }
-  }, [orgId, inviteEmail, inviteRole, showToast]);
+  }, [orgId, inviteEmail, inviteRole, showToast, fetchOrgUsers]);
 
   const handleRoleChange = useCallback(
     async (uid: string, newRole: UserRole) => {
