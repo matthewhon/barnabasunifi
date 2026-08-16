@@ -41,15 +41,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(firebaseUser);
 
       if (firebaseUser) {
-        // Get custom claims from ID token
-        const idTokenResult = await firebaseUser.getIdTokenResult(true);
-        const tokenClaims = idTokenResult.claims as AuthClaims;
-        setClaims(tokenClaims);
-
-        // Load user profile from Firestore
-        const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-        if (profileDoc.exists()) {
-          setProfile(profileDoc.data() as UserProfile);
+        try {
+          const [idTokenResult, profileDoc] = await Promise.all([
+            firebaseUser.getIdTokenResult(true),
+            getDoc(doc(db, 'users', firebaseUser.uid)),
+          ]);
+          setClaims(idTokenResult.claims as AuthClaims);
+          if (profileDoc.exists()) {
+            setProfile(profileDoc.data() as UserProfile);
+          } else {
+            setProfile(null);
+          }
+        } catch (err) {
+          console.error('Error fetching user auth profile or claims:', err);
         }
       } else {
         setClaims(null);

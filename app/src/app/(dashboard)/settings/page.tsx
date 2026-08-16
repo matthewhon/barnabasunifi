@@ -141,18 +141,44 @@ export default function SettingsPage() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (!orgId) return;
-    getOrgSettings(orgId).then((s) => {
-      setSettings(s);
-      if (s) {
-        setUnlockBuffer(s.unlock_buffer_before_min);
-        setLockBuffer(s.lock_buffer_after_min);
-        setPollInterval(s.poll_interval_min);
-        setTimezone(s.timezone ?? 'America/Chicago');
-      }
+    // Check URL parameters for PCO OAuth redirect status
+    const params = new URLSearchParams(window.location.search);
+    const pcoStatus = params.get('pco');
+    if (pcoStatus === 'connected') {
+      showToast('Successfully connected to Planning Center!', 'success');
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (pcoStatus === 'error') {
+      const reason = params.get('reason');
+      showToast(`Planning Center connection failed${reason ? `: ${reason}` : ''}.`, 'error');
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+
+    if (!orgId) {
       setLoading(false);
-    });
-  }, [orgId]);
+      return;
+    }
+
+    let isMounted = true;
+    setLoading(true);
+    getOrgSettings(orgId)
+      .then((s) => {
+        if (!isMounted) return;
+        setSettings(s);
+        if (s) {
+          setUnlockBuffer(s.unlock_buffer_before_min);
+          setLockBuffer(s.lock_buffer_after_min);
+          setPollInterval(s.poll_interval_min);
+          setTimezone(s.timezone ?? 'America/Chicago');
+        }
+      })
+      .finally(() => {
+        if (isMounted) setLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [orgId, showToast]);
 
   const handleSaveTimings = useCallback(async () => {
     if (!orgId) return;
