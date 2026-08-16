@@ -95,14 +95,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  const firstProfileOrgId = profile?.org_memberships
+    ? (Array.isArray(profile.org_memberships)
+        ? profile.org_memberships[0]?.org_id
+        : Object.keys(profile.org_memberships)[0])
+    : null;
+
+  const activeOrgId = claims?.orgId ?? firstProfileOrgId ?? null;
+
+  const profileRole = (profile as unknown as { role?: UserRole })?.role;
+  const isSuper = claims?.role === 'super_admin' || profileRole === 'super_admin';
+
+  const activeRole: UserRole | null =
+    claims?.role ??
+    (isSuper ? 'super_admin' : null) ??
+    (activeOrgId && profile?.org_memberships
+      ? (Array.isArray(profile.org_memberships)
+          ? (profile.org_memberships as Array<{ org_id: string; role: UserRole }>).find((m) => m.org_id === activeOrgId)?.role
+          : (profile.org_memberships as Record<string, { role: UserRole }>)[activeOrgId]?.role)
+      : null) ??
+    null;
+
   const value: AuthContextValue = {
     user,
     profile,
     claims,
     loading,
-    orgId: claims?.orgId ?? null,
-    role: claims?.role ?? null,
-    isSuperAdmin: claims?.role === 'super_admin',
+    orgId: activeOrgId,
+    role: activeRole,
+    isSuperAdmin: isSuper,
     signInWithEmail,
     signInWithGoogle,
     signOut,

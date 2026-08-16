@@ -268,7 +268,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (!user) return null;
 
-  if (user && !orgId) {
+  if (user && !orgId && !isSuperAdmin) {
     return (
       <div
         style={{
@@ -279,6 +279,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           background: 'var(--color-bg-base)',
           flexDirection: 'column',
           gap: '1rem',
+          padding: '1.5rem',
         }}
       >
         <div
@@ -291,18 +292,32 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             animation: 'spin 0.8s linear infinite',
           }}
         />
-        <div style={{ textAlign: 'center' }}>
+        <div style={{ textAlign: 'center', maxWidth: '24rem' }}>
           <h2 style={{ color: 'var(--color-text-primary)', marginBottom: '0.5rem' }}>
             Organization setup in progress…
           </h2>
           <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-            Your organization is being provisioned. This may take a few seconds.
+            Your organization is being provisioned. If you just registered, this should complete automatically.
           </p>
+        </div>
+        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={async () => {
+              await user.getIdToken(true);
+              window.location.reload();
+            }}
+          >
+            Refresh Status
+          </button>
+          <Link href="/register" className="btn btn-primary btn-sm">
+            Create Organization
+          </Link>
         </div>
         <button
           className="btn btn-ghost btn-sm"
           onClick={handleSignOut}
-          style={{ marginTop: '1rem', color: 'var(--color-text-muted)' }}
+          style={{ marginTop: '0.5rem', color: 'var(--color-text-muted)' }}
         >
           Sign out
         </button>
