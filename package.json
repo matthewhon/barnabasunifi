@@ -10,7 +10,8 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace=app",
-    "build": "npm run build --workspace=shared && npm run build --workspace=app && npm run build --workspace=functions && npm run build --workspace=agent",
+    "build": "npm run build --workspace=shared && npm run build --workspace=app",
+    "build:all": "npm run build --workspace=shared && npm run build --workspace=app && npm run build --workspace=functions && npm run build --workspace=agent",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "agent:dev": "npm run dev --workspace=agent",

@@ -5,10 +5,6 @@ runConfig:
   minInstances: 0
   maxInstances: 10
 
-scripts:
-  buildCommand: npm run build --workspace=shared && npm run build --workspace=app
-
-
 env:
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
     value: AIzaSyCBu6tWWWx50VqSkTUGEAYy6fShFGIpZRk
