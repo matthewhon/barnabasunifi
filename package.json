@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace=app",
-    "build": "npm run build --workspace=shared && npm run build --workspace=app",
+    "build": "npm run build --workspace=shared && npm run build --workspace=app && node -e \"fs.cpSync('app/.next', '.next', {recursive: true})\"",
     "build:all": "npm run build --workspace=shared && npm run build --workspace=app && npm run build --workspace=functions && npm run build --workspace=agent",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
