@@ -19,19 +19,26 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  function getErrorMessage(code: string): string {
-    switch (code) {
-      case 'auth/email-already-in-use':
-        return 'An account with this email already exists. Try signing in instead.';
-      case 'auth/weak-password':
-        return 'Password must be at least 6 characters.';
-      case 'auth/invalid-email':
-        return 'Please enter a valid email address.';
-      case 'auth/network-request-failed':
-        return 'Network error. Check your connection and try again.';
-      default:
-        return 'An unexpected error occurred. Please try again.';
+  function getErrorMessage(err: unknown): string {
+    if (err && typeof err === 'object') {
+      const code = (err as { code?: string }).code ?? '';
+      const message = (err as { message?: string }).message;
+
+      switch (code) {
+        case 'auth/email-already-in-use':
+          return 'An account with this email already exists. Try signing in instead.';
+        case 'auth/weak-password':
+          return 'Password must be at least 6 characters.';
+        case 'auth/invalid-email':
+          return 'Please enter a valid email address.';
+        case 'auth/network-request-failed':
+          return 'Network error. Check your connection and try again.';
+      }
+      if (message) {
+        return message;
+      }
     }
+    return 'An unexpected error occurred. Please try again.';
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -62,21 +69,22 @@ export default function RegisterPage() {
       await registerWithEmail(email.trim(), password, displayName.trim());
 
       // Step 2: Call Cloud Function to create the organization and set org_admin claim
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Chicago';
       const createOrganization = httpsCallable<
-        { orgName: string; displayName: string },
+        { orgName: string; displayName: string; timezone: string },
         { orgId: string }
       >(functions, 'createOrganization');
 
       await createOrganization({
         orgName: orgName.trim(),
         displayName: displayName.trim(),
+        timezone: userTimezone,
       });
 
       // Step 3: Redirect to home — auth-context will pick up new claims on next token refresh
       router.push('/');
     } catch (err: unknown) {
-      const code = (err as { code?: string }).code ?? '';
-      setError(getErrorMessage(code));
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }

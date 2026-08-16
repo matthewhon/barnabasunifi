@@ -47,9 +47,7 @@ export const createOrganization = onCall<
   if (!orgName || typeof orgName !== 'string' || orgName.trim().length === 0) {
     throw new HttpsError('invalid-argument', 'orgName must be a non-empty string.');
   }
-  if (!timezone || typeof timezone !== 'string') {
-    throw new HttpsError('invalid-argument', 'timezone must be a non-empty string.');
-  }
+  const resolvedTimezone = timezone && typeof timezone === 'string' && timezone.trim() ? timezone.trim() : 'America/Chicago';
 
   const db = getFirestore();
   const auth = getAuth();
@@ -77,7 +75,7 @@ export const createOrganization = onCall<
     unlock_buffer_before_min: 15,
     lock_buffer_after_min: 15,
     poll_interval_min: 30,
-    timezone,
+    timezone: resolvedTimezone,
   });
 
   // 3. Create or update the user document with org_memberships
