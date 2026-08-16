@@ -229,7 +229,41 @@ export default function SettingsPage() {
     }
   }
 
+  const [unifiMode, setUnifiMode] = useState<'agent' | 'remote'>('agent');
+  const [remoteHost, setRemoteHost] = useState('');
+  const [remoteToken, setRemoteToken] = useState('');
+  const [wizardStep, setWizardStep] = useState(1);
+  const [showWizard, setShowWizard] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      if (settings.unifi_mode) setUnifiMode(settings.unifi_mode);
+      if (settings.unifi_remote) {
+        setRemoteHost(settings.unifi_remote.host ?? '');
+        setRemoteToken(settings.unifi_remote.access_token ?? '');
+      }
+    }
+  }, [settings]);
+
+  const handleSaveUnifiMode = async (mode: 'agent' | 'remote') => {
+    if (!orgId) return;
+    setSaving(true);
+    try {
+      await updateOrgSettings(orgId, {
+        unifi_mode: mode,
+        ...(mode === 'remote' ? { unifi_remote: { host: remoteHost.trim(), access_token: remoteToken.trim() } } : {}),
+      });
+      setUnifiMode(mode);
+      showToast(`UniFi connection mode updated to ${mode === 'agent' ? 'Local Agent' : 'Remote Direct'}.`, 'success');
+    } catch {
+      showToast('Failed to update UniFi connection mode.', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const isPcoConnected = !!settings?.pco_oauth?.access_token;
+  const isUnifiConfigured = unifiMode === 'remote' ? (!!remoteHost && !!remoteToken) : true;
 
   if (loading) {
     return (
@@ -248,13 +282,135 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1 className="page-title">Settings</h1>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h1 className="page-title">Settings</h1>
+          <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
+            Manage Planning Center integration, UniFi controller connection, and timing rules.
+          </p>
+        </div>
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={() => setShowWizard(!showWizard)}
+        >
+          {showWizard ? 'Hide Setup Wizard' : '⚡ Launch Setup Wizard'}
+        </button>
       </div>
+
+      {/* ─── Setup Wizard Stepper Banner ─── */}
+      {showWizard && (
+        <div className="card" style={{ marginBottom: '1.5rem', background: 'var(--color-bg-surface)', border: '1px solid var(--color-accent-subtle)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+              Tenant Setup Wizard — Step {wizardStep} of 4
+            </h2>
+            <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+              {isPcoConnected ? '✓ PCO Authorized' : '⚠️ PCO Action Required'}
+            </div>
+          </div>
+
+          {/* Stepper Progress Bar */}
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+            {[
+              { num: 1, label: '1. PCO Authorization' },
+              { num: 2, label: '2. UniFi Connection' },
+              { num: 3, label: '3. Timings & Timezone' },
+              { num: 4, label: '4. Door Mappings' },
+            ].map((step) => (
+              <button
+                key={step.num}
+                onClick={() => setWizardStep(step.num)}
+                style={{
+                  flex: 1,
+                  padding: '0.625rem 0.75rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: wizardStep === step.num ? '2px solid var(--color-accent)' : '1px solid var(--color-border)',
+                  background: wizardStep === step.num ? 'var(--color-bg-base)' : 'transparent',
+                  color: wizardStep === step.num ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
+                  fontWeight: wizardStep === step.num ? 600 : 400,
+                  fontSize: '0.8125rem',
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                }}
+              >
+                {step.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Wizard Step Content */}
+          <div style={{ padding: '1rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+            {wizardStep === 1 && (
+              <div>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.5rem' }}>Step 1: Connect Planning Center Online</h3>
+                <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', marginBottom: '1rem' }}>
+                  Authorize the application to sync your church&apos;s Planning Center Services and Groups schedules.
+                </p>
+                {isPcoConnected ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--color-success)', fontWeight: 600 }}>
+                    <CheckCircleIcon /> Planning Center is authorized and connected!
+                  </div>
+                ) : (
+                  <a href={`/api/pco/auth?orgId=${orgId}`} className="btn btn-primary btn-sm">
+                    Authenticate with Planning Center
+                  </a>
+                )}
+              </div>
+            )}
+
+            {wizardStep === 2 && (
+              <div>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.5rem' }}>Step 2: Select UniFi Connection Mode</h3>
+                <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', marginBottom: '1rem' }}>
+                  Choose whether your UniFi controller is accessed via an on-premises Local Agent or over direct HTTPS Cloud connection.
+                </p>
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                  <button
+                    className={`btn btn-sm ${unifiMode === 'agent' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => handleSaveUnifiMode('agent')}
+                  >
+                    On-Premises Local Agent
+                  </button>
+                  <button
+                    className={`btn btn-sm ${unifiMode === 'remote' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => handleSaveUnifiMode('remote')}
+                  >
+                    Direct Remote HTTPS
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {wizardStep === 3 && (
+              <div>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.5rem' }}>Step 3: Set Event Buffer Timings</h3>
+                <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', marginBottom: '1rem' }}>
+                  Define how many minutes before event start doors unlock, and how long after event end they lock.
+                </p>
+                <button className="btn btn-primary btn-sm" onClick={handleSaveTimings} disabled={saving}>
+                  {saving ? 'Saving...' : 'Save Timing Rules'}
+                </button>
+              </div>
+            )}
+
+            {wizardStep === 4 && (
+              <div>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.5rem' }}>Step 4: Map Schedules to Doors</h3>
+                <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', marginBottom: '1rem' }}>
+                  Link your Planning Center Service Types / Groups to specific UniFi doors to automate unlocking schedules.
+                </p>
+                <a href="/mappings" className="btn btn-primary btn-sm">
+                  Go to Door Mappings ➔
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         {/* ── 1. Planning Center Connection ── */}
-        <SectionCard title="Planning Center Connection">
+        <SectionCard title="1. Planning Center Connection">
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.25rem' }}>
             {isPcoConnected ? (
               <CheckCircleIcon />
@@ -291,8 +447,139 @@ export default function SettingsPage() {
           </div>
         </SectionCard>
 
-        {/* ── 2. Timing Configuration ── */}
-        <SectionCard title="Timing Configuration">
+        {/* ── 2. UniFi Controller Connection Mode ── */}
+        <SectionCard title="2. UniFi Controller Connection">
+          <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.9375rem', marginBottom: '1.25rem', lineHeight: 1.6 }}>
+            Select how the application connects to your UniFi Access Controller.
+          </p>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+            {/* Mode A: Local Agent */}
+            <div
+              onClick={() => handleSaveUnifiMode('agent')}
+              style={{
+                padding: '1.25rem',
+                borderRadius: 'var(--radius-md)',
+                border: unifiMode === 'agent' ? '2px solid var(--color-accent)' : '1px solid var(--color-border)',
+                background: unifiMode === 'agent' ? 'var(--color-bg-surface)' : 'transparent',
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <h3 style={{ fontSize: '0.9375rem', fontWeight: 600 }}>Option A: On-Premises Local Agent</h3>
+                {unifiMode === 'agent' && <span className="badge badge-success">Active</span>}
+              </div>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>
+                Best for UniFi controllers behind local firewalls. Runs a lightweight Docker container inside your network.
+              </p>
+            </div>
+
+            {/* Mode B: Direct Remote HTTPS */}
+            <div
+              onClick={() => handleSaveUnifiMode('remote')}
+              style={{
+                padding: '1.25rem',
+                borderRadius: 'var(--radius-md)',
+                border: unifiMode === 'remote' ? '2px solid var(--color-accent)' : '1px solid var(--color-border)',
+                background: unifiMode === 'remote' ? 'var(--color-bg-surface)' : 'transparent',
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <h3 style={{ fontSize: '0.9375rem', fontWeight: 600 }}>Option B: Direct Remote HTTPS</h3>
+                {unifiMode === 'remote' && <span className="badge badge-success">Active</span>}
+              </div>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>
+                Best for internet-accessible UniFi controllers (Static IP or DDNS). Connects directly from Cloud Functions without an agent.
+              </p>
+            </div>
+          </div>
+
+          {/* Mode Details & Setup Form */}
+          {unifiMode === 'remote' ? (
+            <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+              <h3 style={{ fontSize: '0.9375rem', fontWeight: 600, marginBottom: '1rem' }}>Remote UniFi Console Configuration</h3>
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
+                <label className="form-label">UniFi Host URL</label>
+                <input
+                  type="url"
+                  className="form-input"
+                  placeholder="https://unifi.mychurch.org:8443 or https://72.x.x.x:8443"
+                  value={remoteHost}
+                  onChange={(e) => setRemoteHost(e.target.value)}
+                />
+                <span className="form-hint">Public HTTPS URL of your UniFi OS Console or Access application.</span>
+              </div>
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
+                <label className="form-label">UniFi Developer API Bearer Token</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  placeholder="API Token generated in UniFi Access -> Settings -> API"
+                  value={remoteToken}
+                  onChange={(e) => setRemoteToken(e.target.value)}
+                />
+              </div>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => handleSaveUnifiMode('remote')}
+                disabled={saving}
+              >
+                {saving ? 'Saving...' : 'Save Remote Connection'}
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
+                <label className="form-label">Organization ID</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={orgId ?? '—'}
+                  readOnly
+                  style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                  <label className="form-label" style={{ margin: 0 }}>Agent .env Snippet</label>
+                  <button className="btn btn-secondary btn-sm" onClick={copyEnvSnippet}>
+                    <CopyIcon />
+                    {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                <pre style={{ margin: 0 }}>{`ORG_ID=${orgId ?? '<your-org-id>'}
+FIREBASE_PROJECT_ID=${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? 'barnabasunfi'}
+UNIFI_HOST=https://<your-local-unifi-ip>
+UNIFI_ACCESS_TOKEN=<your-unifi-api-token>
+SKIP_TLS_VERIFY=true`}</pre>
+              </div>
+
+              {/* Step-by-step Setup Instructions */}
+              <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)', marginTop: '1rem' }}>
+                <h4 style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--color-text-primary)' }}>
+                  📖 Step-by-Step Local Agent Setup Instructions:
+                </h4>
+                <ol style={{ paddingLeft: '1.25rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.7 }}>
+                  <li>Log in to your local UniFi OS Console (`https://192.168.1.1`).</li>
+                  <li>Navigate to <strong>UniFi Access ➔ Settings ➔ System Settings ➔ API / Integrations</strong>.</li>
+                  <li>Click <strong>Create API Token</strong> and grant door lock/unlock permissions.</li>
+                  <li>Create a `.env` file on your local machine using the snippet above.</li>
+                  <li>Run the agent via Docker:
+                    <br />
+                    <code style={{ background: 'var(--color-bg-surface)', padding: '0.25rem 0.5rem', borderRadius: '4px', display: 'inline-block', marginTop: '0.35rem' }}>
+                      docker run -d --name unifi-pco-agent --env-file .env ghcr.io/matthewhon/unifi-pco-agent:latest
+                    </code>
+                  </li>
+                </ol>
+              </div>
+            </div>
+          )}
+        </SectionCard>
+
+        {/* ── 3. Timing Configuration ── */}
+        <SectionCard title="3. Timing Configuration">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <SliderInput
               label="Unlock Buffer Before Event"
@@ -354,67 +641,9 @@ export default function SettingsPage() {
                 onClick={handleSaveTimings}
                 disabled={saving}
               >
-                {saving ? 'Saving…' : 'Save Settings'}
+                {saving ? 'Saving…' : 'Save Timing Settings'}
               </button>
             </div>
-          </div>
-        </SectionCard>
-
-        {/* ── 3. Local Agent Setup ── */}
-        <SectionCard title="Local Agent Setup">
-          <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.9375rem', marginBottom: '1.25rem', lineHeight: 1.6 }}>
-            The local agent runs on a machine inside your network with access to the UniFi controller.
-            It polls for door commands from Firestore and executes them via the UniFi Access API.
-          </p>
-
-          <div className="form-group" style={{ marginBottom: '1rem' }}>
-            <label className="form-label">Organization ID</label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <input
-                type="text"
-                className="form-input"
-                value={orgId ?? '—'}
-                readOnly
-                style={{ fontFamily: 'monospace', fontSize: '0.875rem', flex: 1 }}
-              />
-            </div>
-          </div>
-
-          <div className="form-group" style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-              <label className="form-label" style={{ margin: 0 }}>Agent .env snippet</label>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={copyEnvSnippet}
-              >
-                <CopyIcon />
-                {copied ? 'Copied!' : 'Copy'}
-              </button>
-            </div>
-            <pre style={{ margin: 0 }}>{`ORG_ID=${orgId ?? '<your-org-id>'}
-FIREBASE_PROJECT_ID=${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? '<project-id>'}
-UNIFI_HOST=https://<your-unifi-controller>
-UNIFI_USERNAME=<service-account>
-UNIFI_PASSWORD=<service-account-password>`}</pre>
-          </div>
-
-          <div className="alert alert-info">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-            <span>
-              See the{' '}
-              <a
-                href="https://github.com/your-org/unifi-pco/blob/main/agent/README.md"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                agent README
-              </a>{' '}
-              for full setup instructions including Docker deployment.
-            </span>
           </div>
         </SectionCard>
       </div>

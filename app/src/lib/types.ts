@@ -45,6 +45,11 @@ export interface OrgSettings {
     pco_org_id?: string;
     pco_org_name?: string;
   };
+  unifi_mode?: 'agent' | 'remote';
+  unifi_remote?: {
+    host: string;
+    access_token: string;
+  };
 }
 
 // ─── Mappings ─────────────────────────────────────────────────────────────────
