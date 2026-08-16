@@ -41,8 +41,11 @@ export default function RegisterPage() {
         case 'auth/network-request-failed':
           return 'Network error. Check your connection and try again.';
         case 'functions/internal':
+        case 'functions/not-found':
         case 'internal':
-          return message && message !== 'INTERNAL' ? message : 'Organization creation failed. Please make sure Firebase Cloud Functions are running or deployed.';
+          return message && message !== 'INTERNAL' && message !== 'NOT_FOUND'
+            ? message
+            : 'Organization creation failed. Firebase Cloud Functions are not deployed or credentials expired. Please run "npx firebase-tools login" and "npx firebase-tools deploy --only functions".';
       }
       if (message && message !== 'INTERNAL') {
         return message;
