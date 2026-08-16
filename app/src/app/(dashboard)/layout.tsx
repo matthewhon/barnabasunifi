@@ -148,7 +148,7 @@ function LogOutIcon() {
 }
 
 function NavLink({ item, pathname, onClick }: { item: NavItem; pathname: string; onClick?: () => void }) {
-  const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
+  const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
 
   return (
     <Link
@@ -220,19 +220,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   const navItems: NavItem[] = [
-    { href: '/dashboard', label: 'Dashboard', icon: <HouseIcon /> },
-    { href: '/dashboard/doors', label: 'Doors', icon: <DoorIcon /> },
-    { href: '/dashboard/schedule', label: 'Schedule', icon: <CalendarIcon /> },
-    { href: '/dashboard/mappings', label: 'Mappings', icon: <LinkIcon /> },
-    { href: '/dashboard/audit', label: 'Audit Log', icon: <ListIcon /> },
-    { href: '/dashboard/settings', label: 'Settings', icon: <GearIcon /> },
-    { href: '/dashboard/users', label: 'Users', icon: <UsersIcon />, adminOnly: true },
+    { href: '/', label: 'Dashboard', icon: <HouseIcon /> },
+    { href: '/doors', label: 'Doors', icon: <DoorIcon /> },
+    { href: '/schedule', label: 'Schedule', icon: <CalendarIcon /> },
+    { href: '/mappings', label: 'Mappings', icon: <LinkIcon /> },
+    { href: '/audit', label: 'Audit Log', icon: <ListIcon /> },
+    { href: '/settings', label: 'Settings', icon: <GearIcon /> },
+    { href: '/users', label: 'Users', icon: <UsersIcon />, adminOnly: true },
   ];
 
   const superAdminItems: NavItem[] = [
     { href: '/admin/platform', label: 'Platform Config', icon: <KeyIcon />, superAdminOnly: true },
-    { href: '/dashboard/admin/orgs', label: 'Orgs', icon: <BuildingIcon />, superAdminOnly: true },
-    { href: '/dashboard/admin/agents', label: 'Agents', icon: <ServerIcon />, superAdminOnly: true },
   ];
 
 

@@ -72,8 +72,8 @@ export default function RegisterPage() {
         displayName: displayName.trim(),
       });
 
-      // Step 3: Redirect to dashboard — auth-context will pick up new claims on next token refresh
-      router.push('/dashboard');
+      // Step 3: Redirect to home — auth-context will pick up new claims on next token refresh
+      router.push('/');
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? '';
       setError(getErrorMessage(code));

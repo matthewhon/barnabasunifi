@@ -39,7 +39,7 @@ export default function LoginPage() {
 
     try {
       await signInWithEmail(email.trim(), password);
-      router.push('/dashboard');
+      router.push('/');
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? '';
       setError(getErrorMessage(code));
@@ -54,7 +54,7 @@ export default function LoginPage() {
 
     try {
       await signInWithGoogle();
-      router.push('/dashboard');
+      router.push('/');
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? '';
       if (code !== 'auth/popup-closed-by-user') {
