@@ -8,17 +8,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'orgId required' }, { status: 400 });
   }
 
-  const clientId = process.env.NEXT_PUBLIC_PCO_CLIENT_ID;
-  const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'}/api/pco/callback`;
-
-  const params = new URLSearchParams({
-    client_id: clientId ?? '',
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'services groups',
-    state: orgId,
-  });
-
-  const authUrl = `https://api.planningcenteronline.com/oauth/authorize?${params.toString()}`;
-  return NextResponse.redirect(authUrl);
+  const startUrl = `https://us-central1-barnabasunfi.cloudfunctions.net/pcoOAuthStart?orgId=${encodeURIComponent(orgId)}`;
+  return NextResponse.redirect(startUrl);
 }

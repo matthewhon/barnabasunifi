@@ -258,7 +258,7 @@ export default function SettingsPage() {
                 Disconnect
               </button>
             ) : (
-              <a href="/api/pco/auth" className="btn btn-primary btn-sm">
+              <a href={`/api/pco/auth?orgId=${orgId}`} className="btn btn-primary btn-sm">
                 Connect Planning Center
               </a>
             )}
