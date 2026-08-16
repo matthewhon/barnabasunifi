@@ -9,15 +9,22 @@ import { useAuth } from '@/lib/auth-context';
 
 export default function RegisterPage() {
   const router = useRouter();
-  const { registerWithEmail } = useAuth();
+  const { user, registerWithEmail, refreshAuth, orgId } = useAuth();
 
-  const [displayName, setDisplayName] = useState('');
+  const [displayName, setDisplayName] = useState(user?.displayName || '');
   const [orgName, setOrgName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // If user is logged in and already has an org, redirect to home
+  React.useEffect(() => {
+    if (user && orgId) {
+      router.push('/');
+    }
+  }, [user, orgId, router]);
 
   function getErrorMessage(err: unknown): string {
     if (err && typeof err === 'object') {
@@ -45,28 +52,35 @@ export default function RegisterPage() {
     e.preventDefault();
     setError(null);
 
-    if (!displayName.trim()) {
-      setError('Please enter your display name.');
-      return;
+    const nameToUse = (displayName.trim() || user?.displayName || user?.email || 'Admin').trim();
+
+    if (!user) {
+      if (!displayName.trim()) {
+        setError('Please enter your display name.');
+        return;
+      }
+      if (password.length < 6) {
+        setError('Password must be at least 6 characters.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Passwords do not match.');
+        return;
+      }
     }
+
     if (!orgName.trim()) {
       setError('Please enter your organization name.');
-      return;
-    }
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
       return;
     }
 
     setLoading(true);
 
     try {
-      // Step 1: Create the Firebase Auth user and Firestore profile
-      await registerWithEmail(email.trim(), password, displayName.trim());
+      if (!user) {
+        // Step 1: Create the Firebase Auth user and Firestore profile
+        await registerWithEmail(email.trim(), password, displayName.trim());
+      }
 
       // Step 2: Call Cloud Function to create the organization and set org_admin claim
       const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Chicago';
@@ -77,11 +91,14 @@ export default function RegisterPage() {
 
       await createOrganization({
         orgName: orgName.trim(),
-        displayName: displayName.trim(),
+        displayName: nameToUse,
         timezone: userTimezone,
       });
 
-      // Step 3: Redirect to home — auth-context will pick up new claims on next token refresh
+      // Step 3: Refresh auth context to pick up new claims immediately
+      await refreshAuth();
+
+      // Step 4: Redirect to home
       router.push('/');
     } catch (err: unknown) {
       setError(getErrorMessage(err));
@@ -204,60 +221,64 @@ export default function RegisterPage() {
             />
           </div>
 
-          <div className="form-group">
-            <label htmlFor="email" className="form-label">
-              Email Address
-            </label>
-            <input
-              id="email"
-              type="email"
-              className="form-input"
-              placeholder="you@church.org"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              disabled={loading}
-            />
-          </div>
+          {!user && (
+            <>
+              <div className="form-group">
+                <label htmlFor="email" className="form-label">
+                  Email Address
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  className="form-input"
+                  placeholder="you@church.org"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  disabled={loading}
+                />
+              </div>
 
-          <div className="form-group">
-            <label htmlFor="password" className="form-label">
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              className="form-input"
-              placeholder="Minimum 6 characters"
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-              disabled={loading}
-            />
-          </div>
+              <div className="form-group">
+                <label htmlFor="password" className="form-label">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  className="form-input"
+                  placeholder="Minimum 6 characters"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  disabled={loading}
+                />
+              </div>
 
-          <div className="form-group">
-            <label htmlFor="confirmPassword" className="form-label">
-              Confirm Password
-            </label>
-            <input
-              id="confirmPassword"
-              type="password"
-              className="form-input"
-              placeholder="Re-enter password"
-              autoComplete="new-password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-              disabled={loading}
-            />
-            {confirmPassword && password !== confirmPassword && (
-              <span className="form-error">Passwords do not match</span>
-            )}
-          </div>
+              <div className="form-group">
+                <label htmlFor="confirmPassword" className="form-label">
+                  Confirm Password
+                </label>
+                <input
+                  id="confirmPassword"
+                  type="password"
+                  className="form-input"
+                  placeholder="Re-enter password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  disabled={loading}
+                />
+                {confirmPassword && password !== confirmPassword && (
+                  <span className="form-error">Passwords do not match</span>
+                )}
+              </div>
+            </>
+          )}
 
           <button
             type="submit"
@@ -278,8 +299,10 @@ export default function RegisterPage() {
                     display: 'inline-block',
                   }}
                 />
-                Creating account…
+                {user ? 'Setting up organization…' : 'Creating account…'}
               </>
+            ) : user ? (
+              'Set Up Organization'
             ) : (
               'Create Account'
             )}

@@ -1,9 +1,9 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import {
   User,
-  onAuthStateChanged,
+  onIdTokenChanged,
   signInWithEmailAndPassword,
   signInWithPopup,
   GoogleAuthProvider,
@@ -26,6 +26,7 @@ interface AuthContextValue {
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   registerWithEmail: (email: string, password: string, displayName: string) => Promise<void>;
+  refreshAuth: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -36,8 +37,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [claims, setClaims] = useState<AuthClaims | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const refreshAuth = useCallback(async () => {
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      try {
+        const [idTokenResult, profileDoc] = await Promise.all([
+          currentUser.getIdTokenResult(true),
+          getDoc(doc(db, 'users', currentUser.uid)),
+        ]);
+        setClaims(idTokenResult.claims as AuthClaims);
+        if (profileDoc.exists()) {
+          setProfile(profileDoc.data() as UserProfile);
+        } else {
+          setProfile(null);
+        }
+      } catch (err) {
+        console.error('Error refreshing user auth profile or claims:', err);
+      }
+    }
+  }, []);
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
 
       if (firebaseUser) {
@@ -94,7 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       display_name: displayName,
       email,
       photo_url: null,
-      org_memberships: [],
+      org_memberships: {},
       created_at: serverTimestamp(),
     });
   };
@@ -132,6 +153,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signInWithGoogle,
     signOut,
     registerWithEmail,
+    refreshAuth,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

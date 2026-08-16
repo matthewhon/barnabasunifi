@@ -178,10 +178,11 @@ function NavLink({ item, pathname, onClick }: { item: NavItem; pathname: string;
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, loading, orgId, role, isSuperAdmin, signOut, profile } = useAuth();
+  const { user, loading, orgId, role, isSuperAdmin, signOut, profile, refreshAuth } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [org, setOrg] = useState<Organization | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
   // Auth guard
@@ -303,12 +304,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
           <button
             className="btn btn-secondary btn-sm"
+            disabled={refreshing}
             onClick={async () => {
-              await user.getIdToken(true);
-              window.location.reload();
+              setRefreshing(true);
+              try {
+                await refreshAuth();
+              } finally {
+                setRefreshing(false);
+              }
             }}
           >
-            Refresh Status
+            {refreshing ? 'Refreshing…' : 'Refresh Status'}
           </button>
           <Link href="/register" className="btn btn-primary btn-sm">
             Create Organization
