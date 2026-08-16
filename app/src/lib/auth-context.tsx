@@ -63,8 +63,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (firebaseUser) {
         try {
+          // Do NOT force-refresh here: a forced refresh issues a new token, which
+          // re-fires onIdTokenChanged and re-enters this handler. The token is
+          // already current when this fires; refreshAuth() forces it when claims change.
           const [idTokenResult, profileDoc] = await Promise.all([
-            firebaseUser.getIdTokenResult(true),
+            firebaseUser.getIdTokenResult(),
             getDoc(doc(db, 'users', firebaseUser.uid)),
           ]);
           setClaims(idTokenResult.claims as AuthClaims);

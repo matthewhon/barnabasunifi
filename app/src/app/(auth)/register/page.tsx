@@ -26,6 +26,17 @@ export default function RegisterPage() {
     }
   }, [user, orgId, router]);
 
+  /**
+   * True when the error message carries no information beyond the error code
+   * itself (e.g. code "functions/internal" with message "internal"/"INTERNAL").
+   */
+  function isBareCode(message: string | undefined, code: string): boolean {
+    if (!message) return true;
+    const normalized = message.trim().toLowerCase();
+    const bare = code.replace(/^functions\//, '').toLowerCase();
+    return normalized === bare || normalized === code.toLowerCase();
+  }
+
   function getErrorMessage(err: unknown): string {
     if (err && typeof err === 'object') {
       const code = (err as { code?: string }).code ?? '';
@@ -42,12 +53,16 @@ export default function RegisterPage() {
           return 'Network error. Check your connection and try again.';
         case 'functions/internal':
         case 'functions/not-found':
+        case 'functions/deadline-exceeded':
         case 'internal':
-          return message && message !== 'INTERNAL' && message !== 'NOT_FOUND'
-            ? message
-            : 'Organization creation failed. Firebase Cloud Functions are not deployed or credentials expired. Please run "npx firebase-tools login" and "npx firebase-tools deploy --only functions".';
+          // The SDK echoes the bare code as the message when the request never
+          // reached the function (unreachable endpoint, or a non-CORS error
+          // response the browser blocked). That text tells the user nothing.
+          return isBareCode(message, code)
+            ? 'Could not reach the organization service. The createOrganization function is either not deployed or not publicly invocable — grant "roles/run.invoker" to allUsers on the Cloud Run service, then try again.'
+            : (message as string);
       }
-      if (message && message !== 'INTERNAL') {
+      if (!isBareCode(message, code) && message) {
         return message;
       }
     }

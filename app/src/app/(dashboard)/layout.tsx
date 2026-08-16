@@ -183,7 +183,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [org, setOrg] = useState<Organization | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [provisionTimedOut, setProvisionTimedOut] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
+
+  const awaitingOrg = !loading && !!user && !orgId && !isSuperAdmin;
 
   // Auth guard
   useEffect(() => {
@@ -191,6 +194,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.push('/login');
     }
   }, [loading, user, router]);
+
+  // Bound the "provisioning" wait — otherwise a failed createOrganization call
+  // leaves the user on a spinner that never resolves.
+  useEffect(() => {
+    if (!awaitingOrg) {
+      setProvisionTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setProvisionTimedOut(true), 10000);
+    return () => clearTimeout(timer);
+  }, [awaitingOrg]);
 
   // Load org details
   useEffect(() => {
@@ -269,7 +283,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (!user) return null;
 
-  if (user && !orgId && !isSuperAdmin) {
+  if (awaitingOrg) {
     return (
       <div
         style={{
@@ -283,22 +297,45 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           padding: '1.5rem',
         }}
       >
-        <div
-          style={{
-            width: '3rem',
-            height: '3rem',
-            border: '3px solid var(--color-border)',
-            borderTopColor: 'var(--color-accent)',
-            borderRadius: '50%',
-            animation: 'spin 0.8s linear infinite',
-          }}
-        />
+        {provisionTimedOut ? (
+          <div
+            style={{
+              width: '3rem',
+              height: '3rem',
+              borderRadius: '50%',
+              background: 'rgba(220, 38, 38, 0.12)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--color-danger, #dc2626)',
+            }}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+        ) : (
+          <div
+            style={{
+              width: '3rem',
+              height: '3rem',
+              border: '3px solid var(--color-border)',
+              borderTopColor: 'var(--color-accent)',
+              borderRadius: '50%',
+              animation: 'spin 0.8s linear infinite',
+            }}
+          />
+        )}
         <div style={{ textAlign: 'center', maxWidth: '24rem' }}>
           <h2 style={{ color: 'var(--color-text-primary)', marginBottom: '0.5rem' }}>
-            Organization setup in progress…
+            {provisionTimedOut ? 'No organization found' : 'Organization setup in progress…'}
           </h2>
           <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-            Your organization is being provisioned. If you just registered, this should complete automatically.
+            {provisionTimedOut
+              ? 'Your account is signed in but is not linked to an organization. If you just registered, setup did not finish — create your organization to continue, or refresh in case the change is still propagating.'
+              : 'Your organization is being provisioned. If you just registered, this should complete automatically.'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
