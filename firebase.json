@@ -1,7 +1,7 @@
 {
   "apphosting": [
     {
-      "backendId": "unfi-pco-app",
+      "backendId": "barnabasunifi",
       "rootDir": "app"
     }
   ],
