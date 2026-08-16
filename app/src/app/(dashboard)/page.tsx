@@ -9,7 +9,7 @@ import {
   subscribeToScheduleWindows,
   subscribeToAuditLog,
 } from '@/lib/firestore';
-import type { Door, ScheduleWindow, AuditLogEntry } from '@unfi-pco/shared';
+import type { Door, ScheduleWindow, AuditLogEntry } from '@/lib/types';
 import { formatDistanceToNow, format, isPast } from 'date-fns';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────

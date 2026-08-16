@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import type { ScheduleWindow } from '@unfi-pco/shared';
+import type { ScheduleWindow } from '@/lib/types';
 import { format, formatDistanceToNow, isPast, isFuture, intervalToDuration } from 'date-fns';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

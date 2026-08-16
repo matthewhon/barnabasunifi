@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { getOrganization } from '@/lib/firestore';
-import type { Organization } from '@unfi-pco/shared';
+import type { Organization } from '@/lib/types';
 
 interface NavItem {
   href: string;

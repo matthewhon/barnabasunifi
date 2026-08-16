@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
-import type { UserProfile, UserRole } from '@unfi-pco/shared';
+import type { UserProfile, UserRole } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { collection, getDocs } from 'firebase/firestore';

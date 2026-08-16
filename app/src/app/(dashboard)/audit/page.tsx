@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { subscribeToAuditLog } from '@/lib/firestore';
-import type { AuditLogEntry, AuditAction } from '@unfi-pco/shared';
+import type { AuditLogEntry, AuditAction } from '@/lib/types';
 import { format, parseISO, isAfter, isBefore, startOfDay, endOfDay } from 'date-fns';
 
 // ─── Constants ────────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@
         "./src/*"
       ],
       "@unfi-pco/shared": [
-        "../shared/src/index.ts"
+        "./src/lib/types.ts"
       ]
     },
     "plugins": [

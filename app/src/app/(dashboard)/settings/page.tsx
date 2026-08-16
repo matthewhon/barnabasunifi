@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { getOrgSettings, updateOrgSettings } from '@/lib/firestore';
-import type { OrgSettings } from '@unfi-pco/shared';
+import type { OrgSettings } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
 
 // ─── Constants ────────────────────────────────────────────────────────────────

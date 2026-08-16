@@ -7,7 +7,7 @@ import {
   subscribeToAgents,
   createDoorCommand,
 } from '@/lib/firestore';
-import type { Door, Agent } from '@unfi-pco/shared';
+import type { Door, Agent } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
 import Modal from '@/components/ui/Modal';
 

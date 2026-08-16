@@ -5,7 +5,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
 import { subscribeToScheduleWindows } from '@/lib/firestore';
-import type { ScheduleWindow, MappingSourceType } from '@unfi-pco/shared';
+import type { ScheduleWindow, MappingSourceType } from '@/lib/types';
 import { format, isPast } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 

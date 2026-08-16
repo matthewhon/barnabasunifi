@@ -18,7 +18,7 @@ import type {
   PlanTimeType,
   PcoServiceType,
   PcoGroup,
-} from '@unfi-pco/shared';
+} from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────

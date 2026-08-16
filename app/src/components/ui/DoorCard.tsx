@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import type { Door } from '@unfi-pco/shared';
+import type { Door } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
