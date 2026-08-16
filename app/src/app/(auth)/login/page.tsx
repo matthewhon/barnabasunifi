@@ -15,19 +15,30 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
-  function getErrorMessage(code: string): string {
-    switch (code) {
-      case 'auth/user-not-found':
-      case 'auth/wrong-password':
-      case 'auth/invalid-credential':
-        return 'Invalid email or password. Please try again.';
-      case 'auth/too-many-requests':
-        return 'Too many failed attempts. Please try again later.';
-      case 'auth/network-request-failed':
-        return 'Network error. Check your connection and try again.';
-      default:
-        return 'An unexpected error occurred. Please try again.';
+  function getErrorMessage(err: unknown): string {
+    if (err && typeof err === 'object') {
+      const code = (err as { code?: string }).code ?? '';
+      const message = (err as { message?: string }).message;
+
+      switch (code) {
+        case 'auth/user-not-found':
+        case 'auth/wrong-password':
+        case 'auth/invalid-credential':
+          return 'Invalid email or password. Please try again.';
+        case 'auth/too-many-requests':
+          return 'Too many failed attempts. Please try again later.';
+        case 'auth/network-request-failed':
+          return 'Network error. Check your connection and try again.';
+        case 'auth/unauthorized-domain':
+          return 'This domain is not authorized for Google Sign-In in Firebase Console.';
+        case 'auth/popup-blocked':
+          return 'Sign-in popup was blocked by your browser. Please allow popups for this site.';
+        case 'auth/operation-not-allowed':
+          return 'Google Sign-In is not enabled for this project.';
+      }
+      if (message) return message;
     }
+    return 'An unexpected error occurred. Please try again.';
   }
 
   async function handleEmailLogin(e: React.FormEvent) {
@@ -41,8 +52,7 @@ export default function LoginPage() {
       await signInWithEmail(email.trim(), password);
       router.push('/');
     } catch (err: unknown) {
-      const code = (err as { code?: string }).code ?? '';
-      setError(getErrorMessage(code));
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -56,9 +66,9 @@ export default function LoginPage() {
       await signInWithGoogle();
       router.push('/');
     } catch (err: unknown) {
-      const code = (err as { code?: string }).code ?? '';
+      const code = (err && typeof err === 'object' ? (err as { code?: string }).code : '') ?? '';
       if (code !== 'auth/popup-closed-by-user') {
-        setError(getErrorMessage(code));
+        setError(getErrorMessage(err));
       }
     } finally {
       setGoogleLoading(false);
