@@ -143,8 +143,9 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       windowsUpdated++;
     }
 
-    // Create door_commands for windows within the next 24 hours
-    if (unlockAt.getTime() - now < twentyFourHoursMs) {
+    // Create door_commands for windows within the next 24 hours ONLY if doors are mapped
+    const doorIds = (metadata.door_ids as string[]) ?? [];
+    if (doorIds.length > 0 && unlockAt.getTime() - now < twentyFourHoursMs) {
       await createDoorCommandIfAbsent(commandsRef, windowId, 'unlock', unlockAt);
       await createDoorCommandIfAbsent(commandsRef, windowId, 'lock', lockAt);
     }
@@ -174,48 +175,120 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
     });
   }
 
-  // 4. Process service mappings
-  for (const mapping of serviceMappings) {
-    const serviceTypeId = (mapping.pco_resource_id ?? mapping.service_type_id) as string;
-    const enabledTimeTypes = (mapping.time_types ?? mapping.enabled_time_types) as string[] | undefined;
+  // 4. Process all Service Types from PCO
+  try {
+    const serviceTypes = await client.getServiceTypes();
 
-    if (!serviceTypeId) continue;
+    for (const st of serviceTypes) {
+      const serviceTypeId = st.id;
+      const serviceTypeName = (st.attributes?.name ?? 'Service') as string;
 
-    let plans: PcoResource[];
-    try {
-      plans = await client.getPlansForServiceType(serviceTypeId);
-    } catch (err) {
-      console.error(`Failed to fetch plans for service_type ${serviceTypeId}:`, err);
-      continue;
-    }
+      // Find matching enabled mapping if available
+      const mapping = serviceMappings.find(
+        (m) => (m.pco_resource_id ?? m.service_type_id) === serviceTypeId
+      );
 
-    for (const plan of plans) {
-      const planId = plan.id;
-      let planTimes: PcoResource[];
+      const doorIds = mapping?.door_ids ?? [];
+      const doorLabels = mapping?.door_labels ?? [];
+      const enabledTimeTypes = mapping?.time_types ?? mapping?.enabled_time_types;
 
+      let plans: PcoResource[];
       try {
-        planTimes = await client.getPlanTimes(serviceTypeId, planId);
+        plans = await client.getPlansForServiceType(serviceTypeId);
       } catch (err) {
-        console.error(`Failed to fetch plan_times for plan ${planId}:`, err);
+        console.error(`Failed to fetch plans for service_type ${serviceTypeId}:`, err);
         continue;
       }
 
-      for (const planTime of planTimes) {
-        const attrs = planTime.attributes as {
-          starts_at?: string;
-          ends_at?: string;
-          time_type?: string;
-        };
+      for (const plan of plans) {
+        const planId = plan.id;
+        let planTimes: PcoResource[];
 
-        // Filter by enabled time_types if specified
-        if (
-          enabledTimeTypes &&
-          enabledTimeTypes.length > 0 &&
-          attrs.time_type &&
-          !enabledTimeTypes.includes(attrs.time_type)
-        ) {
+        try {
+          planTimes = await client.getPlanTimes(serviceTypeId, planId);
+        } catch (err) {
+          console.error(`Failed to fetch plan_times for plan ${planId}:`, err);
           continue;
         }
+
+        for (const planTime of planTimes) {
+          const attrs = planTime.attributes as {
+            starts_at?: string;
+            ends_at?: string;
+            time_type?: string;
+          };
+
+          // Filter by enabled time_types if specified on mapping
+          if (
+            enabledTimeTypes &&
+            enabledTimeTypes.length > 0 &&
+            attrs.time_type &&
+            !enabledTimeTypes.includes(attrs.time_type)
+          ) {
+            continue;
+          }
+
+          if (!attrs.starts_at || !attrs.ends_at) continue;
+
+          const startsAt = new Date(attrs.starts_at);
+          const endsAt = new Date(attrs.ends_at);
+
+          if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) continue;
+
+          const idempotencyKey = `service:${serviceTypeId}:plan:${planId}:time:${planTime.id}`;
+          const planDetail = (plan.attributes?.title ?? plan.attributes?.series_title ?? plan.attributes?.dates) as string | undefined;
+          const planTitle = planDetail ? `${serviceTypeName}: ${planDetail}` : serviceTypeName;
+
+          await upsertWindow(idempotencyKey, startsAt, endsAt, {
+            source: 'pco_service',
+            source_type: 'service',
+            source_label: planTitle,
+            pco_plan_id: planId,
+            pco_plan_time_id: planTime.id,
+            pco_service_type_id: serviceTypeId,
+            service_mapping_id: mapping?.id ?? null,
+            door_ids: doorIds,
+            door_labels: doorLabels,
+            status: 'pending',
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching service types from PCO:', err);
+  }
+
+  // 5. Process all Groups from PCO
+  try {
+    const groups = await client.getGroups();
+
+    for (const grp of groups) {
+      const groupId = grp.id;
+      const groupName = (grp.attributes?.name ?? 'Group') as string;
+
+      // Find matching enabled mapping if available
+      const mapping = groupMappings.find(
+        (m) => (m.pco_resource_id ?? m.group_id) === groupId
+      );
+
+      const doorIds = mapping?.door_ids ?? [];
+      const doorLabels = mapping?.door_labels ?? [];
+
+      let events: PcoResource[];
+      try {
+        events = await client.getGroupEvents(groupId);
+      } catch (err) {
+        console.error(`Failed to fetch events for group ${groupId}:`, err);
+        continue;
+      }
+
+      for (const event of events) {
+        const attrs = event.attributes as {
+          starts_at?: string;
+          ends_at?: string;
+          name?: string;
+          title?: string;
+        };
 
         if (!attrs.starts_at || !attrs.ends_at) continue;
 
@@ -224,68 +297,25 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
         if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) continue;
 
-        const idempotencyKey = `service:${serviceTypeId}:plan:${planId}:time:${planTime.id}`;
-        const planTitle = (plan.attributes?.title ?? plan.attributes?.series_title ?? plan.attributes?.dates ?? mapping.pco_resource_label ?? 'Service Plan') as string;
+        const idempotencyKey = `group:${groupId}:event:${event.id}`;
+        const eventDetail = (attrs.name ?? attrs.title) as string | undefined;
+        const eventTitle = eventDetail ? `${groupName}: ${eventDetail}` : groupName;
 
         await upsertWindow(idempotencyKey, startsAt, endsAt, {
-          source: 'pco_service',
-          source_type: 'service',
-          source_label: planTitle,
-          pco_plan_id: planId,
-          pco_plan_time_id: planTime.id,
-          pco_service_type_id: serviceTypeId,
-          service_mapping_id: mapping.id,
-          door_ids: mapping.door_ids ?? [],
-          door_labels: mapping.door_labels ?? [],
+          source: 'pco_group',
+          source_type: 'group',
+          source_label: eventTitle,
+          pco_event_id: event.id,
+          pco_group_id: groupId,
+          group_mapping_id: mapping?.id ?? null,
+          door_ids: doorIds,
+          door_labels: doorLabels,
           status: 'pending',
         });
       }
     }
-  }
-
-  // 5. Process group mappings
-  for (const mapping of groupMappings) {
-    const groupId = (mapping.pco_resource_id ?? mapping.group_id) as string;
-    if (!groupId) continue;
-
-    let events: PcoResource[];
-    try {
-      events = await client.getGroupEvents(groupId);
-    } catch (err) {
-      console.error(`Failed to fetch events for group ${groupId}:`, err);
-      continue;
-    }
-
-    for (const event of events) {
-      const attrs = event.attributes as {
-        starts_at?: string;
-        ends_at?: string;
-        name?: string;
-        title?: string;
-      };
-
-      if (!attrs.starts_at || !attrs.ends_at) continue;
-
-      const startsAt = new Date(attrs.starts_at);
-      const endsAt = new Date(attrs.ends_at);
-
-      if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) continue;
-
-      const idempotencyKey = `group:${groupId}:event:${event.id}`;
-      const eventTitle = (attrs.name ?? attrs.title ?? mapping.pco_resource_label ?? 'Group Event') as string;
-
-      await upsertWindow(idempotencyKey, startsAt, endsAt, {
-        source: 'pco_group',
-        source_type: 'group',
-        source_label: eventTitle,
-        pco_event_id: event.id,
-        pco_group_id: groupId,
-        group_mapping_id: mapping.id,
-        door_ids: mapping.door_ids ?? [],
-        door_labels: mapping.door_labels ?? [],
-        status: 'pending',
-      });
-    }
+  } catch (err) {
+    console.warn('Groups API unavailable or returned error:', err);
   }
 
   // 6. Write audit log

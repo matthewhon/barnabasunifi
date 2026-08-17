@@ -235,9 +235,9 @@ export default function SchedulePage() {
                         }}
                         title={win.door_labels.join(', ')}
                       >
-                        {win.door_labels.length > 0
+                        {win.door_labels && win.door_labels.length > 0
                           ? win.door_labels.join(', ')
-                          : <span style={{ color: 'var(--color-text-muted)' }}>—</span>}
+                          : <span className="badge badge-neutral" style={{ opacity: 0.75 }}>Unmapped</span>}
                       </div>
                     </td>
                     <td>
