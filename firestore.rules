@@ -16,7 +16,17 @@ service cloud.firestore {
     }
 
     function getOrgRole(orgId) {
-      return request.auth.token.orgId == orgId ? request.auth.token.role : null;
+      return request.auth.token.orgId == orgId
+        ? request.auth.token.role
+        : (
+            isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+              ? (
+                  orgId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.org_memberships
+                    ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.org_memberships[orgId].role
+                    : null
+                )
+              : null
+          );
     }
 
     function hasOrgRole(orgId, roles) {
