@@ -125,7 +125,48 @@ export const testUnifiConnection = onCall<TestConnectionRequest, Promise<TestUni
     const doorsSnap = await db.collection('organizations').doc(orgId).collection('doors').get();
     const doorCount = doorsSnap.size;
 
-    // 2. Check registered local agents
+    // 2. Read org settings for connection mode
+    const configSnap = await db.collection('organizations').doc(orgId).collection('settings').doc('config').get();
+    const configData = configSnap.exists ? configSnap.data() : null;
+    const unifiMode = configData?.unifi_mode ?? 'agent';
+
+    if (unifiMode === 'remote') {
+      const remoteConfig = configData?.unifi_remote;
+      if (!remoteConfig?.host || !remoteConfig?.access_token) {
+        return {
+          success: false,
+          mode: 'remote',
+          door_count: doorCount,
+          message: 'Direct Remote HTTPS is selected, but UniFi Host URL or Access Token is missing in settings.',
+        };
+      }
+
+      try {
+        const host = remoteConfig.host.replace(/\/$/, '');
+        const res = await axios.get(`${host}/api/v1/developer/doors`, {
+          headers: { Authorization: `Bearer ${remoteConfig.access_token}` },
+          timeout: 10000,
+        });
+
+        const remoteDoorCount = Array.isArray(res.data?.data) ? res.data.data.length : doorCount;
+        return {
+          success: true,
+          mode: 'remote',
+          door_count: remoteDoorCount,
+          message: `Direct Remote HTTPS connection succeeded! (${remoteDoorCount} doors found)`,
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Failed to connect to remote UniFi host.';
+        return {
+          success: false,
+          mode: 'remote',
+          door_count: doorCount,
+          message: `Direct Remote HTTPS test failed: ${message}`,
+        };
+      }
+    }
+
+    // 3. Check registered local agents (agent mode)
     const agentsSnap = await db.collection('agents').where('org_id', '==', orgId).get();
 
     if (agentsSnap.empty) {
@@ -138,7 +179,7 @@ export const testUnifiConnection = onCall<TestConnectionRequest, Promise<TestUni
     }
 
     const agentDoc = agentsSnap.docs[0].data();
-    const agentName = agentDoc.agent_name ?? 'UniFi Local Agent';
+    const agentName = agentDoc.label ?? agentDoc.agent_name ?? 'UniFi Local Agent';
 
     let lastHeartbeatStr: string | undefined;
     let isOnline = false;
