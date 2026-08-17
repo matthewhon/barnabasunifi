@@ -112,9 +112,12 @@ export const createOrganization = onCall<
     // claims is unreachable. Undo the batch rather than stranding a half-built org
     // that the user can see in their memberships but can never read.
     try {
+      // The creator is always the org's admin. Preserve super_admin in the claim
+      // itself, though — overwriting it with 'org_admin' would silently strip
+      // platform-wide access from anyone who creates an org for a tenant.
       await auth.setCustomUserClaims(uid, {
         orgId,
-        role: 'org_admin',
+        role: request.auth.token.role === 'super_admin' ? 'super_admin' : 'org_admin',
       });
     } catch (claimsErr) {
       const rollback = db.batch();
