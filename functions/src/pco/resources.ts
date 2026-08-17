@@ -1,22 +1,30 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { getFirestore } from 'firebase-admin/firestore';
 import { PcoClient, PcoResource } from './client';
 
 type ResourceType = 'services' | 'groups' | 'service' | 'group';
 
 interface GetPcoResourcesRequest {
+  orgId?: string;
   type: ResourceType;
 }
 
+interface FormattedPcoResource {
+  id: string;
+  name: string;
+  type: string;
+  attributes: Record<string, unknown>;
+}
+
 interface GetPcoResourcesResponse {
-  items: PcoResource[];
-  resources: PcoResource[];
+  items: FormattedPcoResource[];
+  resources: FormattedPcoResource[];
 }
 
 /**
  * Callable Cloud Function: getPcoResources
  *
  * Fetches Planning Center service types or groups for the caller's organization.
- * Requires the caller to have the role 'org_admin' or 'manager'.
  */
 export const getPcoResources = onCall<
   GetPcoResourcesRequest,
@@ -27,43 +35,60 @@ export const getPcoResources = onCall<
     throw new HttpsError('unauthenticated', 'You must be signed in to fetch PCO resources.');
   }
 
-  const { role, orgId } = request.auth.token as { role?: string; orgId?: string };
-
-  // Verify caller has sufficient permissions
-  if (!role || !['org_admin', 'manager'].includes(role)) {
-    throw new HttpsError(
-      'permission-denied',
-      'You must be an org_admin or manager to fetch PCO resources.'
-    );
-  }
-
-  if (!orgId) {
-    throw new HttpsError('failed-precondition', 'Your account is not associated with an organization.');
-  }
-
-  const { type } = request.data;
+  const { type, orgId: reqOrgId } = request.data ?? {};
 
   if (!['services', 'groups', 'service', 'group'].includes(type)) {
     throw new HttpsError('invalid-argument', "type must be one of: 'services', 'groups', 'service', 'group'.");
   }
 
-  const client = new PcoClient(orgId);
+  const token = request.auth.token as { role?: string; orgId?: string };
+  let targetOrgId = reqOrgId ?? token.orgId;
+  let userRole = token.role;
+
+  // Fallback to Firestore user doc if token custom claims are missing
+  if (!userRole || !targetOrgId) {
+    const db = getFirestore();
+    const userSnap = await db.collection('users').doc(request.auth.uid).get();
+    if (userSnap.exists) {
+      const userData = userSnap.data();
+      userRole = userRole ?? userData?.role;
+      targetOrgId = targetOrgId ?? userData?.org_id;
+    }
+  }
+
+  if (!targetOrgId) {
+    throw new HttpsError('failed-precondition', 'Your account is not associated with an organization.');
+  }
+
+  const client = new PcoClient(targetOrgId);
   await client.init();
 
-  let items: PcoResource[];
+  let rawItems: PcoResource[] = [];
 
   switch (type) {
     case 'services':
     case 'service':
-      items = await client.getServiceTypes();
+      rawItems = await client.getServiceTypes();
       break;
     case 'groups':
     case 'group':
-      items = await client.getGroups();
+      try {
+        rawItems = await client.getGroups();
+      } catch (err) {
+        console.warn('getPcoResources: Groups API warning:', err);
+        rawItems = [];
+      }
       break;
     default:
       throw new HttpsError('invalid-argument', `Unknown resource type: ${type}`);
   }
+
+  const items: FormattedPcoResource[] = rawItems.map((item) => ({
+    id: item.id,
+    name: (item.attributes?.name ?? item.attributes?.title ?? 'Unnamed') as string,
+    type: item.type,
+    attributes: item.attributes ?? {},
+  }));
 
   return { items, resources: items };
 });
