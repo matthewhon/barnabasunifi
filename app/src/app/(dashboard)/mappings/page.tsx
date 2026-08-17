@@ -481,11 +481,11 @@ export default function MappingsPage() {
     setPcoLoading(true);
     const getPcoResources = httpsCallable<
       { orgId: string; type: MappingSourceType },
-      { resources: Array<PcoServiceType | PcoGroup> }
+      { items?: Array<PcoServiceType | PcoGroup>; resources?: Array<PcoServiceType | PcoGroup> }
     >(functions, 'getPcoResources');
 
     getPcoResources({ orgId, type: tab })
-      .then((res) => setPcoResources(res.data.resources ?? []))
+      .then((res) => setPcoResources(res.data.items ?? res.data.resources ?? []))
       .catch(() => setPcoResources([]))
       .finally(() => setPcoLoading(false));
   }, [orgId, tab]);

@@ -12,17 +12,15 @@ interface OrgSettings {
   timezone: string;
 }
 
-interface ServiceMapping {
+interface MappingData {
   id: string;
-  service_type_id: string;
-  enabled: boolean;
+  source_type?: 'service' | 'group';
+  pco_resource_id?: string;
+  service_type_id?: string;
+  group_id?: string;
+  enabled?: boolean;
+  time_types?: string[];
   enabled_time_types?: string[];
-}
-
-interface GroupMapping {
-  id: string;
-  group_id: string;
-  enabled: boolean;
 }
 
 interface SyncResult {
@@ -66,18 +64,27 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
   const unlockBufferMs = (settings.unlock_buffer_before_min ?? 15) * 60 * 1000;
   const lockBufferMs = (settings.lock_buffer_after_min ?? 15) * 60 * 1000;
 
-  // 2. Load enabled mappings
-  const [serviceMappingsSnap, groupMappingsSnap] = await Promise.all([
+  // 2. Load enabled mappings from /organizations/{orgId}/mappings and subcollections
+  const [mappingsSnap, serviceMappingsSnap, groupMappingsSnap] = await Promise.all([
+    orgRef.collection('mappings').where('enabled', '==', true).get(),
     orgRef.collection('service_mappings').where('enabled', '==', true).get(),
     orgRef.collection('group_mappings').where('enabled', '==', true).get(),
   ]);
 
-  const serviceMappings: ServiceMapping[] = serviceMappingsSnap.docs.map(
-    (d) => ({ id: d.id, ...(d.data() as Omit<ServiceMapping, 'id'>) })
-  );
-  const groupMappings: GroupMapping[] = groupMappingsSnap.docs.map(
-    (d) => ({ id: d.id, ...(d.data() as Omit<GroupMapping, 'id'>) })
-  );
+  const generalMappings: MappingData[] = mappingsSnap.docs.map((d) => ({
+    id: d.id,
+    ...(d.data() as Omit<MappingData, 'id'>),
+  }));
+
+  const serviceMappings: MappingData[] = [
+    ...generalMappings.filter((m) => m.source_type === 'service' || m.service_type_id),
+    ...serviceMappingsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<MappingData, 'id'>) })),
+  ];
+
+  const groupMappings: MappingData[] = [
+    ...generalMappings.filter((m) => m.source_type === 'group' || m.group_id),
+    ...groupMappingsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<MappingData, 'id'>) })),
+  ];
 
   // 3. Initialize PCO client
   const client = new PcoClient(orgId);
@@ -166,11 +173,16 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
   // 4. Process service mappings
   for (const mapping of serviceMappings) {
+    const serviceTypeId = (mapping.pco_resource_id ?? mapping.service_type_id) as string;
+    const enabledTimeTypes = (mapping.time_types ?? mapping.enabled_time_types) as string[] | undefined;
+
+    if (!serviceTypeId) continue;
+
     let plans: PcoResource[];
     try {
-      plans = await client.getPlansForServiceType(mapping.service_type_id);
+      plans = await client.getPlansForServiceType(serviceTypeId);
     } catch (err) {
-      console.error(`Failed to fetch plans for service_type ${mapping.service_type_id}:`, err);
+      console.error(`Failed to fetch plans for service_type ${serviceTypeId}:`, err);
       continue;
     }
 
@@ -179,7 +191,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       let planTimes: PcoResource[];
 
       try {
-        planTimes = await client.getPlanTimes(mapping.service_type_id, planId);
+        planTimes = await client.getPlanTimes(serviceTypeId, planId);
       } catch (err) {
         console.error(`Failed to fetch plan_times for plan ${planId}:`, err);
         continue;
@@ -194,10 +206,10 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
         // Filter by enabled time_types if specified
         if (
-          mapping.enabled_time_types &&
-          mapping.enabled_time_types.length > 0 &&
+          enabledTimeTypes &&
+          enabledTimeTypes.length > 0 &&
           attrs.time_type &&
-          !mapping.enabled_time_types.includes(attrs.time_type)
+          !enabledTimeTypes.includes(attrs.time_type)
         ) {
           continue;
         }
@@ -209,13 +221,13 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
         if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) continue;
 
-        const idempotencyKey = `service:${mapping.service_type_id}:plan:${planId}:time:${planTime.id}`;
+        const idempotencyKey = `service:${serviceTypeId}:plan:${planId}:time:${planTime.id}`;
 
         await upsertWindow(idempotencyKey, startsAt, endsAt, {
           source: 'pco_service',
           pco_plan_id: planId,
           pco_plan_time_id: planTime.id,
-          pco_service_type_id: mapping.service_type_id,
+          pco_service_type_id: serviceTypeId,
           service_mapping_id: mapping.id,
         });
       }
@@ -224,11 +236,14 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
   // 5. Process group mappings
   for (const mapping of groupMappings) {
+    const groupId = (mapping.pco_resource_id ?? mapping.group_id) as string;
+    if (!groupId) continue;
+
     let events: PcoResource[];
     try {
-      events = await client.getGroupEvents(mapping.group_id);
+      events = await client.getGroupEvents(groupId);
     } catch (err) {
-      console.error(`Failed to fetch events for group ${mapping.group_id}:`, err);
+      console.error(`Failed to fetch events for group ${groupId}:`, err);
       continue;
     }
 
@@ -245,12 +260,12 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
       if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) continue;
 
-      const idempotencyKey = `group:${mapping.group_id}:event:${event.id}`;
+      const idempotencyKey = `group:${groupId}:event:${event.id}`;
 
       await upsertWindow(idempotencyKey, startsAt, endsAt, {
         source: 'pco_group',
         pco_event_id: event.id,
-        pco_group_id: mapping.group_id,
+        pco_group_id: groupId,
         group_mapping_id: mapping.id,
       });
     }

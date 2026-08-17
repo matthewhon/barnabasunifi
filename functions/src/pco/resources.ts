@@ -1,7 +1,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { PcoClient, PcoResource } from './client';
 
-type ResourceType = 'services' | 'groups';
+type ResourceType = 'services' | 'groups' | 'service' | 'group';
 
 interface GetPcoResourcesRequest {
   type: ResourceType;
@@ -9,6 +9,7 @@ interface GetPcoResourcesRequest {
 
 interface GetPcoResourcesResponse {
   items: PcoResource[];
+  resources: PcoResource[];
 }
 
 /**
@@ -42,8 +43,8 @@ export const getPcoResources = onCall<
 
   const { type } = request.data;
 
-  if (!['services', 'groups'].includes(type)) {
-    throw new HttpsError('invalid-argument', "type must be one of: 'services', 'groups'.");
+  if (!['services', 'groups', 'service', 'group'].includes(type)) {
+    throw new HttpsError('invalid-argument', "type must be one of: 'services', 'groups', 'service', 'group'.");
   }
 
   const client = new PcoClient(orgId);
@@ -53,14 +54,16 @@ export const getPcoResources = onCall<
 
   switch (type) {
     case 'services':
+    case 'service':
       items = await client.getServiceTypes();
       break;
     case 'groups':
+    case 'group':
       items = await client.getGroups();
       break;
     default:
       throw new HttpsError('invalid-argument', `Unknown resource type: ${type}`);
   }
 
-  return { items };
+  return { items, resources: items };
 });
