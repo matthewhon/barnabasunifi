@@ -16,8 +16,11 @@ interface MappingData {
   id: string;
   source_type?: 'service' | 'group';
   pco_resource_id?: string;
+  pco_resource_label?: string;
   service_type_id?: string;
   group_id?: string;
+  door_ids?: string[];
+  door_labels?: string[];
   enabled?: boolean;
   time_types?: string[];
   enabled_time_types?: string[];
@@ -222,13 +225,19 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
         if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) continue;
 
         const idempotencyKey = `service:${serviceTypeId}:plan:${planId}:time:${planTime.id}`;
+        const planTitle = (plan.attributes?.title ?? plan.attributes?.series_title ?? plan.attributes?.dates ?? mapping.pco_resource_label ?? 'Service Plan') as string;
 
         await upsertWindow(idempotencyKey, startsAt, endsAt, {
           source: 'pco_service',
+          source_type: 'service',
+          source_label: planTitle,
           pco_plan_id: planId,
           pco_plan_time_id: planTime.id,
           pco_service_type_id: serviceTypeId,
           service_mapping_id: mapping.id,
+          door_ids: mapping.door_ids ?? [],
+          door_labels: mapping.door_labels ?? [],
+          status: 'pending',
         });
       }
     }
@@ -251,6 +260,8 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       const attrs = event.attributes as {
         starts_at?: string;
         ends_at?: string;
+        name?: string;
+        title?: string;
       };
 
       if (!attrs.starts_at || !attrs.ends_at) continue;
@@ -261,12 +272,18 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) continue;
 
       const idempotencyKey = `group:${groupId}:event:${event.id}`;
+      const eventTitle = (attrs.name ?? attrs.title ?? mapping.pco_resource_label ?? 'Group Event') as string;
 
       await upsertWindow(idempotencyKey, startsAt, endsAt, {
         source: 'pco_group',
+        source_type: 'group',
+        source_label: eventTitle,
         pco_event_id: event.id,
         pco_group_id: groupId,
         group_mapping_id: mapping.id,
+        door_ids: mapping.door_ids ?? [],
+        door_labels: mapping.door_labels ?? [],
+        status: 'pending',
       });
     }
   }

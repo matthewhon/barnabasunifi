@@ -115,7 +115,31 @@ export function subscribeToScheduleWindows(
     ...constraints,
   );
   return onSnapshot(q, (snap) => {
-    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() } as ScheduleWindow)));
+    const windows = snap.docs.map((d) => {
+      const data = d.data();
+      const formatTimestamp = (val: unknown) => {
+        if (!val) return new Date().toISOString();
+        if (typeof (val as { toDate?: () => Date }).toDate === 'function') {
+          return (val as { toDate: () => Date }).toDate().toISOString();
+        }
+        return new Date(val as string | number).toISOString();
+      };
+
+      return {
+        id: d.id,
+        ...data,
+        starts_at: formatTimestamp(data.starts_at),
+        ends_at: formatTimestamp(data.ends_at),
+        unlock_at: formatTimestamp(data.unlock_at),
+        lock_at: formatTimestamp(data.lock_at),
+        source_type: data.source_type ?? (data.source === 'pco_group' ? 'group' : 'service'),
+        source_label: data.source_label ?? data.label ?? 'PCO Event',
+        door_ids: data.door_ids ?? [],
+        door_labels: data.door_labels ?? [],
+        status: data.status ?? 'pending',
+      } as ScheduleWindow;
+    });
+    callback(windows);
   });
 }
 
