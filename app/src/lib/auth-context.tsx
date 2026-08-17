@@ -63,19 +63,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (firebaseUser) {
         try {
-          // Do NOT force-refresh here: a forced refresh issues a new token, which
-          // re-fires onIdTokenChanged and re-enters this handler. The token is
-          // already current when this fires; refreshAuth() forces it when claims change.
-          const [idTokenResult, profileDoc] = await Promise.all([
-            firebaseUser.getIdTokenResult(),
-            getDoc(doc(db, 'users', firebaseUser.uid)),
-          ]);
-          setClaims(idTokenResult.claims as AuthClaims);
-          if (profileDoc.exists()) {
-            setProfile(profileDoc.data() as UserProfile);
-          } else {
-            setProfile(null);
+          let idTokenResult = await firebaseUser.getIdTokenResult();
+          const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+
+          const userProfile = profileDoc.exists() ? (profileDoc.data() as UserProfile) : null;
+          setProfile(userProfile);
+
+          // If token custom claim orgId is missing but profile has memberships, force token refresh
+          const hasMemberships = userProfile?.org_memberships && (
+            Array.isArray(userProfile.org_memberships)
+              ? userProfile.org_memberships.length > 0
+              : Object.keys(userProfile.org_memberships).length > 0
+          );
+
+          if (!idTokenResult.claims.orgId && hasMemberships) {
+            idTokenResult = await firebaseUser.getIdTokenResult(true);
           }
+
+          setClaims(idTokenResult.claims as AuthClaims);
         } catch (err) {
           console.error('Error fetching user auth profile or claims:', err);
         }
