@@ -155,7 +155,10 @@ export default function SettingsPage() {
       const { data } = await fn({ orgId });
       showToast(data.message, data.success ? 'success' : 'error');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Planning Center connection test failed.';
+      const e = err as { code?: string; message?: string };
+      const msg = (e?.code === 'functions/internal' || e?.message === 'INTERNAL' || e?.code === 'functions/not-found')
+        ? 'Connection test function is not deployed to Firebase yet. Please run "npx firebase-tools deploy --only functions".'
+        : (e?.message ?? 'Planning Center connection test failed.');
       showToast(msg, 'error');
     } finally {
       setTestingPco(false);
@@ -173,7 +176,10 @@ export default function SettingsPage() {
       const { data } = await fn({ orgId });
       showToast(data.message, data.success ? 'success' : 'error');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'UniFi connection test failed.';
+      const e = err as { code?: string; message?: string };
+      const msg = (e?.code === 'functions/internal' || e?.message === 'INTERNAL' || e?.code === 'functions/not-found')
+        ? 'Connection test function is not deployed to Firebase yet. Please run "npx firebase-tools deploy --only functions".'
+        : (e?.message ?? 'UniFi connection test failed.');
       showToast(msg, 'error');
     } finally {
       setTestingUnifi(false);
