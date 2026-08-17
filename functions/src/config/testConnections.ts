@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore } from 'firebase-admin/firestore';
 import axios from 'axios';
+import * as https from 'https';
 import { refreshPcoToken } from '../pco/oauth';
 
 interface TestConnectionRequest {
@@ -143,9 +144,11 @@ export const testUnifiConnection = onCall<TestConnectionRequest, Promise<TestUni
 
       try {
         const host = remoteConfig.host.replace(/\/$/, '');
+        const agent = new https.Agent({ rejectUnauthorized: false });
         const res = await axios.get(`${host}/api/v1/developer/doors`, {
           headers: { Authorization: `Bearer ${remoteConfig.access_token}` },
           timeout: 10000,
+          httpsAgent: agent,
         });
 
         const remoteDoorCount = Array.isArray(res.data?.data) ? res.data.data.length : doorCount;
