@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gcloud projects add-iam-policy-binding *)"
+    ]
+  }
+}
