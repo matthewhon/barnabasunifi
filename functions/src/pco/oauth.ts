@@ -38,8 +38,22 @@ async function getPcoCredentials() {
   };
 }
 
-function getAppBaseUrl(): string {
-  return process.env.APP_BASE_URL ?? 'https://barnabasunfi.web.app';
+function getAppBaseUrl(req?: any): string {
+  if (process.env.APP_BASE_URL) {
+    return process.env.APP_BASE_URL.replace(/\/+$/, '');
+  }
+  if (req) {
+    const referer = req.headers?.['referer'];
+    if (referer && typeof referer === 'string' && !referer.includes('cloudfunctions.net') && !referer.includes('planningcenteronline.com')) {
+      try {
+        const u = new URL(referer);
+        return `${u.protocol}//${u.host}`;
+      } catch {
+        // ignore invalid URL
+      }
+    }
+  }
+  return 'https://barnabasunifi--barnabasunfi.us-east4.hosted.app';
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +135,7 @@ export const pcoOAuthStart = onRequest(async (req, res) => {
   } catch (err: unknown) {
     console.error('Error starting PCO OAuth flow:', err);
     const message = err instanceof Error ? err.message : 'PCO OAuth initialization failed.';
-    const appBaseUrl = getAppBaseUrl();
+    const appBaseUrl = getAppBaseUrl(req);
     res.redirect(302, `${appBaseUrl}/settings?pco=error&reason=${encodeURIComponent(message)}`);
   }
 });
@@ -179,11 +193,11 @@ export const pcoOAuthCallback = onRequest(async (req, res) => {
     });
 
     // Redirect user back to the app settings page
-    const redirectUrl = `${getAppBaseUrl()}/settings?pco=connected`;
+    const redirectUrl = `${getAppBaseUrl(req)}/settings?pco=connected`;
     res.redirect(302, redirectUrl);
   } catch (err) {
     console.error('PCO OAuth callback error:', err);
-    const redirectUrl = `${getAppBaseUrl()}/settings?pco=error`;
+    const redirectUrl = `${getAppBaseUrl(req)}/settings?pco=error`;
     res.redirect(302, redirectUrl);
   }
 });
