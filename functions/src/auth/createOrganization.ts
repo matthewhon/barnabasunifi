@@ -107,11 +107,25 @@ export const createOrganization = onCall<
 
     await batch.commit();
 
-    // 4. Set custom claims on the Firebase Auth user
-    await auth.setCustomUserClaims(uid, {
-      orgId,
-      role: 'org_admin',
-    });
+    // 4. Set custom claims on the Firebase Auth user.
+    // Firestore rules authorize off these claims, so an org whose creator has no
+    // claims is unreachable. Undo the batch rather than stranding a half-built org
+    // that the user can see in their memberships but can never read.
+    try {
+      await auth.setCustomUserClaims(uid, {
+        orgId,
+        role: 'org_admin',
+      });
+    } catch (claimsErr) {
+      const rollback = db.batch();
+      rollback.delete(configRef);
+      rollback.delete(orgRef);
+      rollback.update(userRef, { [`org_memberships.${orgId}`]: FieldValue.delete() });
+      await rollback.commit().catch((rollbackErr) => {
+        console.error('Rollback after setCustomUserClaims failure also failed:', rollbackErr);
+      });
+      throw claimsErr;
+    }
 
     return { orgId, success: true };
   } catch (err: unknown) {
