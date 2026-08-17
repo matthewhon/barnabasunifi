@@ -101,18 +101,29 @@ export const pcoOAuthStart = onRequest(async (req, res) => {
     return;
   }
 
-  const { clientId, redirectUri } = await getPcoCredentials();
+  try {
+    const { clientId, redirectUri } = await getPcoCredentials();
 
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'services groups',
-    state: orgId,
-  });
+    if (!clientId || !redirectUri) {
+      throw new Error('Planning Center OAuth Client ID or Redirect URI is missing in Platform Config.');
+    }
 
-  const authUrl = `${PCO_AUTHORIZE_URL}?${params.toString()}`;
-  res.redirect(302, authUrl);
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'services groups',
+      state: orgId,
+    });
+
+    const authUrl = `${PCO_AUTHORIZE_URL}?${params.toString()}`;
+    res.redirect(302, authUrl);
+  } catch (err: unknown) {
+    console.error('Error starting PCO OAuth flow:', err);
+    const message = err instanceof Error ? err.message : 'PCO OAuth initialization failed.';
+    const appBaseUrl = getAppBaseUrl();
+    res.redirect(302, `${appBaseUrl}/settings?pco=error&reason=${encodeURIComponent(message)}`);
+  }
 });
 
 // ---------------------------------------------------------------------------
