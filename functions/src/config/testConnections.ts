@@ -109,6 +109,33 @@ export const testPcoConnection = onCall<TestConnectionRequest, Promise<TestPcoRe
 );
 
 /**
+ * Turns a failed UniFi request into a message that names the actual problem.
+ * The raw axios text ("Request failed with status code 401") is indistinguishable
+ * between a bad key, the wrong key type, and Access not being installed.
+ */
+function describeUnifiError(err: unknown): string {
+  if (axios.isAxiosError(err)) {
+    const status = err.response?.status;
+    if (status === 401 || status === 403) {
+      return 'the console rejected the API key (401). Confirm it is a UniFi Access '
+        + 'Integration key created in the Access app — a UniFi OS or Network key will not work here.';
+    }
+    if (status === 404) {
+      return 'the console authenticated the key but has no Access API at that path (404). '
+        + 'UniFi Access may not be installed on this console, or the key lacks Access scope.';
+    }
+    if (err.code === 'ECONNABORTED') {
+      return 'the request timed out. The console did not respond within 10s.';
+    }
+    if (err.code === 'ECONNREFUSED' || err.code === 'EHOSTUNREACH' || err.code === 'ETIMEDOUT') {
+      return `the host is unreachable (${err.code}). Check the URL and that the console is reachable from the internet.`;
+    }
+    return status ? `the console returned HTTP ${status}.` : err.message;
+  }
+  return err instanceof Error ? err.message : 'Failed to connect to remote UniFi host.';
+}
+
+/**
  * Callable Cloud Function: testUnifiConnection
  */
 export const testUnifiConnection = onCall<TestConnectionRequest, Promise<TestUnifiResponse>>(
@@ -145,8 +172,11 @@ export const testUnifiConnection = onCall<TestConnectionRequest, Promise<TestUni
       try {
         const host = remoteConfig.host.replace(/\/$/, '');
         const agent = new https.Agent({ rejectUnauthorized: false });
-        const res = await axios.get(`${host}/api/v1/developer/doors`, {
-          headers: { Authorization: `Bearer ${remoteConfig.access_token}` },
+        // UniFi Access Integration API, reached through the UniFi OS reverse
+        // proxy on 443. Authenticates with X-API-KEY — an Access integration
+        // key, not a UniFi OS/Network key and not a bearer token.
+        const res = await axios.get(`${host}/proxy/access/integration/v1/developer/doors`, {
+          headers: { 'X-API-KEY': remoteConfig.access_token },
           timeout: 10000,
           httpsAgent: agent,
         });
@@ -159,12 +189,11 @@ export const testUnifiConnection = onCall<TestConnectionRequest, Promise<TestUni
           message: `Direct Remote HTTPS connection succeeded! (${remoteDoorCount} doors found)`,
         };
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'Failed to connect to remote UniFi host.';
         return {
           success: false,
           mode: 'remote',
           door_count: doorCount,
-          message: `Direct Remote HTTPS test failed: ${message}`,
+          message: `Direct Remote HTTPS test failed: ${describeUnifiError(err)}`,
         };
       }
     }
