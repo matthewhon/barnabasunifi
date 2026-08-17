@@ -12,3 +12,5 @@ export { triggerPcoSync } from './pco/sync';
 export { scheduledPcoSync } from './pco/scheduledSync';
 export { dispatchDoorCommands } from './scheduler/dispatcher';
 export { updatePlatformConfig, getPlatformConfigCallable } from './admin/platformConfig';
+export { getPlatformOverview, adminDeleteUser, adminDeleteTenant } from './admin/platformAdmin';
+export { testPcoConnection, testUnifiConnection } from './config/testConnections';

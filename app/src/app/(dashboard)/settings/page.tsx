@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '@/lib/firebase';
 import { getOrgSettings, updateOrgSettings } from '@/lib/firestore';
 import type { OrgSettings } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
@@ -137,8 +139,46 @@ export default function SettingsPage() {
   const [pollInterval, setPollInterval] = useState(30);
   const [timezone, setTimezone] = useState('America/Chicago');
   const [saving, setSaving] = useState(false);
+  const [testingPco, setTestingPco] = useState(false);
+  const [testingUnifi, setTestingUnifi] = useState(false);
 
   const [copied, setCopied] = useState(false);
+
+  const handleTestPcoConnection = async () => {
+    if (!orgId) return;
+    setTestingPco(true);
+    try {
+      const fn = httpsCallable<{ orgId: string }, { success: boolean; message: string }>(
+        functions,
+        'testPcoConnection'
+      );
+      const { data } = await fn({ orgId });
+      showToast(data.message, data.success ? 'success' : 'error');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Planning Center connection test failed.';
+      showToast(msg, 'error');
+    } finally {
+      setTestingPco(false);
+    }
+  };
+
+  const handleTestUnifiConnection = async () => {
+    if (!orgId) return;
+    setTestingUnifi(true);
+    try {
+      const fn = httpsCallable<{ orgId: string }, { success: boolean; message: string }>(
+        functions,
+        'testUnifiConnection'
+      );
+      const { data } = await fn({ orgId });
+      showToast(data.message, data.success ? 'success' : 'error');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'UniFi connection test failed.';
+      showToast(msg, 'error');
+    } finally {
+      setTestingUnifi(false);
+    }
+  };
 
   useEffect(() => {
     // Check URL parameters for PCO OAuth redirect status
@@ -434,11 +474,20 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             {isPcoConnected ? (
-              <button className="btn btn-danger btn-sm" onClick={handleDisconnectPco}>
-                Disconnect
-              </button>
+              <>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleTestPcoConnection}
+                  disabled={testingPco}
+                >
+                  {testingPco ? 'Testing PCO…' : '⚡ Test Connection'}
+                </button>
+                <button className="btn btn-danger btn-sm" onClick={handleDisconnectPco}>
+                  Disconnect
+                </button>
+              </>
             ) : (
               <a href={`/api/pco/auth?orgId=${orgId}`} className="btn btn-primary btn-sm">
                 Connect Planning Center
@@ -576,6 +625,16 @@ SKIP_TLS_VERIFY=true`}</pre>
               </div>
             </div>
           )}
+
+          <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--color-border)', display: 'flex', gap: '0.5rem' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleTestUnifiConnection}
+              disabled={testingUnifi}
+            >
+              {testingUnifi ? 'Testing UniFi Connection…' : '⚡ Test UniFi Connection'}
+            </button>
+          </div>
         </SectionCard>
 
         {/* ── 3. Timing Configuration ── */}
