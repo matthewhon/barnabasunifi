@@ -10,7 +10,6 @@
   },
   "engines": { "node": ">=20.0.0" },
   "dependencies": {
-    "@unfi-pco/shared": "*",
     "firebase-admin": "^12.0.0",
     "axios": "^1.7.0",
     "https-agent": "^1.0.0",

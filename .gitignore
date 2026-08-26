@@ -31,6 +31,7 @@ hosting-debug.log
 agent/service-account.json
 agent/*.json
 !agent/package.json
+!agent/tsconfig.json
 !agent/docker-compose.yml
 
 # macOS

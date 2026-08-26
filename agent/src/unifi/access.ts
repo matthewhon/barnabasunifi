@@ -47,10 +47,11 @@ interface LockRulePayload {
 export class UnifiAccessClient {
   private readonly http: AxiosInstance;
   private readonly host: string;
+  private doorToHubMap: Map<string, string> = new Map();
 
   /**
    * @param host           - Base URL of the UniFi console, e.g. https://192.168.1.1
-   * @param token          - UniFi Access API bearer token
+   * @param token          - UniFi Access API token
    * @param skipTlsVerify  - When true, disables TLS certificate validation
    *                         (needed for self-signed certs on UniFi consoles)
    */
@@ -66,6 +67,7 @@ export class UnifiAccessClient {
       httpsAgent,
       headers: {
         Authorization: `Bearer ${token}`,
+        'X-API-KEY': token,
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
@@ -90,7 +92,7 @@ export class UnifiAccessClient {
         const body = error.response?.data
           ? JSON.stringify(error.response.data)
           : error.message;
-        logger.error(`UniFi API error [${status}] ${url}: ${body}`);
+        logger.debug(`UniFi API error [${status}] ${url}: ${body}`);
         return Promise.reject(error);
       }
     );
@@ -102,28 +104,80 @@ export class UnifiAccessClient {
 
   /**
    * Fetch all doors registered in UniFi Access.
+   * Checks v1 Developer API first, falls back to UniFi OS Access v2 API.
    */
   async getDoors(): Promise<UnifiDoor[]> {
-    const response = await this.http.get<UnifiApiResponse<UnifiDoor[]>>(
-      '/api/v1/developer/doors'
-    );
-    const data = response.data;
-    if (!Array.isArray(data.data)) {
-      throw new Error(
-        `Unexpected response from /api/v1/developer/doors: ${JSON.stringify(data)}`
+    try {
+      const response = await this.http.get<UnifiApiResponse<UnifiDoor[]>>(
+        '/api/v1/developer/doors'
       );
+      if (Array.isArray(response.data?.data)) {
+        return response.data.data;
+      }
+    } catch {
+      // Fall through to v2 API
     }
-    return data.data;
+
+    // UniFi Access v2 API
+    const response = await this.http.get<{
+      code: number;
+      data: Array<{
+        unique_id: string;
+        name: string;
+        alias?: string;
+        device_type?: string;
+        device_state?: string;
+        state?: string;
+        door_lock_relay_status?: 'lock' | 'unlock' | 'unknown';
+        door_position_status?: 'open' | 'close';
+        door?: {
+          unique_id: string;
+          name: string;
+          full_name?: string;
+          up_id?: string;
+        };
+      }>;
+    }>('/proxy/access/api/v2/devices');
+
+    const devices = response.data?.data || [];
+    const doorMap = new Map<string, UnifiDoor>();
+
+    for (const d of devices) {
+      if (d.door && d.door.unique_id) {
+        const doorId = d.door.unique_id;
+        const deviceType = (d.device_type || '').toLowerCase();
+        const isHub = deviceType.includes('hub') || deviceType.includes('uah');
+
+        const existing = doorMap.get(doorId);
+        if (!existing || isHub) {
+          this.doorToHubMap.set(doorId, d.unique_id);
+          doorMap.set(doorId, {
+            id: doorId,
+            name: d.door.name || d.alias || d.name,
+            door_lock_relay_status: d.door_lock_relay_status || 'lock',
+            door_position_status: d.door_position_status || 'close',
+            type: d.device_type,
+            location_id: d.door.up_id || '',
+            full_name: d.door.full_name || d.door.name,
+            device_state: d.device_state || d.state || 'connected',
+          });
+        }
+      }
+    }
+
+    return Array.from(doorMap.values());
   }
 
   /**
    * Get current status/details of a specific door.
    */
   async getDoorStatus(doorId: string): Promise<UnifiDoor> {
-    const response = await this.http.get<UnifiApiResponse<UnifiDoor>>(
-      `/api/v1/developer/doors/${encodeURIComponent(doorId)}`
-    );
-    return response.data.data;
+    const doors = await this.getDoors();
+    const found = doors.find((d) => d.id === doorId);
+    if (!found) {
+      throw new Error(`Door ${doorId} not found in UniFi Access.`);
+    }
+    return found;
   }
 
   /**
@@ -136,13 +190,24 @@ export class UnifiAccessClient {
       type: 'custom',
       interval: durationMin,
     };
+
+    try {
+      await this.http.put(
+        `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
+        payload
+      );
+      logger.info(`Door ${doorId} unlocked for ${durationMin} minute(s).`);
+      return;
+    } catch {
+      // Fall through to v2 API
+    }
+
+    const hubId = this.doorToHubMap.get(doorId) || doorId;
     await this.http.put(
-      `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
+      `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/lock_rule`,
       payload
     );
-    logger.info(
-      `Door ${doorId} unlocked for ${durationMin} minute(s).`
-    );
+    logger.info(`Door ${doorId} (Hub: ${hubId}) unlocked for ${durationMin} minute(s).`);
   }
 
   /**
@@ -150,12 +215,24 @@ export class UnifiAccessClient {
    * @param doorId - UniFi door ID
    */
   async lockDoor(doorId: string): Promise<void> {
-    const payload: LockRulePayload = { type: 'lock_early' };
+    try {
+      const payload: LockRulePayload = { type: 'lock_early' };
+      await this.http.put(
+        `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
+        payload
+      );
+      logger.info(`Door ${doorId} locked.`);
+      return;
+    } catch {
+      // Fall through to v2 API
+    }
+
+    const hubId = this.doorToHubMap.get(doorId) || doorId;
     await this.http.put(
-      `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
-      payload
+      `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/lock_rule`,
+      { type: 'schedule' }
     );
-    logger.info(`Door ${doorId} locked.`);
+    logger.info(`Door ${doorId} (Hub: ${hubId}) locked.`);
   }
 
   /**
@@ -164,8 +241,8 @@ export class UnifiAccessClient {
    */
   async testConnection(): Promise<boolean> {
     try {
-      await this.getDoors();
-      logger.info(`UniFi connection OK — host: ${this.host}`);
+      const doors = await this.getDoors();
+      logger.info(`UniFi connection OK — host: ${this.host} (${doors.length} doors found)`);
       return true;
     } catch (err) {
       logger.error(
