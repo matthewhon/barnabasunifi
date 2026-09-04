@@ -162,8 +162,19 @@ export function getConfigurationStatus(): ConfigStatus {
     doorSyncIntervalMs: getIntEnv('DOOR_SYNC_INTERVAL_MS', 300_000),
     skipTlsVerify: getBoolEnv('SKIP_TLS_VERIFY', true),
     logLevel: getEnv('LOG_LEVEL', 'info'),
-    version: getEnv('npm_package_version', '1.0.0'),
     port: getIntEnv('PORT', 8080),
+    version: (() => {
+      if (process.env.AGENT_VERSION) return process.env.AGENT_VERSION;
+      if (process.env.npm_package_version) return process.env.npm_package_version;
+      try {
+        const p = path.resolve(__dirname, '../package.json');
+        if (fs.existsSync(p)) {
+          const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          if (pkg.version) return pkg.version;
+        }
+      } catch {}
+      return '1.1.1';
+    })(),
     agentAuthToken: agentAuthToken || undefined,
     connectionToken: connectionToken || undefined,
   };

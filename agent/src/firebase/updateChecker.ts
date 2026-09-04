@@ -39,8 +39,27 @@ export interface UpdateState {
 // Module-level state (read by web server)
 // ---------------------------------------------------------------------------
 
+function readCurrentVersion(): string {
+  if (process.env.AGENT_VERSION) return process.env.AGENT_VERSION;
+  if (process.env.npm_package_version) return process.env.npm_package_version;
+  try {
+    const candidates = [
+      path.resolve(__dirname, '../../package.json'),
+      path.resolve(__dirname, '../package.json'),
+      path.resolve(process.cwd(), 'package.json'),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        if (pkg.version) return pkg.version;
+      }
+    }
+  } catch {}
+  return '1.1.1';
+}
+
 let _state: UpdateState = {
-  currentVersion: process.env.npm_package_version || '1.0.0',
+  currentVersion: readCurrentVersion(),
   latestVersion: null,
   updateAvailable: false,
   changelog: '',
@@ -172,24 +191,34 @@ export async function applyPendingUpdate(onRestart?: () => Promise<void>): Promi
     await downloadFile(downloadUrl, zipPath);
     logger.info(`[UpdateChecker] Download complete (${Math.round(fs.statSync(zipPath).size / 1024)} KB)`);
 
-    // 3. Extract zip
-    execSync(`unzip -o "${zipPath}" -d "${extractDir}"`, { stdio: 'pipe' });
-
-    // 4. Determine the dist directory of the running agent
-    // __dirname is /app/dist/firebase when running; dist root is two levels up
+    // 3. Extract zip directly into dist directory
     const distDir = path.resolve(__dirname, '..');
-    logger.info(`[UpdateChecker] Installing update to ${distDir}…`);
+    logger.info(`[UpdateChecker] Installing update directly to ${distDir}…`);
+    execSync(`unzip -o "${zipPath}" -d "${distDir}"`, { stdio: 'pipe' });
 
-    // 5. Sync extracted files over the running dist (exclude public assets)
-    execSync(`rsync -a --delete "${extractDir}/" "${distDir}/"`, { stdio: 'pipe' });
+    // 4. Update package.json version if found
+    try {
+      const candidates = [
+        path.resolve(distDir, '../package.json'),
+        path.resolve(distDir, '../../package.json'),
+        path.resolve(process.cwd(), 'package.json'),
+      ];
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          pkg.version = targetVersion;
+          fs.writeFileSync(p, JSON.stringify(pkg, null, 2), 'utf-8');
+        }
+      }
+    } catch {}
 
-    // 6. Cleanup temp
+    // 5. Cleanup temp
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
     logger.info(`[UpdateChecker] Update v${targetVersion} installed successfully. Restarting…`);
     _state = { ..._state, applying: false, currentVersion: targetVersion, updateAvailable: false };
 
-    // 7. Restart
+    // 6. Restart
     if (onRestart) {
       await onRestart();
     } else {
