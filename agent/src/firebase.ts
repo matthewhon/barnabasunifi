@@ -1,81 +1,105 @@
 /**
  * firebase.ts
- * Firebase Admin SDK initialization.
- * Loads a service account JSON from disk and initializes the admin app.
- * Exports the Firestore db instance and the admin namespace.
+ * Firebase connection initialization.
+ * Supports BOTH:
+ *  1. Service Account JSON file (Admin SDK)
+ *  2. Connection Token / Custom Token (Firebase Client SDK via Custom Token)
  */
 
 import * as admin from 'firebase-admin';
+import firebase from 'firebase/compat/app';
+import 'firebase/compat/firestore';
+import 'firebase/compat/auth';
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from './logger';
 
-let _db: FirebaseFirestore.Firestore | null = null;
+let _db: any = null;
+let _isInitialized = false;
+
+const DEFAULT_API_KEY =
+  process.env.FIREBASE_API_KEY || 'AIzaSyCBu6tWWWx50VqSkTUGEAYy6fShFGIpZRk';
 
 /**
- * Initialize the Firebase Admin SDK using a service account file on disk.
- * Must be called once before using `db`.
- *
- * @param serviceAccountPath - Absolute or relative path to the service account JSON file.
- * @param projectId          - Firebase project ID (used as a sanity check).
+ * Initialize Firebase connection.
+ * Checks for service-account.json first; if absent, uses AGENT_AUTH_TOKEN custom token.
  */
-export function initializeFirebase(
+export async function initializeFirebase(
   serviceAccountPath: string,
   projectId: string
-): void {
-  if (admin.apps.length > 0) {
-    logger.warn('Firebase Admin SDK already initialized — skipping.');
+): Promise<void> {
+  if (_isInitialized) {
+    logger.warn('Firebase already initialized — skipping.');
     return;
   }
 
   const resolvedPath = path.resolve(serviceAccountPath);
+  const hasServiceAccount =
+    fs.existsSync(resolvedPath) &&
+    !fs.statSync(resolvedPath).isDirectory() &&
+    fs.readFileSync(resolvedPath, 'utf-8').includes('private_key');
 
-  if (!fs.existsSync(resolvedPath)) {
-    throw new Error(
-      `Firebase service account file not found at: ${resolvedPath}\n` +
-        `Set FIREBASE_SERVICE_ACCOUNT_PATH to the correct path.`
-    );
+  if (hasServiceAccount) {
+    try {
+      const raw = fs.readFileSync(resolvedPath, 'utf-8');
+      const serviceAccount = JSON.parse(raw) as admin.ServiceAccount;
+
+      if (admin.apps.length === 0) {
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount),
+          projectId,
+        });
+      }
+
+      _db = admin.firestore();
+      _db.settings({ ignoreUndefinedProperties: true });
+      _isInitialized = true;
+      logger.info(`✓ Firebase initialized via Service Account for project: ${projectId}`);
+      return;
+    } catch (err) {
+      logger.warn(`Failed to initialize via service account: ${err} — checking for auth token…`);
+    }
   }
 
-  let serviceAccount: admin.ServiceAccount;
-  try {
-    const raw = fs.readFileSync(resolvedPath, 'utf-8');
-    serviceAccount = JSON.parse(raw) as admin.ServiceAccount;
-  } catch (err) {
-    throw new Error(
-      `Failed to parse Firebase service account JSON at ${resolvedPath}: ${String(err)}`
-    );
+  // Fallback: Initialize via Firebase Client SDK with AGENT_AUTH_TOKEN
+  const authToken = process.env.AGENT_AUTH_TOKEN;
+  if (authToken) {
+    logger.info(`Connecting to Firebase using Agent Connection Token for project: ${projectId}…`);
+    if (firebase.apps.length === 0) {
+      firebase.initializeApp({
+        apiKey: DEFAULT_API_KEY,
+        projectId,
+        authDomain: `${projectId}.firebaseapp.com`,
+      });
+    }
+
+    try {
+      await firebase.auth().signInWithCustomToken(authToken);
+      logger.info(`✓ Successfully authenticated agent with Firebase Auth via Connection Token.`);
+      _db = firebase.firestore();
+      _isInitialized = true;
+      return;
+    } catch (err: any) {
+      logger.error(`Failed to authenticate with custom token: ${err.message}`);
+      throw new Error(`Agent token authentication failed: ${err.message}`);
+    }
   }
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    projectId,
-  });
-
-  logger.info(`Firebase initialized for project: ${projectId}`);
+  throw new Error(
+    `No valid Firebase credentials found. Provide a Connection Token or service-account.json.`
+  );
 }
 
 /**
  * Returns the Firestore database instance.
- * Throws if Firebase has not been initialized.
  */
 export function getDb(): FirebaseFirestore.Firestore {
   if (!_db) {
-    if (admin.apps.length === 0) {
-      throw new Error(
-        'Firebase has not been initialized. Call initializeFirebase() first.'
-      );
-    }
-    _db = admin.firestore();
-    // Use millisecond timestamps instead of Timestamp objects for convenience
-    _db.settings({ ignoreUndefinedProperties: true });
+    throw new Error('Firebase has not been initialized. Call initializeFirebase() first.');
   }
   return _db;
 }
 
-/**
- * Convenience getter — lazy-initializes the Firestore instance.
- */
 export { admin };
 
 export const db = new Proxy({} as FirebaseFirestore.Firestore, {

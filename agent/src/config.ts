@@ -22,6 +22,8 @@ export interface AgentConfig {
   logLevel: string;
   version: string;
   port: number;
+  agentAuthToken?: string;
+  connectionToken?: string;
 }
 
 export interface ConfigStatus {
@@ -133,9 +135,12 @@ export function getConfigurationStatus(): ConfigStatus {
 
   const agentId = getEnv('AGENT_ID', 'agent-main-campus');
   const resolvedSaPath = findServiceAccountPath(process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
+  const agentAuthToken = getEnv('AGENT_AUTH_TOKEN');
+  const connectionToken = getEnv('CONNECTION_TOKEN');
 
-  if (!resolvedSaPath) {
-    missing.push('service-account.json (not found or invalid)');
+  const hasAuth = Boolean(resolvedSaPath || agentAuthToken || connectionToken);
+  if (!hasAuth) {
+    missing.push('Authentication (Connection Token or service-account.json)');
   }
 
   const config: AgentConfig = {
@@ -152,6 +157,8 @@ export function getConfigurationStatus(): ConfigStatus {
     logLevel: getEnv('LOG_LEVEL', 'info'),
     version: getEnv('npm_package_version', '1.0.0'),
     port: getIntEnv('PORT', 8080),
+    agentAuthToken: agentAuthToken || undefined,
+    connectionToken: connectionToken || undefined,
   };
 
   return {

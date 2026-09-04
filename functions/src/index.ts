@@ -14,3 +14,4 @@ export { dispatchDoorCommands } from './scheduler/dispatcher';
 export { updatePlatformConfig, getPlatformConfigCallable } from './admin/platformConfig';
 export { getPlatformOverview, adminDeleteUser, adminDeleteTenant } from './admin/platformAdmin';
 export { testPcoConnection, testUnifiConnection } from './config/testConnections';
+export { generateAgentToken, registerAgentWithToken } from './agent/agentRegistration';

@@ -280,6 +280,36 @@ export default function SettingsPage() {
   const [remoteToken, setRemoteToken] = useState('');
   const [wizardStep, setWizardStep] = useState(1);
   const [showWizard, setShowWizard] = useState(false);
+  const [connectionToken, setConnectionToken] = useState('');
+  const [generatingToken, setGeneratingToken] = useState(false);
+  const [tokenCopied, setTokenCopied] = useState(false);
+
+  const handleGenerateAgentToken = async () => {
+    if (!orgId) return;
+    setGeneratingToken(true);
+    try {
+      const generateFn = httpsCallable<{ orgId: string }, { connectionToken: string }>(functions, 'generateAgentToken');
+      const res = await generateFn({ orgId });
+      setConnectionToken(res.data.connectionToken);
+      showToast('Agent Connection Token generated successfully!', 'success');
+    } catch (err: any) {
+      showToast(`Failed to generate token: ${err.message}`, 'error');
+    } finally {
+      setGeneratingToken(false);
+    }
+  };
+
+  const copyConnectionToken = async () => {
+    if (!connectionToken) return;
+    try {
+      await navigator.clipboard.writeText(connectionToken);
+      setTokenCopied(true);
+      setTimeout(() => setTokenCopied(false), 2500);
+      showToast('Token copied to clipboard!', 'success');
+    } catch {
+      showToast('Failed to copy token.', 'error');
+    }
+  };
 
   useEffect(() => {
     if (settings) {
@@ -584,51 +614,93 @@ export default function SettingsPage() {
               </button>
             </div>
           ) : (
-            <div>
-              <div className="form-group" style={{ marginBottom: '1rem' }}>
-                <label className="form-label">Organization ID</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  value={orgId ?? '—'}
-                  readOnly
-                  style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}
-                />
-              </div>
-
-              <div className="form-group" style={{ marginBottom: '1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                  <label className="form-label" style={{ margin: 0 }}>Agent .env Snippet</label>
-                  <button className="btn btn-secondary btn-sm" onClick={copyEnvSnippet}>
-                    <CopyIcon />
-                    {copied ? 'Copied!' : 'Copy'}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              {/* Token Generation Box */}
+              <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <div>
+                    <h4 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                      🔑 Agent Connection Token
+                    </h4>
+                    <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginTop: '0.25rem' }}>
+                      Pair your Local Agent Docker container directly to this church organization without needing Google Cloud keys.
+                    </p>
+                  </div>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={handleGenerateAgentToken}
+                    disabled={generatingToken}
+                  >
+                    {generatingToken ? 'Generating...' : connectionToken ? '🔄 Regenerate Token' : '⚡ Generate Connection Token'}
                   </button>
                 </div>
-                <pre style={{ margin: 0 }}>{`ORG_ID=${orgId ?? '<your-org-id>'}
+
+                {connectionToken ? (
+                  <div style={{ marginTop: '1rem' }}>
+                    <label className="form-label" style={{ marginBottom: '0.375rem' }}>Your Connection Token</label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <input
+                        type="text"
+                        className="form-input"
+                        readOnly
+                        value={connectionToken}
+                        style={{ fontFamily: 'monospace', fontSize: '0.8125rem', background: 'var(--color-bg-surface)' }}
+                      />
+                      <button className="btn btn-secondary btn-sm" onClick={copyConnectionToken}>
+                        <CopyIcon />
+                        {tokenCopied ? 'Copied!' : 'Copy Token'}
+                      </button>
+                    </div>
+                    <span className="form-hint" style={{ color: 'var(--color-success)', marginTop: '0.5rem', display: 'block' }}>
+                      ✓ Token ready! Paste this into the agent web portal at <strong>http://localhost:8080</strong>.
+                    </span>
+                  </div>
+                ) : (
+                  <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: '4px', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                    Click <strong>Generate Connection Token</strong> to create an instant setup token for your local machine.
+                  </div>
+                )}
+              </div>
+
+              {/* 3-Step Setup Instructions */}
+              <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+                <h4 style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--color-text-primary)' }}>
+                  📖 3-Step Setup Instructions:
+                </h4>
+                <ol style={{ paddingLeft: '1.25rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.8 }}>
+                  <li>
+                    <strong>Start Container:</strong> On the church local network machine, open the agent folder and run <code>START_AGENT.bat</code> (or <code>docker compose up -d</code>).
+                  </li>
+                  <li>
+                    <strong>Open Setup Portal:</strong> Open your browser to <a href="http://localhost:8080" target="_blank" rel="noreferrer" style={{ color: 'var(--color-accent)' }}><code>http://localhost:8080</code></a>.
+                  </li>
+                  <li>
+                    <strong>Paste Token:</strong> Paste your <strong>Connection Token</strong> into the portal, scan/set your local UniFi Console IP, and click <strong>Connect & Register</strong>.
+                  </li>
+                </ol>
+              </div>
+
+              {/* Advanced: Manual Config */}
+              <details style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem 1rem' }}>
+                <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Advanced: Manual Organization ID & .env</summary>
+                <div style={{ marginTop: '0.75rem' }}>
+                  <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                    <label className="form-label" style={{ fontSize: '0.75rem' }}>Organization ID</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={orgId ?? '—'}
+                      readOnly
+                      style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}
+                    />
+                  </div>
+                  <pre style={{ margin: 0, fontSize: '0.75rem' }}>{`ORG_ID=${orgId ?? '<your-org-id>'}
 FIREBASE_PROJECT_ID=${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? 'barnabasunfi'}
 UNIFI_HOST=https://<your-local-unifi-ip>
 UNIFI_ACCESS_TOKEN=<your-unifi-api-token>
 SKIP_TLS_VERIFY=true`}</pre>
-              </div>
-
-              {/* Step-by-step Setup Instructions */}
-              <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)', marginTop: '1rem' }}>
-                <h4 style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--color-text-primary)' }}>
-                  📖 Step-by-Step Local Agent Setup Instructions:
-                </h4>
-                <ol style={{ paddingLeft: '1.25rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.7 }}>
-                  <li>Log in to your local UniFi OS Console (`https://192.168.1.1`).</li>
-                  <li>Navigate to <strong>UniFi Access ➔ Settings ➔ System Settings ➔ API / Integrations</strong>.</li>
-                  <li>Click <strong>Create API Token</strong> and grant door lock/unlock permissions.</li>
-                  <li>Create a `.env` file on your local machine using the snippet above.</li>
-                  <li>Run the agent via Docker:
-                    <br />
-                    <code style={{ background: 'var(--color-bg-surface)', padding: '0.25rem 0.5rem', borderRadius: '4px', display: 'inline-block', marginTop: '0.35rem' }}>
-                      docker run -d --name unifi-pco-agent --env-file .env ghcr.io/matthewhon/unifi-pco-agent:latest
-                    </code>
-                  </li>
-                </ol>
-              </div>
+                </div>
+              </details>
             </div>
           )}
 

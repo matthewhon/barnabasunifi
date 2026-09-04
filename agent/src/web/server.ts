@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { logger, getRecentLogs } from '../logger';
 import { getConfigurationStatus, saveConfig, isServiceAccountPresent } from '../config';
+import axios from 'axios';
 import { scanSubnet } from './scanner';
 import { UnifiAccessClient } from '../unifi/access';
 
@@ -157,6 +158,67 @@ export function startWebServer(
       res.json({ ok: true, projectId: parsed.project_id });
     } catch (err: any) {
       res.status(400).json({ ok: false, error: `Invalid JSON file: ${err.message}` });
+    }
+  });
+
+  // POST /api/register-token
+  app.post('/api/register-token', async (req, res) => {
+    const { token, agentId, label, unifiHost } = req.body || {};
+    if (!token || typeof token !== 'string') {
+      res.status(400).json({ ok: false, error: 'Connection token is required.' });
+      return;
+    }
+
+    try {
+      // Decode token to inspect payload
+      const base64Str = token.replace(/^UPCO_/, '').trim();
+      const raw = Buffer.from(base64Str, 'base64').toString('utf-8');
+      const parsed = JSON.parse(raw);
+      const endpoint =
+        parsed.endpoint ||
+        `https://us-central1-${parsed.projectId || 'barnabasunfi'}.cloudfunctions.net/registerAgentWithToken`;
+
+      logger.info(`[WebUI] Registering agent with cloud endpoint: ${endpoint} for org: ${parsed.orgId}…`);
+
+      // Call cloud function
+      const response = await axios.post(
+        endpoint,
+        {
+          token,
+          agentId: agentId || process.env.AGENT_ID || 'agent-main-campus',
+          label: label || process.env.AGENT_LABEL || 'Main Campus Agent',
+          unifiHost: unifiHost || process.env.UNIFI_HOST || '',
+          version: process.env.npm_package_version || '1.0.0',
+        },
+        { timeout: 15000 }
+      );
+
+      if (response.data?.ok) {
+        const { orgId, customToken, projectId } = response.data;
+        // Save to .env
+        saveConfig({
+          ORG_ID: orgId,
+          FIREBASE_PROJECT_ID: projectId || 'barnabasunfi',
+          AGENT_ID: agentId || process.env.AGENT_ID || 'agent-main-campus',
+          AGENT_LABEL: label || process.env.AGENT_LABEL || 'Main Campus Agent',
+          AGENT_AUTH_TOKEN: customToken,
+          CONNECTION_TOKEN: token,
+        });
+
+        logger.info(`[WebUI] Successfully registered and associated with organization: ${orgId}!`);
+
+        if (state.onRestartRequest) {
+          await state.onRestartRequest();
+        }
+
+        res.json({ ok: true, orgId, message: 'Agent registered and linked successfully!' });
+      } else {
+        res.status(400).json({ ok: false, error: response.data?.error || 'Registration failed' });
+      }
+    } catch (err: any) {
+      const msg = err.response?.data?.error || err.message;
+      logger.error(`[WebUI] Registration handshake error: ${msg}`);
+      res.status(500).json({ ok: false, error: msg });
     }
   });
 

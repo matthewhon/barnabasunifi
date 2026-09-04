@@ -82,7 +82,7 @@ async function startBridgeWorker(): Promise<void> {
 
   // 1. Initialize Firebase
   try {
-    initializeFirebase(config.firebaseServiceAccountPath, config.firebaseProjectId);
+    await initializeFirebase(config.firebaseServiceAccountPath, config.firebaseProjectId);
     bridgeState.firebaseConnected = true;
   } catch (err: any) {
     bridgeState.status = 'error';

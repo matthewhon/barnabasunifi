@@ -65,6 +65,11 @@ service cloud.firestore {
         allow write: if isOrgAdmin(orgId);
       }
 
+      // Agent Tokens: org admins can manage connection tokens
+      match /agent_tokens/{tokenId} {
+        allow read, write: if isOrgAdmin(orgId);
+      }
+
       // Mappings: managers can read; org admins can write
       match /mappings/{mappingId} {
         allow read: if isOrgMember(orgId);
