@@ -84,6 +84,7 @@ async function writeAuditLog(
       org_id: orgId,
       schedule_window_id: command.schedule_window_id ?? null,
       executed_at: nowTimestamp(),
+      timestamp: nowTimestamp(),
     });
   } catch (err) {
     logger.error(`Failed to write audit log for command ${command.id}: ${String(err)}`);
