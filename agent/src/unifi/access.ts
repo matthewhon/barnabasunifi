@@ -392,23 +392,34 @@ export class UnifiAccessClient {
         logger.debug(`UniFi ← ${response.status} ${response.config.url}`);
         // Surface UniFi API application-level error codes even if HTTP status is 200 OK
         if (response.data && typeof response.data === 'object') {
-          const code = (response.data as any).code;
-          if (code !== undefined && code !== null) {
+          const rawCode = (response.data as any).code;
+          if (rawCode !== undefined && rawCode !== null) {
+            const msg =
+              (response.data as any).msg ||
+              (response.data as any).message;
+            const msgStr = typeof msg === 'string' ? msg.toLowerCase().trim() : '';
+
+            // UniFi APIs return code 0, 1, 200, 'SUCCESS', 'OK', or msg 'success'/'ok' for successful responses
             const isSuccess =
-              code === 'SUCCESS' ||
-              code === 0 ||
-              code === '0' ||
-              code === 200 ||
-              code === 'OK';
+              rawCode === 'SUCCESS' ||
+              rawCode === 'success' ||
+              rawCode === 0 ||
+              rawCode === '0' ||
+              rawCode === 1 ||
+              rawCode === '1' ||
+              rawCode === 200 ||
+              rawCode === '200' ||
+              rawCode === 'OK' ||
+              rawCode === 'ok' ||
+              msgStr === 'success' ||
+              msgStr === 'ok';
+
             if (!isSuccess) {
-              const msg =
-                (response.data as any).msg ||
-                (response.data as any).message ||
-                `UniFi API error code: ${code}`;
-              logger.warn(`UniFi API error response [${code}] ${response.config.url}: ${msg}`);
-              const err: any = new Error(`UniFi API error [${code}]: ${msg}`);
+              const errorText = msg || `UniFi API error code: ${rawCode}`;
+              logger.warn(`UniFi API error response [${rawCode}] ${response.config.url}: ${errorText}`);
+              const err: any = new Error(`UniFi API error [${rawCode}]: ${errorText}`);
               err.response = response;
-              err.code = code;
+              err.code = rawCode;
               return Promise.reject(err);
             }
           }
@@ -459,11 +470,16 @@ export class UnifiAccessClient {
   /**
    * Dynamically update host and token (e.g. after cloud config pull or token rotation).
    */
-  updateCredentials(host: string, token: string): void {
+  updateCredentials(host: string, token: string, skipTlsVerify?: boolean): void {
     this.host = host.replace(/\/$/, '');
     this.http.defaults.baseURL = this.host;
     this.http.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     this.http.defaults.headers.common['X-API-KEY'] = token;
+    if (skipTlsVerify !== undefined) {
+      this.http.defaults.httpsAgent = new https.Agent({
+        rejectUnauthorized: !skipTlsVerify,
+      });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -481,6 +497,18 @@ export class UnifiAccessClient {
       );
       if (Array.isArray(response.data?.data)) {
         // Asynchronously populate door-to-hub mapping in background
+        this.populateDoorToHubMap().catch(() => {});
+        return response.data.data;
+      }
+    } catch {
+      // Fall through
+    }
+
+    try {
+      const response = await this.http.get<UnifiApiResponse<UnifiDoor[]>>(
+        '/proxy/access/integration/v1/developer/doors'
+      );
+      if (Array.isArray(response.data?.data)) {
         this.populateDoorToHubMap().catch(() => {});
         return response.data.data;
       }

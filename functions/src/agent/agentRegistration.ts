@@ -152,7 +152,7 @@ export const registerAgentWithToken = onRequest({ cors: true }, async (req, res)
     const configData = configSnap.exists ? configSnap.data() : null;
     const unifiAgentConfig = configData?.unifi_agent || configData?.unifi_remote;
 
-    const effectiveUnifiHost = unifiHost || unifiAgentConfig?.host || unifiAgentConfig?.auto_discovered_host || '';
+    const effectiveUnifiHost = unifiAgentConfig?.host || unifiHost || unifiAgentConfig?.auto_discovered_host || '';
     const unifiAccessToken = unifiAgentConfig?.access_token || '';
     const skipTlsVerify = unifiAgentConfig?.skip_tls_verify ?? true;
 

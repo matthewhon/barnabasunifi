@@ -433,7 +433,10 @@
 
       <div class="form-group">
         <label for="unifiToken">UniFi Access API Token</label>
-        <input type="password" id="unifiToken" placeholder="Paste Developer API token">
+        <div class="input-with-btn">
+          <input type="password" id="unifiToken" placeholder="Paste Developer API token">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="toggleTokenVisibility()">👁️ Show</button>
+        </div>
       </div>
 
       <div class="form-group" style="display: flex; justify-content: space-between; align-items: center;">
@@ -533,12 +536,25 @@
 
         // Fill form fields
         if (data.config) {
-          if (!document.getElementById('unifiHost').value) document.getElementById('unifiHost').value = data.config.unifiHost || '';
-          if (!document.getElementById('orgId').value) document.getElementById('orgId').value = data.config.orgId || '';
-          if (!document.getElementById('agentId').value) document.getElementById('agentId').value = data.config.agentId || 'agent-main-campus';
-          if (!document.getElementById('agentLabel').value) document.getElementById('agentLabel').value = data.config.agentLabel || 'Main Campus Agent';
-          if (!document.getElementById('firebaseProjectId').value) document.getElementById('firebaseProjectId').value = data.config.firebaseProjectId || 'barnabasunfi';
-          document.getElementById('skipTls').checked = data.config.skipTlsVerify ?? true;
+          const fields = [
+            { id: 'unifiHost', val: data.config.unifiHost },
+            { id: 'unifiToken', val: data.config.unifiAccessToken },
+            { id: 'orgId', val: data.config.orgId },
+            { id: 'agentId', val: data.config.agentId || 'agent-main-campus' },
+            { id: 'agentLabel', val: data.config.agentLabel || 'Main Campus Agent' },
+            { id: 'firebaseProjectId', val: data.config.firebaseProjectId || 'barnabasunfi' },
+          ];
+          for (const f of fields) {
+            const el = document.getElementById(f.id);
+            if (el && f.val !== undefined && f.val !== null && f.val !== '') {
+              if (document.activeElement !== el) {
+                el.value = f.val;
+              }
+            }
+          }
+          if (data.config.skipTlsVerify !== undefined && document.activeElement !== document.getElementById('skipTls')) {
+            document.getElementById('skipTls').checked = Boolean(data.config.skipTlsVerify);
+          }
         }
 
         // Version badge
@@ -642,6 +658,11 @@
       showAlert(`Selected UniFi Host: ${url}`);
     }
 
+    function toggleTokenVisibility() {
+      const inp = document.getElementById('unifiToken');
+      inp.type = inp.type === 'password' ? 'text' : 'password';
+    }
+
     async function testUnifi() {
       const host = document.getElementById('unifiHost').value.trim();
       const token = document.getElementById('unifiToken').value.trim();
@@ -724,8 +745,26 @@
           if (data.unifiHost) {
             document.getElementById('unifiHost').value = data.unifiHost;
           }
+          if (data.unifiAccessToken) {
+            document.getElementById('unifiToken').value = data.unifiAccessToken;
+          }
+          if (data.orgId) {
+            document.getElementById('orgId').value = data.orgId;
+          }
+          if (data.agentId) {
+            document.getElementById('agentId').value = data.agentId;
+          }
+          if (data.agentLabel) {
+            document.getElementById('agentLabel').value = data.agentLabel;
+          }
+          if (data.projectId) {
+            document.getElementById('firebaseProjectId').value = data.projectId;
+          }
+          if (data.skipTlsVerify !== undefined) {
+            document.getElementById('skipTls').checked = Boolean(data.skipTlsVerify);
+          }
           resEl.innerHTML = `<span style="color: var(--success); font-weight: 600;">✓ Paired with Organization: ${data.orgId}! Credentials pulled from cloud.</span>`;
-          showAlert(`Registered and paired with organization: ${data.orgId}! Config pulled from cloud.`, 'success');
+          showAlert(`Registered and paired with organization: ${data.orgId}! UniFi credentials pulled from cloud.`, 'success');
           loadStatus();
           loadLogs();
         } else {

@@ -190,7 +190,7 @@ async function startBridgeWorker(): Promise<void> {
         logger.info(`[Bridge] Discovered active console on LAN at: ${discovered}. Connecting…`);
         config.unifiHost = discovered;
         saveConfig({ UNIFI_HOST: discovered });
-        unifiClient.updateCredentials(discovered, config.unifiAccessToken);
+        unifiClient.updateCredentials(discovered, config.unifiAccessToken, config.skipTlsVerify);
         connected = await unifiClient.testConnection();
       }
     }
@@ -333,9 +333,16 @@ async function startBridgeWorker(): Promise<void> {
         changed = true;
       }
 
+      if (unifiConfig.skip_tls_verify !== undefined && Boolean(unifiConfig.skip_tls_verify) !== config.skipTlsVerify) {
+        logger.info(`[Bridge] Detected updated skip_tls_verify (${unifiConfig.skip_tls_verify}) in cloud settings. Updating…`);
+        config.skipTlsVerify = Boolean(unifiConfig.skip_tls_verify);
+        saveConfig({ SKIP_TLS_VERIFY: String(config.skipTlsVerify) });
+        changed = true;
+      }
+
       if (changed) {
         logger.info('[Bridge] Re-applying cloud credentials to UniFi client…');
-        unifiClient.updateCredentials(config.unifiHost, config.unifiAccessToken);
+        unifiClient.updateCredentials(config.unifiHost, config.unifiAccessToken, config.skipTlsVerify);
         const testOk = await unifiClient.testConnection();
         bridgeState.unifiConnected = testOk;
         if (testOk) {

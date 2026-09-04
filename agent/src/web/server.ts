@@ -82,6 +82,7 @@ export function startWebServer(
       config: configStatus.config
         ? {
             unifiHost: configStatus.config.unifiHost,
+            unifiAccessToken: configStatus.config.unifiAccessToken || '',
             orgId: configStatus.config.orgId,
             agentId: configStatus.config.agentId,
             agentLabel: configStatus.config.agentLabel,
@@ -90,6 +91,7 @@ export function startWebServer(
           }
         : {
             unifiHost: process.env.UNIFI_HOST || '',
+            unifiAccessToken: process.env.UNIFI_ACCESS_TOKEN || '',
             orgId: process.env.ORG_ID || '',
             agentId: process.env.AGENT_ID || 'agent-main-campus',
             agentLabel: process.env.AGENT_LABEL || 'Main Campus Agent',
@@ -227,7 +229,12 @@ export function startWebServer(
         res.json({
           ok: true,
           orgId,
+          agentId: agentId || process.env.AGENT_ID || 'agent-main-campus',
+          agentLabel: label || process.env.AGENT_LABEL || 'Main Campus Agent',
           unifiHost: returnedHost || unifiHost,
+          unifiAccessToken: unifiAccessToken || '',
+          skipTlsVerify: skipTlsVerify ?? true,
+          projectId: projectId || 'barnabasunfi',
           message: 'Agent registered and linked successfully! Credentials pulled from cloud.',
         });
       } else {
@@ -290,6 +297,10 @@ export function startWebServer(
 
   app.post('/api/save-config', async (req, res) => {
     const updates = req.body || {};
+    // Don't wipe existing UNIFI_ACCESS_TOKEN if empty string was submitted
+    if (updates.UNIFI_ACCESS_TOKEN === '' && (process.env.UNIFI_ACCESS_TOKEN || '').trim()) {
+      delete updates.UNIFI_ACCESS_TOKEN;
+    }
     try {
       saveConfig(updates);
       logger.info('[WebUI] Configuration updated via Web UI.');
