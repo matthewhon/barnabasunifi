@@ -211,10 +211,20 @@ export function subscribeToAuditLog(
   return onSnapshot(q, (snap) => {
     callback(snap.docs.map((d) => {
       const data = d.data();
+      const isManual = data.triggered_by === 'manual' || (!data.schedule_window_id && (data.action === 'manual_unlock' || data.action === 'manual_lock' || data.action === 'unlock' || data.action === 'lock'));
+      let action = data.action;
+      if (action === 'unlock' && isManual) action = 'manual_unlock';
+      if (action === 'lock' && isManual) action = 'manual_lock';
+
       return {
         id: d.id,
         ...data,
-        timestamp: normalizeTimestamp(data.timestamp),
+        action,
+        triggered_by: data.triggered_by || (isManual ? 'manual' : 'scheduler'),
+        result: data.result || (data.status === 'done' ? 'success' : data.status === 'failed' ? 'error' : 'success'),
+        message: data.message || data.result_message,
+        door_label: data.door_label || data.door_name || (data.unifi_door_id ? `Door (${data.unifi_door_id.slice(0, 8)})` : undefined),
+        timestamp: normalizeTimestamp(data.timestamp || data.executed_at || data.created_at),
       } as unknown as AuditLogEntry;
     }));
   });

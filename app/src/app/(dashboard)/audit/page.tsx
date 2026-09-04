@@ -12,19 +12,23 @@ import { safeFormat } from '@/lib/date-utils';
 const ACTION_LABELS: Record<AuditAction, string> = {
   unlock: 'Door Unlocked (Scheduled)',
   lock: 'Door Locked (Scheduled)',
-  manual_unlock: 'Manual Unlock',
-  manual_lock: 'Manual Lock',
+  manual_unlock: 'Manual Unlock (Button)',
+  manual_lock: 'Manual Lock (Button)',
   pco_sync: 'PCO Sync',
   agent_online: 'Agent Online',
   agent_offline: 'Agent Offline',
   schedule_created: 'Schedule Created',
   schedule_cancelled: 'Schedule Cancelled',
+  schedule_updated: 'Schedule Updated',
+  schedule_synced: 'Schedule Synced',
+  schedule_deleted: 'Schedule Deleted',
 };
 
 const ALL_ACTIONS: AuditAction[] = [
   'unlock', 'lock', 'manual_unlock', 'manual_lock',
   'pco_sync', 'agent_online', 'agent_offline',
   'schedule_created', 'schedule_cancelled',
+  'schedule_updated', 'schedule_synced', 'schedule_deleted',
 ];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -79,6 +83,7 @@ export default function AuditPage() {
 
   // Filters
   const [actionFilter, setActionFilter] = useState<AuditAction | 'all'>('all');
+  const [triggerFilter, setTriggerFilter] = useState<'all' | 'manual' | 'scheduler'>('all');
   const [resultFilter, setResultFilter] = useState<'all' | 'success' | 'error'>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -96,6 +101,7 @@ export default function AuditPage() {
 
   const filtered = allEntries.filter((e) => {
     if (actionFilter !== 'all' && e.action !== actionFilter) return false;
+    if (triggerFilter !== 'all' && e.triggered_by !== triggerFilter) return false;
     if (resultFilter !== 'all' && e.result !== resultFilter) return false;
     if (dateFrom) {
       try {
@@ -127,6 +133,7 @@ export default function AuditPage() {
 
   function clearFilters() {
     setActionFilter('all');
+    setTriggerFilter('all');
     setResultFilter('all');
     setDateFrom('');
     setDateTo('');
@@ -134,7 +141,7 @@ export default function AuditPage() {
   }
 
   const hasActiveFilters =
-    actionFilter !== 'all' || resultFilter !== 'all' || dateFrom || dateTo;
+    actionFilter !== 'all' || triggerFilter !== 'all' || resultFilter !== 'all' || dateFrom || dateTo;
 
   return (
     <div>
@@ -177,6 +184,20 @@ export default function AuditPage() {
             {ALL_ACTIONS.map((a) => (
               <option key={a} value={a}>{ACTION_LABELS[a]}</option>
             ))}
+          </select>
+        </div>
+
+        {/* Trigger Source filter */}
+        <div className="form-group" style={{ flex: '1 1 10rem' }}>
+          <label className="form-label">Trigger Source</label>
+          <select
+            className="form-select"
+            value={triggerFilter}
+            onChange={(e) => setTriggerFilter(e.target.value as 'all' | 'manual' | 'scheduler')}
+          >
+            <option value="all">All Sources</option>
+            <option value="manual">🔘 Button (Manual)</option>
+            <option value="scheduler">📅 Schedule (PCO)</option>
           </select>
         </div>
 
@@ -284,9 +305,19 @@ export default function AuditPage() {
                       {entry.door_label ?? '—'}
                     </td>
                     <td>
-                      <span className="badge badge-neutral" style={{ fontSize: '0.6875rem', textTransform: 'capitalize' }}>
-                        {entry.triggered_by}
-                      </span>
+                      {entry.triggered_by === 'manual' ? (
+                        <span className="badge badge-warning" style={{ fontSize: '0.72rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <span>🔘</span> Button (Manual)
+                        </span>
+                      ) : entry.triggered_by === 'scheduler' ? (
+                        <span className="badge badge-info" style={{ fontSize: '0.72rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <span>📅</span> Schedule (PCO)
+                        </span>
+                      ) : (
+                        <span className="badge badge-neutral" style={{ fontSize: '0.72rem', textTransform: 'capitalize' }}>
+                          {entry.triggered_by || '—'}
+                        </span>
+                      )}
                     </td>
                     <td style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
                       {entry.actor_label ?? entry.actor_uid?.slice(0, 8) ?? '—'}

@@ -13,11 +13,20 @@ import { getDb } from '../firebase';
 import { UnifiAccessClient } from '../unifi/access';
 import { logger } from '../logger';
 
+import { syncSchedules } from './scheduleSync';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type DoorAction = 'unlock' | 'lock';
+export type CommandAction =
+  | 'unlock'
+  | 'lock'
+  | 'sync_schedules'
+  | 'update_schedule'
+  | 'create_schedule'
+  | 'delete_schedule';
+
 export type CommandStatus =
   | 'queued'
   | 'executing'
@@ -27,14 +36,18 @@ export type CommandStatus =
 
 export interface DoorCommand {
   id: string;
-  action: DoorAction;
-  door_id: string;
-  /** UniFi door UUID (may differ from Firestore door doc ID) */
-  unifi_door_id: string;
+  action: CommandAction;
+  door_id?: string;
+  door_label?: string;
+  unifi_door_id?: string;
+  schedule_id?: string;
+  schedule_data?: Record<string, unknown>;
   status: CommandStatus;
   execute_at: FirebaseFirestore.Timestamp | string | Date;
   duration_min?: number;
   schedule_window_id?: string;
+  triggered_by?: 'scheduler' | 'manual';
+  actor_uid?: string;
   created_by?: string;
   org_id: string;
 }
@@ -73,13 +86,23 @@ async function writeAuditLog(
   agentId: string
 ): Promise<void> {
   try {
+    const isManual = command.triggered_by === 'manual' || !command.schedule_window_id;
+    const action = command.action === 'unlock'
+      ? (isManual ? 'manual_unlock' : 'unlock')
+      : (isManual ? 'manual_lock' : 'lock');
+
     await db.collection(`organizations/${orgId}/audit_log`).add({
       command_id: command.id,
-      action: command.action,
+      action,
       door_id: command.door_id,
+      door_label: command.door_label ?? null,
       unifi_door_id: command.unifi_door_id,
       status,
+      result: status === 'done' ? 'success' : 'error',
       result_message: resultMessage,
+      message: resultMessage,
+      triggered_by: isManual ? 'manual' : 'scheduler',
+      actor_uid: command.actor_uid ?? null,
       agent_id: agentId,
       org_id: orgId,
       schedule_window_id: command.schedule_window_id ?? null,
@@ -177,11 +200,14 @@ export function startCommandListener(
         id: commandId,
         action: rawData.action as DoorAction,
         door_id: rawData.door_id as string,
+        door_label: rawData.door_label as string | undefined,
         unifi_door_id: unifiDoorId,
         status: 'executing',
         execute_at: rawData.execute_at,
         duration_min: rawData.duration_min as number | undefined,
         schedule_window_id: rawData.schedule_window_id as string | undefined,
+        triggered_by: rawData.triggered_by as 'scheduler' | 'manual' | undefined,
+        actor_uid: rawData.actor_uid as string | undefined,
         created_by: rawData.created_by as string | undefined,
         org_id: orgId,
       };
