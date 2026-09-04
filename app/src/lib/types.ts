@@ -88,6 +88,9 @@ export interface Door {
   unifi_door_id: string;
   label: string;
   current_state: DoorState;
+  door_position_status?: 'open' | 'close' | null;
+  is_held_unlocked?: boolean;
+  hold_unlock_expires_at?: string | null;
   last_synced: string; // ISO8601
 }
 

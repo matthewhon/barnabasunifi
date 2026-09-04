@@ -23,6 +23,8 @@ export interface UnifiDoor {
   location_id?: string;
   full_name?: string;
   device_state?: string;
+  is_held_unlocked?: boolean;
+  hold_unlock_end_time?: number | null;
   [key: string]: unknown;
 }
 
@@ -383,6 +385,55 @@ function isReaderDevice(d: any): boolean {
   );
 }
 
+function parseHubDoorStatus(hubDevice: any): {
+  relayStatus: 'lock' | 'unlock';
+  positionStatus: 'open' | 'close';
+  isHeld: boolean;
+  holdEndTime: number | null;
+} {
+  if (!hubDevice) {
+    return { relayStatus: 'lock', positionStatus: 'close', isHeld: false, holdEndTime: null };
+  }
+
+  const cfgs = hubDevice.configs || [];
+  const map = new Map<string, string>();
+  for (const c of cfgs) {
+    if (c.key && c.value !== undefined) {
+      map.set(c.key, String(c.value));
+    }
+  }
+
+  // 1. Direct relay outputs: 'on' = unlocked/energized, 'off' = locked
+  const d1Relay = map.get('output_d1_lock_relay');
+  const d2Relay = map.get('output_d2_lock_relay');
+  const rlyDry = map.get('input_state_rly-lock_dry');
+
+  // 2. Temporary hold-open / unlock schedules
+  const nowSec = Math.floor(Date.now() / 1000);
+  const lockEndTime = parseInt(map.get('lock_end_time') || '0', 10);
+  const tempUnlockEnd = parseInt(map.get('temporary_unlock_suspend_end_time') || '0', 10);
+  const isHeld = lockEndTime > nowSec || tempUnlockEnd > nowSec;
+
+  // 3. Overall lock status
+  const isUnlocked = d1Relay === 'on' || d2Relay === 'on' || rlyDry === 'on' || isHeld;
+
+  // 4. Door position sensor (DPS): 'off' = open circuit (door open), 'on' = closed
+  const dps = map.get('input_d1_dps') || map.get('input_state_dps');
+  let positionStatus: 'open' | 'close' = 'close';
+  if (dps === 'off') {
+    positionStatus = 'open';
+  } else if (dps === 'on') {
+    positionStatus = 'close';
+  }
+
+  return {
+    relayStatus: isUnlocked ? 'unlock' : 'lock',
+    positionStatus,
+    isHeld,
+    holdEndTime: isHeld ? Math.max(lockEndTime, tempUnlockEnd) : null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -562,48 +613,49 @@ export class UnifiAccessClient {
     // UniFi Access v2 API
     const response = await this.http.get<{
       code: number;
-      data: Array<{
-        unique_id: string;
-        name: string;
-        alias?: string;
-        device_type?: string;
-        device_state?: string;
-        state?: string;
-        door_lock_relay_status?: 'lock' | 'unlock' | 'unknown';
-        door_position_status?: 'open' | 'close';
-        door?: {
-          unique_id: string;
-          name: string;
-          full_name?: string;
-          up_id?: string;
-        };
-      }>;
+      data: Array<any>;
     }>('/proxy/access/api/v2/devices');
 
     const devices = response.data?.data || [];
+    const deviceById = new Map<string, any>();
+    for (const d of devices) {
+      deviceById.set(d.unique_id, d);
+    }
+
+    // Ensure doorToHubMap is populated
+    for (const d of devices) {
+      const doorId = d.door?.unique_id || d.location_id;
+      if (doorId && isHubDevice(d)) {
+        this.doorToHubMap.set(doorId, d.unique_id);
+      }
+    }
+    for (const d of devices) {
+      const doorId = d.door?.unique_id || d.location_id;
+      const linkedHubId = d.connected_uah_id || d.hub_id || d.connected_hub_id;
+      if (doorId && linkedHubId) {
+        this.doorToHubMap.set(doorId, linkedHubId);
+      }
+    }
+
     const doorMap = new Map<string, UnifiDoor>();
 
     for (const d of devices) {
       if (d.door && d.door.unique_id) {
         const doorId = d.door.unique_id;
         const isHub = isHubDevice(d);
-        const isReader = isReaderDevice(d);
-
-        if (isHub) {
-          this.doorToHubMap.set(doorId, d.unique_id);
-        } else if ((d as any).hub_id || (d as any).connected_hub_id) {
-          this.doorToHubMap.set(doorId, (d as any).hub_id || (d as any).connected_hub_id);
-        } else if (!isReader && !this.doorToHubMap.has(doorId)) {
-          this.doorToHubMap.set(doorId, d.unique_id);
-        }
+        const hubId = this.doorToHubMap.get(doorId);
+        const hub = hubId ? deviceById.get(hubId) : (isHub ? d : null);
+        const status = parseHubDoorStatus(hub);
 
         const existing = doorMap.get(doorId);
         if (!existing || isHub) {
           doorMap.set(doorId, {
             id: doorId,
             name: d.door.name || d.alias || d.name,
-            door_lock_relay_status: d.door_lock_relay_status || 'lock',
-            door_position_status: d.door_position_status || 'close',
+            door_lock_relay_status: status.relayStatus,
+            door_position_status: status.positionStatus,
+            is_held_unlocked: status.isHeld,
+            hold_unlock_end_time: status.holdEndTime,
             type: d.device_type,
             location_id: d.door.up_id || '',
             full_name: d.door.full_name || d.door.name,

@@ -270,10 +270,12 @@ export function startCommandListener(
         const durationMin = command.duration_min ?? 60;
         await unifiClient.unlockDoor(command.unifi_door_id, durationMin);
         resultMessage = `Door unlocked for ${durationMin} minute(s).`;
+        syncDoors(orgId, unifiClient).catch(() => {});
       } else if (command.action === 'lock') {
         if (!command.unifi_door_id) throw new Error('Missing unifi_door_id for lock action');
         await unifiClient.lockDoor(command.unifi_door_id);
         resultMessage = 'Door locked successfully.';
+        syncDoors(orgId, unifiClient).catch(() => {});
       } else if (command.action === 'sync_schedules') {
         const synced = await syncSchedules(orgId, unifiClient);
         resultMessage = `Synced ${synced.length} schedule(s) from UniFi Access.`;

@@ -123,6 +123,23 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
           {isUnknown ? 'Unknown' : isLocked ? 'Locked' : 'Unlocked'}
         </span>
 
+        {door.door_position_status && (
+          <span
+            className={`badge ${
+              door.door_position_status === 'open' ? 'badge-warning' : 'badge-neutral'
+            }`}
+            style={{ fontSize: '0.6875rem' }}
+          >
+            {door.door_position_status === 'open' ? '🚪 Open' : '🚪 Closed'}
+          </span>
+        )}
+
+        {door.is_held_unlocked && (
+          <span className="badge badge-warning" style={{ fontSize: '0.6875rem' }}>
+            ⏱️ Hold Open
+          </span>
+        )}
+
         {assignedSchedules.map((s) => (
           <Link
             key={s.id}

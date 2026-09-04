@@ -159,7 +159,7 @@ export function getConfigurationStatus(): ConfigStatus {
     agentId,
     agentLabel: getEnv('AGENT_LABEL', 'Main Campus Agent'),
     heartbeatIntervalMs: getIntEnv('HEARTBEAT_INTERVAL_MS', 60_000),
-    doorSyncIntervalMs: getIntEnv('DOOR_SYNC_INTERVAL_MS', 300_000),
+    doorSyncIntervalMs: getIntEnv('DOOR_SYNC_INTERVAL_MS', 10_000),
     skipTlsVerify: getBoolEnv('SKIP_TLS_VERIFY', true),
     logLevel: getEnv('LOG_LEVEL', 'info'),
     port: getIntEnv('PORT', 8080),

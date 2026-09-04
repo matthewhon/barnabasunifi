@@ -132,7 +132,7 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
       </div>
 
       {/* State badge */}
-      <div>
+      <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', alignItems: 'center' }}>
         <span
           className={`badge ${
             isUnknown ? 'badge-neutral' : isLocked ? 'badge-danger' : 'badge-success'
@@ -151,6 +151,23 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
           />
           {isUnknown ? 'Unknown' : isLocked ? 'Locked' : 'Unlocked'}
         </span>
+
+        {door.door_position_status && (
+          <span
+            className={`badge ${
+              door.door_position_status === 'open' ? 'badge-warning' : 'badge-neutral'
+            }`}
+            style={{ fontSize: '0.75rem' }}
+          >
+            {door.door_position_status === 'open' ? '🚪 Open' : '🚪 Closed'}
+          </span>
+        )}
+
+        {door.is_held_unlocked && (
+          <span className="badge badge-warning" style={{ fontSize: '0.75rem' }}>
+            ⏱️ Hold Open
+          </span>
+        )}
       </div>
 
       {/* Action buttons */}
