@@ -13,6 +13,7 @@ import { getDb } from '../firebase';
 import { UnifiAccessClient } from '../unifi/access';
 import { logger } from '../logger';
 
+import { syncDoors } from './doorSync';
 import { syncSchedules } from './scheduleSync';
 import { syncVisitors } from './visitorSync';
 
@@ -366,6 +367,31 @@ export function startCommandListener(
         resultMessage = `Visitor ${command.visitor_id} revoked successfully.`;
       } else {
         throw new Error(`Unknown action: ${String((command as any).action)}`);
+      }
+
+      // Immediately update the door's state in Firestore so the dashboard reflects the change
+      const targetDoorId = command.door_id || command.unifi_door_id;
+      if (targetDoorId && (command.action === 'unlock' || command.action === 'lock')) {
+        try {
+          const newCurrentState = command.action === 'unlock' ? 'unlocked' : 'locked';
+          const updateData: Record<string, any> = {
+            current_state: newCurrentState,
+            last_synced: nowTimestamp(),
+          };
+          if (command.action === 'unlock') {
+            updateData.last_unlocked_at = nowTimestamp();
+          } else {
+            updateData.last_locked_at = nowTimestamp();
+          }
+          await db.doc(`organizations/${orgId}/doors/${targetDoorId}`).set(updateData, { merge: true });
+        } catch (doorUpdateErr) {
+          logger.warn(`Could not update door document state: ${String(doorUpdateErr)}`);
+        }
+
+        // Trigger background sync to refresh full door info without blocking
+        syncDoors(orgId, unifiClient).catch((err) => {
+          logger.debug(`[CommandListener] Post-command door sync notice: ${String(err)}`);
+        });
       }
 
       logger.info(

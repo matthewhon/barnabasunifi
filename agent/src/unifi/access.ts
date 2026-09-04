@@ -390,6 +390,29 @@ export class UnifiAccessClient {
     this.http.interceptors.response.use(
       (response) => {
         logger.debug(`UniFi ← ${response.status} ${response.config.url}`);
+        // Surface UniFi API application-level error codes even if HTTP status is 200 OK
+        if (response.data && typeof response.data === 'object') {
+          const code = (response.data as any).code;
+          if (code !== undefined && code !== null) {
+            const isSuccess =
+              code === 'SUCCESS' ||
+              code === 0 ||
+              code === '0' ||
+              code === 200 ||
+              code === 'OK';
+            if (!isSuccess) {
+              const msg =
+                (response.data as any).msg ||
+                (response.data as any).message ||
+                `UniFi API error code: ${code}`;
+              logger.warn(`UniFi API error response [${code}] ${response.config.url}: ${msg}`);
+              const err: any = new Error(`UniFi API error [${code}]: ${msg}`);
+              err.response = response;
+              err.code = code;
+              return Promise.reject(err);
+            }
+          }
+        }
         return response;
       },
       (error: AxiosError) => {
@@ -402,6 +425,35 @@ export class UnifiAccessClient {
         return Promise.reject(error);
       }
     );
+  }
+
+  /**
+   * Populate internal mapping of door IDs to device/hub IDs from v2 devices API.
+   */
+  private async populateDoorToHubMap(): Promise<void> {
+    try {
+      const response = await this.http.get<{
+        code?: number | string;
+        data?: Array<{
+          unique_id: string;
+          device_type?: string;
+          door?: { unique_id: string };
+        }>;
+      }>('/proxy/access/api/v2/devices');
+
+      const devices = response.data?.data || [];
+      for (const d of devices) {
+        if (d.door?.unique_id) {
+          const deviceType = (d.device_type || '').toLowerCase();
+          const isHub = deviceType.includes('hub') || deviceType.includes('uah') || deviceType.includes('ultra');
+          if (!this.doorToHubMap.has(d.door.unique_id) || isHub) {
+            this.doorToHubMap.set(d.door.unique_id, d.unique_id);
+          }
+        }
+      }
+    } catch {
+      // Best effort; ignore if v2 endpoint is unavailable
+    }
   }
 
   /**
@@ -428,6 +480,8 @@ export class UnifiAccessClient {
         '/api/v1/developer/doors'
       );
       if (Array.isArray(response.data?.data)) {
+        // Asynchronously populate door-to-hub mapping in background
+        this.populateDoorToHubMap().catch(() => {});
         return response.data.data;
       }
     } catch {
@@ -497,58 +551,176 @@ export class UnifiAccessClient {
   }
 
   /**
-   * Unlock a door for the specified duration.
+   * Unlock a door.
+   * Performs an immediate physical unlock (relay trigger) and optionally applies
+   * a hold-open lock rule for the requested duration.
+   *
    * @param doorId      - UniFi door ID
-   * @param durationMin - How long to hold the door unlocked, in minutes
+   * @param durationMin - How long to hold the door unlocked, in minutes (if supported)
    */
-  async unlockDoor(doorId: string, durationMin: number): Promise<void> {
-    const payload: LockRulePayload = {
-      type: 'custom',
-      interval: durationMin,
-    };
+  async unlockDoor(doorId: string, durationMin: number = 0): Promise<void> {
+    let unlocked = false;
+    let lastError: Error | null = null;
 
+    // 1. Primary: Trigger immediate physical unlock via UniFi Developer API.
+    // This trips the door lock relay and generates an official "Remote Unlock" log in UniFi Access.
     try {
       await this.http.put(
-        `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
-        payload
+        `/api/v1/developer/doors/${encodeURIComponent(doorId)}/unlock`,
+        {}
       );
-      logger.info(`Door ${doorId} unlocked for ${durationMin} minute(s).`);
-      return;
-    } catch {
-      // Fall through to v2 API
+      unlocked = true;
+      logger.info(`[UniFi] Door ${doorId} unlocked via PUT /api/v1/developer/doors/.../unlock`);
+    } catch (err: any) {
+      // Fallback: POST /unlock (supported by some controller/firmware versions)
+      try {
+        await this.http.post(
+          `/api/v1/developer/doors/${encodeURIComponent(doorId)}/unlock`,
+          {}
+        );
+        unlocked = true;
+        logger.info(`[UniFi] Door ${doorId} unlocked via POST /api/v1/developer/doors/.../unlock`);
+      } catch (postErr: any) {
+        lastError = postErr;
+        logger.warn(
+          `[UniFi] Direct /unlock endpoint failed for door ${doorId} (${postErr.message}). Trying fallbacks...`
+        );
+      }
     }
 
-    const hubId = this.doorToHubMap.get(doorId) || doorId;
-    await this.http.put(
-      `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/lock_rule`,
-      payload
-    );
-    logger.info(`Door ${doorId} (Hub: ${hubId}) unlocked for ${durationMin} minute(s).`);
+    // 2. Fallback: v2 device relay unlock if developer /unlock failed
+    if (!unlocked) {
+      const hubId = this.doorToHubMap.get(doorId) || doorId;
+      try {
+        await this.http.put(
+          `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/relay_unlock`,
+          {}
+        );
+        unlocked = true;
+        logger.info(`[UniFi] Door ${doorId} (Hub: ${hubId}) unlocked via v2 relay_unlock`);
+      } catch {
+        try {
+          await this.http.post(
+            `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/relay_unlock`,
+            {}
+          );
+          unlocked = true;
+          logger.info(`[UniFi] Door ${doorId} (Hub: ${hubId}) unlocked via POST v2 relay_unlock`);
+        } catch {
+          // Will attempt lock_rule below
+        }
+      }
+    }
+
+    // 3. Apply temporary hold-open lock rule if duration was specified
+    if (durationMin > 0) {
+      const holdRulePayloads: LockRulePayload[] = [
+        { type: 'custom', interval: durationMin },
+        { type: 'keep_unlock' as any },
+      ];
+
+      let holdRuleApplied = false;
+      for (const payload of holdRulePayloads) {
+        try {
+          await this.http.put(
+            `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
+            payload
+          );
+          holdRuleApplied = true;
+          logger.info(
+            `[UniFi] Door ${doorId} hold rule applied (${payload.type}) for ${durationMin} minute(s).`
+          );
+          break;
+        } catch {
+          // Try next payload format
+        }
+      }
+
+      if (!holdRuleApplied) {
+        const hubId = this.doorToHubMap.get(doorId) || doorId;
+        for (const payload of holdRulePayloads) {
+          try {
+            await this.http.put(
+              `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/lock_rule`,
+              payload
+            );
+            holdRuleApplied = true;
+            logger.info(
+              `[UniFi] Door ${doorId} (Hub: ${hubId}) hold rule applied via v2 API.`
+            );
+            break;
+          } catch {
+            // Ignore if device model (e.g. UA-Ultra) does not support hold-open rules
+          }
+        }
+      }
+
+      if (holdRuleApplied) {
+        unlocked = true;
+      } else if (!unlocked) {
+        throw new Error(
+          `Failed to unlock door ${doorId}: ${lastError?.message || 'Unsupported door command'}`
+        );
+      } else {
+        logger.info(
+          `[UniFi] Door ${doorId} unlocked via relay. Note: hold-open schedule rule is not supported by this hardware model.`
+        );
+      }
+    } else if (!unlocked) {
+      throw new Error(
+        `Failed to unlock door ${doorId}: ${lastError?.message || 'Door unlock failed'}`
+      );
+    }
   }
 
   /**
-   * Lock a door immediately, overriding any active unlock rule.
+   * Lock a door immediately, overriding/clearing any active hold rule.
    * @param doorId - UniFi door ID
    */
   async lockDoor(doorId: string): Promise<void> {
-    try {
-      const payload: LockRulePayload = { type: 'lock_early' };
-      await this.http.put(
-        `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
-        payload
-      );
-      logger.info(`Door ${doorId} locked.`);
-      return;
-    } catch {
-      // Fall through to v2 API
+    let locked = false;
+    let lastError: Error | null = null;
+
+    // Try resetting hold rule back to default locked/schedule state
+    const resetPayloads = [
+      { type: 'reset' },
+      { type: 'lock_early' },
+      { type: 'keep_lock' },
+    ];
+
+    for (const payload of resetPayloads) {
+      try {
+        await this.http.put(
+          `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
+          payload
+        );
+        locked = true;
+        logger.info(`[UniFi] Door ${doorId} locked (${payload.type}).`);
+        return;
+      } catch (err: any) {
+        lastError = err;
+      }
     }
 
+    // Fall back to v2 API
     const hubId = this.doorToHubMap.get(doorId) || doorId;
-    await this.http.put(
-      `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/lock_rule`,
-      { type: 'schedule' }
-    );
-    logger.info(`Door ${doorId} (Hub: ${hubId}) locked.`);
+    for (const type of ['reset', 'schedule', 'keep_lock']) {
+      try {
+        await this.http.put(
+          `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/lock_rule`,
+          { type }
+        );
+        locked = true;
+        logger.info(`[UniFi] Door ${doorId} (Hub: ${hubId}) locked via v2 API (${type}).`);
+        return;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    if (!locked) {
+      throw new Error(`Failed to lock door ${doorId}: ${lastError?.message || 'Lock command rejected'}`);
+    }
   }
 
   /**
