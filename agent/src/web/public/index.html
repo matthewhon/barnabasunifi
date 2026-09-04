@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UnFi-PCO Local Agent Manager</title>
+  <style>
+    :root {
+      --bg-base: #0f172a;
+      --bg-surface: #1e293b;
+      --bg-surface-hover: #334155;
+      --bg-input: #0b1322;
+      --border: #334155;
+      --border-focus: #38bdf8;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent: #0ea5e9;
+      --accent-hover: #0284c7;
+      --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.15);
+      --warning: #f59e0b;
+      --warning-bg: rgba(245, 158, 11, 0.15);
+      --danger: #ef4444;
+      --danger-bg: rgba(239, 68, 68, 0.15);
+      --radius: 10px;
+      --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-family);
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      line-height: 1.5;
+      padding: 1.5rem;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .brand-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1.25rem;
+      color: #fff;
+    }
+
+    .brand h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .brand p {
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .badge-running { background: var(--success-bg); color: var(--success); }
+    .badge-running .badge-dot { background: var(--success); }
+    .badge-unconfigured { background: var(--warning-bg); color: var(--warning); }
+    .badge-unconfigured .badge-dot { background: var(--warning); }
+    .badge-error { background: var(--danger-bg); color: var(--danger); }
+    .badge-error .badge-dot { background: var(--danger); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+    }
+
+    .card-title {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 0.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .card-value {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .card-subtext {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+      word-break: break-all;
+    }
+
+    .section {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .section-title {
+      font-size: 1.125rem;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 0.375rem;
+    }
+
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      padding: 0.625rem 0.875rem;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 0.875rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--border-focus);
+    }
+
+    .input-with-btn {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .input-with-btn input {
+      flex: 1;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.625rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+
+    .btn-secondary {
+      background: var(--bg-surface-hover);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: #475569; }
+
+    .btn-sm {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.75rem;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .scanner-box {
+      margin-top: 0.75rem;
+      padding: 1rem;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: none;
+    }
+
+    .scan-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem;
+      border-radius: 4px;
+      background: var(--bg-surface);
+      margin-top: 0.5rem;
+    }
+
+    .scan-item:hover {
+      background: var(--bg-surface-hover);
+    }
+
+    .file-drop {
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 1.5rem;
+      text-align: center;
+      background: var(--bg-input);
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .file-drop:hover {
+      border-color: var(--accent);
+    }
+
+    .file-status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8125rem;
+      margin-top: 0.5rem;
+    }
+
+    .alert {
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      font-size: 0.8125rem;
+      margin-bottom: 1rem;
+      display: none;
+    }
+
+    .alert-success { background: var(--success-bg); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .alert-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
+
+    .logs-box {
+      background: #000;
+      color: #38bdf8;
+      font-family: monospace;
+      font-size: 0.75rem;
+      padding: 1rem;
+      border-radius: 6px;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="brand-icon">U</div>
+        <div>
+          <h1>UnFi-PCO Local Agent</h1>
+          <p>On-Premises UniFi Access & Cloud Bridge</p>
+        </div>
+      </div>
+      <div id="statusBadge" class="badge badge-unconfigured">
+        <span class="badge-dot"></span>
+        <span id="statusText">Checking...</span>
+      </div>
+    </header>
+
+    <div id="alertBox" class="alert"></div>
+
+    <!-- Status Overview Cards -->
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">UniFi Console</div>
+        <div id="cardUnifiStatus" class="card-value">-</div>
+        <div id="cardUnifiHost" class="card-subtext">Not configured</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Cloud Bridge (Firebase)</div>
+        <div id="cardFirebaseStatus" class="card-value">-</div>
+        <div id="cardOrgId" class="card-subtext">No organization set</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Doors Managed</div>
+        <div id="cardDoorCount" class="card-value">0</div>
+        <div id="cardLastSync" class="card-subtext">Sync idle</div>
+      </div>
+    </div>
+
+    <!-- Configuration Form -->
+    <div class="section">
+      <h2 class="section-title">⚙️ Connection Configuration</h2>
+
+      <!-- UniFi Section -->
+      <div class="form-group">
+        <label for="unifiHost">UniFi Console Host / IP</label>
+        <div class="input-with-btn">
+          <input type="text" id="unifiHost" placeholder="https://192.168.1.1">
+          <button id="btnScan" class="btn btn-secondary" onclick="toggleScanner()">
+            🔍 Scan Network
+          </button>
+        </div>
+      </div>
+
+      <!-- Network Scanner Drawer -->
+      <div id="scannerBox" class="scanner-box">
+        <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem;">
+          <label style="margin: 0; white-space: nowrap;">Subnet to scan:</label>
+          <input type="text" id="scanSubnet" style="max-width: 140px;" value="192.168.1">
+          <button id="btnStartScan" class="btn btn-primary btn-sm" onclick="startScan()">Scan Now</button>
+          <span id="scanSpinner" style="display: none;"><span class="spinner"></span> Scanning subnet...</span>
+        </div>
+        <div id="scanResults"></div>
+      </div>
+
+      <div class="form-group">
+        <label for="unifiToken">UniFi Access API Token</label>
+        <input type="password" id="unifiToken" placeholder="Paste Developer API token">
+      </div>
+
+      <div class="form-group" style="display: flex; justify-content: space-between; align-items: center;">
+        <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin: 0;">
+          <input type="checkbox" id="skipTls" checked>
+          Bypass self-signed certificate check (Recommended for UniFi)
+        </label>
+        <button id="btnTestUnifi" class="btn btn-secondary btn-sm" onclick="testUnifi()">
+          ⚡ Test UniFi Connection
+        </button>
+      </div>
+      <div id="unifiTestResult" style="font-size: 0.8125rem; margin-top: -0.5rem; margin-bottom: 1rem; color: var(--text-secondary);"></div>
+
+      <hr style="border: 0; border-top: 1px solid var(--border); margin: 1.5rem 0;">
+
+      <!-- Firebase & Org Section -->
+      <div class="form-row">
+        <div class="form-group">
+          <label for="orgId">Organization ID</label>
+          <input type="text" id="orgId" placeholder="e.g. main-church">
+        </div>
+        <div class="form-group">
+          <label for="agentId">Agent ID</label>
+          <input type="text" id="agentId" value="agent-main-campus">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="agentLabel">Agent Label</label>
+          <input type="text" id="agentLabel" value="Main Campus Agent">
+        </div>
+        <div class="form-group">
+          <label for="firebaseProjectId">Firebase Project ID</label>
+          <input type="text" id="firebaseProjectId" value="barnabasunfi">
+        </div>
+      </div>
+
+      <!-- Service Account Upload -->
+      <div class="form-group">
+        <label>Firebase Service Account Key (service-account.json)</label>
+        <div id="dropZone" class="file-drop" onclick="document.getElementById('fileInput').click()">
+          <input type="file" id="fileInput" accept=".json" style="display: none;" onchange="handleFileUpload(event)">
+          <p style="font-size: 0.875rem; font-weight: 600;">📁 Drag & Drop or Click to Upload service-account.json</p>
+          <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Download from Firebase Console ➔ Project Settings ➔ Service Accounts</p>
+        </div>
+        <div id="serviceAccountStatus" class="file-status"></div>
+      </div>
+
+      <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+        <button id="btnSave" class="btn btn-primary" style="flex: 1;" onclick="saveConfiguration()">
+          💾 Save & Start Agent Bridge
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Logs Section -->
+    <div class="section">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+        <h2 class="section-title" style="margin: 0;">📜 Agent Logs</h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadLogs()">🔄 Refresh</button>
+      </div>
+      <div id="logsView" class="logs-box">Connecting to agent...</div>
+    </div>
+  </div>
+
+  <script>
+    function showAlert(msg, type = 'success') {
+      const el = document.getElementById('alertBox');
+      el.className = `alert alert-${type}`;
+      el.innerText = msg;
+      el.style.display = 'block';
+      setTimeout(() => { el.style.display = 'none'; }, 6000);
+    }
+
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+
+        // Update badge
+        const badge = document.getElementById('statusBadge');
+        const badgeText = document.getElementById('statusText');
+        if (data.status === 'running') {
+          badge.className = 'badge badge-running';
+          badgeText.innerText = 'Running';
+        } else if (data.status === 'error') {
+          badge.className = 'badge badge-error';
+          badgeText.innerText = 'Error';
+        } else {
+          badge.className = 'badge badge-unconfigured';
+          badgeText.innerText = 'Setup Required';
+        }
+
+        // Fill form fields
+        if (data.config) {
+          if (!document.getElementById('unifiHost').value) document.getElementById('unifiHost').value = data.config.unifiHost || '';
+          if (!document.getElementById('orgId').value) document.getElementById('orgId').value = data.config.orgId || '';
+          if (!document.getElementById('agentId').value) document.getElementById('agentId').value = data.config.agentId || 'agent-main-campus';
+          if (!document.getElementById('agentLabel').value) document.getElementById('agentLabel').value = data.config.agentLabel || 'Main Campus Agent';
+          if (!document.getElementById('firebaseProjectId').value) document.getElementById('firebaseProjectId').value = data.config.firebaseProjectId || 'barnabasunfi';
+          document.getElementById('skipTls').checked = data.config.skipTlsVerify ?? true;
+        }
+
+        // Cards
+        document.getElementById('cardUnifiStatus').innerText = data.unifiConnected ? 'Connected' : 'Offline';
+        document.getElementById('cardUnifiStatus').style.color = data.unifiConnected ? 'var(--success)' : 'var(--text-muted)';
+        document.getElementById('cardUnifiHost').innerText = data.config?.unifiHost || 'No host specified';
+
+        document.getElementById('cardFirebaseStatus').innerText = data.firebaseConnected ? 'Connected' : (data.serviceAccountPresent ? 'Key Present' : 'Missing Key');
+        document.getElementById('cardFirebaseStatus').style.color = data.firebaseConnected ? 'var(--success)' : (data.serviceAccountPresent ? 'var(--warning)' : 'var(--danger)');
+        document.getElementById('cardOrgId').innerText = data.config?.orgId ? `Org: ${data.config.orgId}` : 'No organization set';
+
+        document.getElementById('cardDoorCount').innerText = data.doorCount ?? 0;
+        document.getElementById('cardLastSync').innerText = data.lastSync ? `Synced ${new Date(data.lastSync).toLocaleTimeString()}` : 'No sync yet';
+
+        // Service Account status
+        const saStatus = document.getElementById('serviceAccountStatus');
+        if (data.serviceAccountPresent) {
+          saStatus.innerHTML = '<span style="color: var(--success)">✓ service-account.json is installed and valid</span>';
+        } else {
+          saStatus.innerHTML = '<span style="color: var(--warning)">⚠️ service-account.json is missing</span>';
+        }
+      } catch (err) {
+        console.error('Failed to load status', err);
+      }
+    }
+
+    async function loadLogs() {
+      try {
+        const res = await fetch('/api/logs');
+        const data = await res.json();
+        const box = document.getElementById('logsView');
+        box.innerText = data.logs.join('\n') || 'No recent logs';
+        box.scrollTop = box.scrollHeight;
+      } catch (err) {
+        document.getElementById('logsView').innerText = 'Could not load logs';
+      }
+    }
+
+    function toggleScanner() {
+      const box = document.getElementById('scannerBox');
+      box.style.display = box.style.display === 'block' ? 'none' : 'block';
+    }
+
+    async function startScan() {
+      const subnet = document.getElementById('scanSubnet').value.trim();
+      const spinner = document.getElementById('scanSpinner');
+      const results = document.getElementById('scanResults');
+      const btn = document.getElementById('btnStartScan');
+
+      spinner.style.display = 'inline-block';
+      btn.disabled = true;
+      results.innerHTML = '';
+
+      try {
+        const res = await fetch('/api/scan-unifi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subnet })
+        });
+        const data = await res.json();
+
+        if (data.consoles && data.consoles.length > 0) {
+          results.innerHTML = data.consoles.map(c => `
+            <div class="scan-item">
+              <div>
+                <strong>${c.ip}</strong> ${c.isConfirmedUnifi ? '<span style="color: var(--success); font-size: 0.75rem; margin-left: 0.5rem;">[UniFi OS Detected]</span>' : ''}
+                <div style="font-size: 0.75rem; color: var(--text-muted);">${c.statusText}</div>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="selectHost('${c.url}')">Use This Host</button>
+            </div>
+          `).join('');
+        } else {
+          results.innerHTML = '<div style="font-size: 0.8125rem; color: var(--text-muted); margin-top: 0.5rem;">No UniFi consoles responded on this subnet. Try another subnet prefix (e.g. 192.168.0 or 10.0.0).</div>';
+        }
+      } catch (err) {
+        results.innerHTML = `<div style="color: var(--danger); font-size: 0.8125rem;">Scan error: ${err.message}</div>`;
+      } finally {
+        spinner.style.display = 'none';
+        btn.disabled = false;
+      }
+    }
+
+    function selectHost(url) {
+      document.getElementById('unifiHost').value = url;
+      document.getElementById('scannerBox').style.display = 'none';
+      showAlert(`Selected UniFi Host: ${url}`);
+    }
+
+    async function testUnifi() {
+      const host = document.getElementById('unifiHost').value.trim();
+      const token = document.getElementById('unifiToken').value.trim();
+      const skipTls = document.getElementById('skipTls').checked;
+      const resEl = document.getElementById('unifiTestResult');
+
+      if (!host) {
+        resEl.innerHTML = '<span style="color: var(--danger)">Please enter a UniFi Host IP first.</span>';
+        return;
+      }
+
+      resEl.innerHTML = '<span class="spinner"></span> Testing connection to UniFi console...';
+
+      try {
+        const res = await fetch('/api/test-unifi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ host, token, skipTls })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          resEl.innerHTML = `<span style="color: var(--success)">✓ Connected successfully! Found ${data.doorCount} door(s) on console.</span>`;
+        } else {
+          resEl.innerHTML = `<span style="color: var(--danger)">✗ Connection failed: ${data.error}</span>`;
+        }
+      } catch (err) {
+        resEl.innerHTML = `<span style="color: var(--danger)">✗ Error: ${err.message}</span>`;
+      }
+    }
+
+    async function handleFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append('serviceAccount', file);
+
+      try {
+        const res = await fetch('/api/upload-service-account', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showAlert(`Service account key for "${data.projectId}" saved successfully!`);
+          loadStatus();
+        } else {
+          showAlert(`Upload failed: ${data.error}`, 'danger');
+        }
+      } catch (err) {
+        showAlert(`Upload error: ${err.message}`, 'danger');
+      }
+    }
+
+    async function saveConfiguration() {
+      const payload = {
+        UNIFI_HOST: document.getElementById('unifiHost').value.trim(),
+        UNIFI_ACCESS_TOKEN: document.getElementById('unifiToken').value.trim(),
+        SKIP_TLS_VERIFY: document.getElementById('skipTls').checked ? 'true' : 'false',
+        ORG_ID: document.getElementById('orgId').value.trim(),
+        AGENT_ID: document.getElementById('agentId').value.trim(),
+        AGENT_LABEL: document.getElementById('agentLabel').value.trim(),
+        FIREBASE_PROJECT_ID: document.getElementById('firebaseProjectId').value.trim(),
+      };
+
+      const btn = document.getElementById('btnSave');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Saving & Restarting Bridge...';
+
+      try {
+        const res = await fetch('/api/save-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showAlert('Configuration saved and Agent Bridge started!');
+          loadStatus();
+          loadLogs();
+        } else {
+          showAlert(`Save failed: ${data.error}`, 'danger');
+        }
+      } catch (err) {
+        showAlert(`Error saving: ${err.message}`, 'danger');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '💾 Save & Start Agent Bridge';
+      }
+    }
+
+    // Initialize
+    loadStatus();
+    loadLogs();
+    setInterval(loadStatus, 5000);
+    setInterval(loadLogs, 4000);
+  </script>
+</body>
+</html>

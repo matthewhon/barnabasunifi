@@ -2,47 +2,72 @@
  * index.ts
  * Main entry point for the UnFi-PCO Local Agent.
  *
- * Boot sequence:
- *  1. Load .env
- *  2. Load and validate config
- *  3. Initialize Firebase Admin SDK
- *  4. Initialize UniFi Access API client
- *  5. Test UniFi connectivity — exit if unreachable
- *  6. Register / update agent document in Firestore
- *  7. Start heartbeat
- *  8. Run initial door sync
- *  9. Start recurring door sync interval
- * 10. Start Firestore command listener
- * 11. Log "Agent running"
+ * Boots an always-on Web Configuration & Management Portal on port 8080.
+ * If credentials and configuration are present, starts the background bridge worker.
+ * If configuration is incomplete, stays alive in setup mode and allows configuration
+ * via the web portal.
  */
 
 import 'dotenv/config';
 
-import { loadConfig } from './config';
+import { getConfigurationStatus } from './config';
 import { logger, setLogLevel } from './logger';
 import { initializeFirebase, getDb } from './firebase';
 import { UnifiAccessClient } from './unifi/access';
 import { startHeartbeat } from './firebase/heartbeat';
 import { syncDoors, startDoorSyncInterval } from './firebase/doorSync';
 import { startCommandListener } from './firebase/commandListener';
+import { startWebServer, AgentBridgeState } from './web/server';
 import * as admin from 'firebase-admin';
 
 // ---------------------------------------------------------------------------
-// Boot
+// Lifecycle State
 // ---------------------------------------------------------------------------
 
-async function main(): Promise<void> {
-  // ── 1. Load config ──────────────────────────────────────────────────────
-  let config: ReturnType<typeof loadConfig>;
-  try {
-    config = loadConfig();
-  } catch (err) {
-    // Logger may not be configured yet; use console.error
-    console.error(`[FATAL] Configuration error: ${String(err)}`);
-    process.exit(1);
+let cleanupPreviousWorker: (() => void) | null = null;
+
+const bridgeState: AgentBridgeState = {
+  status: 'unconfigured',
+  unifiConnected: false,
+  firebaseConnected: false,
+  doorCount: 0,
+  lastSync: null,
+  onRestartRequest: async () => {
+    logger.info('[Bridge] Reload requested via Web Portal.');
+    await startBridgeWorker();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Worker Launcher
+// ---------------------------------------------------------------------------
+
+async function startBridgeWorker(): Promise<void> {
+  // Stop existing worker if one was running
+  if (cleanupPreviousWorker) {
+    try {
+      cleanupPreviousWorker();
+    } catch (err) {
+      logger.warn(`[Bridge] Error cleaning up previous worker: ${err}`);
+    }
+    cleanupPreviousWorker = null;
   }
 
-  // Apply configured log level now that config is available
+  const configStatus = getConfigurationStatus();
+
+  if (!configStatus.isConfigured || !configStatus.config) {
+    bridgeState.status = 'unconfigured';
+    bridgeState.unifiConnected = false;
+    bridgeState.firebaseConnected = false;
+    bridgeState.errorMessage = `Missing: ${configStatus.missing.join(', ')}`;
+    logger.warn(
+      `⚠️ Agent is unconfigured (${bridgeState.errorMessage}). ` +
+        `Open http://localhost:${process.env.PORT || 8080} to configure.`
+    );
+    return;
+  }
+
+  const config = configStatus.config;
   setLogLevel(config.logLevel);
 
   logger.info('═══════════════════════════════════════════════');
@@ -53,45 +78,60 @@ async function main(): Promise<void> {
   logger.info(`  UniFi   : ${config.unifiHost}`);
   logger.info('═══════════════════════════════════════════════');
 
-  // ── 2. Initialize Firebase ───────────────────────────────────────────────
+  bridgeState.status = 'starting';
+
+  // 1. Initialize Firebase
   try {
     initializeFirebase(config.firebaseServiceAccountPath, config.firebaseProjectId);
-  } catch (err) {
-    logger.error(`[FATAL] Firebase initialization failed: ${String(err)}`);
-    process.exit(1);
+    bridgeState.firebaseConnected = true;
+  } catch (err: any) {
+    bridgeState.status = 'error';
+    bridgeState.firebaseConnected = false;
+    bridgeState.errorMessage = `Firebase initialization failed: ${err.message}`;
+    logger.error(`[Bridge] Firebase init error: ${err.message}`);
+    return;
   }
 
   const db = getDb();
 
-  // ── 3. Initialize UniFi Access client ───────────────────────────────────
+  // 2. Initialize UniFi Access client
   const unifiClient = new UnifiAccessClient(
     config.unifiHost,
     config.unifiAccessToken,
     config.skipTlsVerify
   );
 
-  // ── 4. Test UniFi connectivity ───────────────────────────────────────────
+  // 3. Test UniFi connectivity
   logger.info('Testing UniFi Access connection…');
-  const connected = await unifiClient.testConnection();
-  if (!connected) {
-    logger.error(
-      '[FATAL] Could not connect to UniFi Access API. ' +
-        'Check UNIFI_HOST, UNIFI_ACCESS_TOKEN, and network reachability. ' +
-        (config.skipTlsVerify
-          ? ''
-          : 'If using a self-signed cert, set SKIP_TLS_VERIFY=true.')
-    );
-    process.exit(1);
+  try {
+    const connected = await unifiClient.testConnection();
+    if (!connected) {
+      bridgeState.status = 'error';
+      bridgeState.unifiConnected = false;
+      bridgeState.errorMessage = 'Could not connect to UniFi Access API. Check host & token.';
+      logger.error(
+        '[Bridge] Could not connect to UniFi Access API. ' +
+          'Check UNIFI_HOST, UNIFI_ACCESS_TOKEN, and network reachability.'
+      );
+      return;
+    }
+    bridgeState.unifiConnected = true;
+  } catch (err: any) {
+    bridgeState.status = 'error';
+    bridgeState.unifiConnected = false;
+    bridgeState.errorMessage = `UniFi connection error: ${err.message}`;
+    logger.error(`[Bridge] UniFi connection error: ${err.message}`);
+    return;
   }
 
-  // ── 5. Register / update agent document in Firestore ────────────────────
+  // 4. Register / update agent document in Firestore
   try {
     await db.doc(`agents/${config.agentId}`).set(
       {
         org_id: config.orgId,
         label: config.agentLabel,
         version: config.version,
-        status: 'starting',
+        status: 'online',
         registered_at: admin.firestore.Timestamp.now(),
         unifi_host: config.unifiHost,
         capabilities: ['unlock', 'lock', 'door_sync'],
@@ -101,10 +141,9 @@ async function main(): Promise<void> {
     logger.info(`Agent document registered: agents/${config.agentId}`);
   } catch (err) {
     logger.error(`Failed to register agent document: ${String(err)}`);
-    // Non-fatal — continue starting up
   }
 
-  // ── 6. Start heartbeat ───────────────────────────────────────────────────
+  // 5. Start heartbeat
   const stopHeartbeat = startHeartbeat(
     config.orgId,
     config.agentId,
@@ -113,18 +152,25 @@ async function main(): Promise<void> {
     config.heartbeatIntervalMs
   );
 
-  // ── 7. Initial door sync ─────────────────────────────────────────────────
+  // 6. Initial door sync
   logger.info('Running initial door sync…');
-  await syncDoors(config.orgId, unifiClient);
+  try {
+    const doors = await unifiClient.getDoors();
+    bridgeState.doorCount = doors.length;
+    await syncDoors(config.orgId, unifiClient);
+    bridgeState.lastSync = new Date();
+  } catch (err: any) {
+    logger.error(`[DoorSync] Initial sync error: ${err.message}`);
+  }
 
-  // ── 8. Start recurring door sync ─────────────────────────────────────────
+  // 7. Recurring door sync
   const stopDoorSync = startDoorSyncInterval(
     config.orgId,
     unifiClient,
     config.doorSyncIntervalMs
   );
 
-  // ── 9. Start Firestore command listener ──────────────────────────────────
+  // 8. Start Firestore command listener
   const stopCommandListener = startCommandListener(
     config.orgId,
     config.agentId,
@@ -136,25 +182,44 @@ async function main(): Promise<void> {
     }
   );
 
-  // ── 10. Ready ─────────────────────────────────────────────────────────────
-  logger.info('✓ Agent running — listening for door commands.');
+  bridgeState.status = 'running';
+  bridgeState.errorMessage = undefined;
+  logger.info('✓ Agent bridge running — listening for door commands.');
 
-  // ── 11. Graceful shutdown ─────────────────────────────────────────────────
-  const cleanup = (signal: string) => {
-    logger.info(`Received ${signal} — shutting down gracefully.`);
+  cleanupPreviousWorker = () => {
+    logger.info('[Bridge] Stopping previous bridge worker…');
     stopCommandListener();
     stopDoorSync();
-    stopHeartbeat(); // writes 'offline' status and calls process.exit(0)
+    stopHeartbeat();
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  const port = parseInt(process.env.PORT || '8080', 10);
+
+  // 1. Launch the web configuration portal immediately
+  startWebServer(port, bridgeState);
+
+  // 2. Start bridge worker (will run if configured, or stay in setup mode)
+  await startBridgeWorker();
+
+  // 3. Graceful shutdown
+  const shutdown = (signal: string) => {
+    logger.info(`Received ${signal} — shutting down gracefully.`);
+    if (cleanupPreviousWorker) {
+      cleanupPreviousWorker();
+    }
+    process.exit(0);
   };
 
-  // Note: SIGINT and SIGTERM are also handled by the heartbeat module,
-  // which calls process.exit(0) after marking offline. We register here
-  // as well so stopCommandListener / stopDoorSync run first.
-  process.once('SIGINT', () => cleanup('SIGINT'));
-  process.once('SIGTERM', () => cleanup('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 main().catch((err: unknown) => {
-  console.error('[FATAL] Unhandled error during startup:', err);
-  process.exit(1);
+  logger.error(`[FATAL] Startup failure: ${String(err)}`);
 });

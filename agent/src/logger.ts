@@ -18,6 +18,24 @@ const logFormat = printf(({ level, message, timestamp: ts, stack }) => {
   return stack ? `${base}\n${stack}` : base;
 });
 
+const recentLogs: string[] = [];
+const MAX_RECENT_LOGS = 100;
+
+export function getRecentLogs(): string[] {
+  return [...recentLogs];
+}
+
+const memoryBufferFormat = winston.format((info) => {
+  const ts = info.timestamp || new Date().toISOString();
+  const lvl = String(info.level || 'info').toUpperCase();
+  const line = `[${ts}] [${lvl}] ${info.message}`;
+  recentLogs.push(line);
+  if (recentLogs.length > MAX_RECENT_LOGS) {
+    recentLogs.shift();
+  }
+  return info;
+});
+
 /**
  * Create and configure the singleton logger.
  * Call `setLogLevel` after config is loaded to apply the configured level.
@@ -28,6 +46,7 @@ export const logger = winston.createLogger({
     errors({ stack: true }),
     timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     colorize({ all: true }),
+    memoryBufferFormat(),
     logFormat
   ),
   transports: [

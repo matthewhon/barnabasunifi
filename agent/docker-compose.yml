@@ -3,15 +3,17 @@ version: '3.8'
 services:
   agent:
     build: .
+    container_name: unifi-pco-agent
     restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
     env_file:
       - .env
     volumes:
-      # Mount service account JSON as read-only
-      - ./service-account.json:/app/service-account.json:ro
-    # Use host networking so the agent can reach the UniFi console on the LAN
-    # without NAT or port-mapping complexity.
-    network_mode: host
+      - ./service-account.json:/app/service-account.json
+      - ./.env:/app/.env
     logging:
       driver: json-file
       options:
