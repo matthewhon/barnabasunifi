@@ -8,8 +8,9 @@ import {
   subscribeToAgents,
   subscribeToUnifiSchedules,
   createDoorCommand,
+  getLatestAgentRelease,
 } from '@/lib/firestore';
-import type { Door, Agent, UnifiSchedule } from '@/lib/types';
+import type { Door, Agent, UnifiSchedule, AgentRelease } from '@/lib/types';
 import { safeFormatDistanceToNow } from '@/lib/date-utils';
 import Modal from '@/components/ui/Modal';
 
@@ -171,9 +172,10 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
 
 // ─── Agent Status ─────────────────────────────────────────────────────────────
 
-function AgentStatusRow({ agent }: { agent: Agent }) {
+function AgentStatusRow({ agent, latestVersion }: { agent: Agent; latestVersion: string | null }) {
   const isOnline = agent.status === 'online';
   const isDegraded = agent.status === 'degraded';
+  const isOutdated = latestVersion && agent.version && agent.version !== latestVersion;
 
   return (
     <div
@@ -204,6 +206,15 @@ function AgentStatusRow({ agent }: { agent: Agent }) {
         <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>{agent.label}</div>
         <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
           v{agent.version} · {agent.capabilities.join(', ')}
+          {isOutdated && (
+            <span
+              className="badge badge-warning"
+              style={{ fontSize: '0.625rem', marginLeft: '0.375rem' }}
+              title={`Update available: v${latestVersion}`}
+            >
+              ⚠️ v{latestVersion} available
+            </span>
+          )}
         </div>
       </div>
       <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -234,6 +245,7 @@ export default function DoorsPage() {
   const [schedules, setSchedules] = useState<UnifiSchedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [latestRelease, setLatestRelease] = useState<AgentRelease | null>(null);
 
   // Unlock modal state
   const [unlockModalOpen, setUnlockModalOpen] = useState(false);
@@ -261,6 +273,9 @@ export default function DoorsPage() {
     const unsubSchedules = subscribeToUnifiSchedules(orgId, (s) => {
       setSchedules(s);
     });
+
+    // Fetch latest release for version comparison
+    getLatestAgentRelease().then((r) => setLatestRelease(r)).catch(() => {});
 
     return () => {
       unsubDoors();
@@ -404,7 +419,7 @@ export default function DoorsPage() {
               </p>
             </div>
           ) : (
-            agents.map((agent) => <AgentStatusRow key={agent.id} agent={agent} />)
+            agents.map((agent) => <AgentStatusRow key={agent.id} agent={agent} latestVersion={latestRelease?.version ?? null} />)
           )}
         </div>
       </section>

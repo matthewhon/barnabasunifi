@@ -1,0 +1,18 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ─── Agent Release Zips ────────────────────────────────────────────────────
+    // Authenticated users (agents) can read release zips.
+    // Writes are performed via the Cloud Functions Admin SDK which bypasses rules.
+    match /agent-releases/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if false; // Admin SDK only
+    }
+
+    // ─── Deny everything else ──────────────────────────────────────────────────
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

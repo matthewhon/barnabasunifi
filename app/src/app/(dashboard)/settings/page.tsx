@@ -4,8 +4,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
-import { getOrgSettings, updateOrgSettings } from '@/lib/firestore';
-import type { OrgSettings } from '@/lib/types';
+import { getOrgSettings, updateOrgSettings, getLatestAgentRelease } from '@/lib/firestore';
+import type { OrgSettings, AgentRelease } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -127,11 +127,18 @@ function SliderInput({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { orgId } = useAuth();
+  const { orgId, isSuperAdmin } = useAuth();
   const { showToast } = useToast();
 
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Agent release state
+  const [latestRelease, setLatestRelease] = useState<AgentRelease | null>(null);
+  const [publishVersion, setPublishVersion] = useState('');
+  const [publishUrl, setPublishUrl] = useState('');
+  const [publishChangelog, setPublishChangelog] = useState('');
+  const [publishing, setPublishing] = useState(false);
 
   // Local form state
   const [unlockBuffer, setUnlockBuffer] = useState(15);
@@ -220,6 +227,10 @@ export default function SettingsPage() {
       .finally(() => {
         if (isMounted) setLoading(false);
       });
+    // Also load latest agent release
+    getLatestAgentRelease().then((r) => {
+      if (isMounted) setLatestRelease(r);
+    }).catch(() => {});
 
     return () => {
       isMounted = false;
@@ -879,6 +890,112 @@ SKIP_TLS_VERIFY=true`}</pre>
                 {saving ? 'Saving…' : 'Save Timing Settings'}
               </button>
             </div>
+          </div>
+        </SectionCard>
+
+        {/* ── 4. Agent Software ── */}
+        <SectionCard title="4. Agent Software">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {/* Dashboard version */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>Dashboard Version:</span>
+              <span className="badge badge-neutral" style={{ fontFamily: 'monospace' }}>
+                v{process.env.NEXT_PUBLIC_APP_VERSION || '1.0.0'}
+              </span>
+            </div>
+
+            {/* Latest published agent release */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>Latest Agent Release:</span>
+              {latestRelease ? (
+                <span className="badge badge-success" style={{ fontFamily: 'monospace' }}>
+                  v{latestRelease.version}
+                </span>
+              ) : (
+                <span className="badge badge-neutral">No releases published</span>
+              )}
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: '0.75rem' }}
+                onClick={async () => {
+                  const r = await getLatestAgentRelease();
+                  setLatestRelease(r);
+                  showToast(r ? `Latest: v${r.version}` : 'No releases found', 'info');
+                }}
+              >
+                Refresh
+              </button>
+            </div>
+
+            {latestRelease?.changelog && (
+              <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', padding: '0.5rem 0.75rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+                <strong>Changelog:</strong> {latestRelease.changelog}
+              </div>
+            )}
+
+            {/* Publish new release (super admin only) */}
+            {isSuperAdmin && (
+              <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '1rem' }}>
+                <h3 style={{ fontSize: '0.9375rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--color-text-primary)' }}>
+                  Publish New Agent Release
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxWidth: '28rem' }}>
+                  <div className="form-group">
+                    <label className="form-label">Version (e.g. 1.2.0)</label>
+                    <input
+                      className="form-input"
+                      placeholder="1.2.0"
+                      value={publishVersion}
+                      onChange={(e) => setPublishVersion(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Download URL</label>
+                    <input
+                      className="form-input"
+                      placeholder="https://storage.googleapis.com/..."
+                      value={publishUrl}
+                      onChange={(e) => setPublishUrl(e.target.value)}
+                    />
+                    <span className="form-hint">URL to the agent dist.zip in Firebase Storage.</span>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Changelog</label>
+                    <textarea
+                      className="form-input"
+                      rows={3}
+                      placeholder="Bug fixes, new features…"
+                      value={publishChangelog}
+                      onChange={(e) => setPublishChangelog(e.target.value)}
+                      style={{ resize: 'vertical' }}
+                    />
+                  </div>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={publishing || !publishVersion || !publishUrl}
+                    onClick={async () => {
+                      setPublishing(true);
+                      try {
+                        const fn = httpsCallable(functions, 'publishAgentRelease');
+                        await fn({ version: publishVersion, download_url: publishUrl, changelog: publishChangelog });
+                        showToast(`Agent release v${publishVersion} published!`, 'success');
+                        setPublishVersion('');
+                        setPublishUrl('');
+                        setPublishChangelog('');
+                        const r = await getLatestAgentRelease();
+                        setLatestRelease(r);
+                      } catch (err: any) {
+                        showToast(err.message || 'Failed to publish release', 'error');
+                      } finally {
+                        setPublishing(false);
+                      }
+                    }}
+                  >
+                    {publishing ? 'Publishing…' : 'Publish Release'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </SectionCard>
       </div>

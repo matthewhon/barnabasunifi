@@ -262,8 +262,8 @@ export default function VisitorModal({
             padding: '0.5rem 1rem',
             borderRadius: 'var(--radius-md)',
             border: '1px solid var(--color-border)',
-            background: 'var(--color-surface)',
-            color: 'var(--color-text)',
+            background: 'var(--color-bg-surface)',
+            color: 'var(--color-text-primary)',
             cursor: 'pointer',
             fontSize: '0.875rem',
           }}
@@ -395,12 +395,12 @@ export default function VisitorModal({
           style={{
             padding: '1rem',
             borderRadius: 'var(--radius-md)',
-            background: 'var(--color-surface-hover, rgba(0,0,0,0.02))',
+            background: 'var(--color-bg-elevated)',
             border: '1px solid var(--color-border)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <label style={{ fontSize: '0.8125rem', fontWeight: 600 }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
               Door PIN Code <span style={{ color: 'var(--color-danger, #ef4444)' }}>*</span>
             </label>
             <button
@@ -445,7 +445,8 @@ export default function VisitorModal({
                 padding: '0 0.75rem',
                 borderRadius: 'var(--radius-md)',
                 border: '1px solid var(--color-border)',
-                background: 'var(--color-surface)',
+                background: 'var(--color-bg-surface)',
+                color: 'var(--color-text-primary)',
                 cursor: 'pointer',
                 fontSize: '0.875rem',
               }}
@@ -459,9 +460,9 @@ export default function VisitorModal({
               style={{
                 padding: '0 0.75rem',
                 borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--color-border)',
-                background: copied ? 'rgba(34, 197, 94, 0.1)' : 'var(--color-surface)',
-                color: copied ? 'var(--color-success, #22c55e)' : 'inherit',
+                border: copied ? '1px solid var(--color-success)' : '1px solid var(--color-border)',
+                background: copied ? 'rgba(34, 197, 94, 0.15)' : 'var(--color-bg-surface)',
+                color: copied ? 'var(--color-success, #22c55e)' : 'var(--color-text-primary)',
                 cursor: 'pointer',
                 fontSize: '0.8125rem',
                 fontWeight: 500,
@@ -481,11 +482,11 @@ export default function VisitorModal({
           style={{
             padding: '1rem',
             borderRadius: 'var(--radius-md)',
-            background: 'var(--color-surface-hover, rgba(0,0,0,0.02))',
+            background: 'var(--color-bg-elevated)',
             border: '1px solid var(--color-border)',
           }}
         >
-          <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+          <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--color-text-primary)' }}>
             Validity Window <span style={{ color: 'var(--color-danger, #ef4444)' }}>*</span>
           </label>
 
@@ -541,7 +542,8 @@ export default function VisitorModal({
                     fontSize: '0.75rem',
                     borderRadius: 'var(--radius-sm, 4px)',
                     border: '1px solid var(--color-border)',
-                    background: 'var(--color-surface)',
+                    background: 'var(--color-bg-surface)',
+                    color: 'var(--color-text-primary)',
                     cursor: 'pointer',
                   }}
                 >
@@ -555,7 +557,7 @@ export default function VisitorModal({
         {/* Door Assignment */}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <label style={{ fontSize: '0.8125rem', fontWeight: 600 }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
               Authorized Doors <span style={{ color: 'var(--color-danger, #ef4444)' }}>*</span>
             </label>
             <button
@@ -603,7 +605,9 @@ export default function VisitorModal({
                       gap: '0.5rem',
                       padding: '0.375rem 0.5rem',
                       borderRadius: 'var(--radius-sm, 4px)',
-                      background: isSelected ? 'rgba(37, 99, 235, 0.08)' : 'transparent',
+                      border: isSelected ? '1px solid var(--color-accent)' : '1px solid transparent',
+                      background: isSelected ? 'rgba(36, 101, 245, 0.15)' : 'var(--color-bg-surface)',
+                      color: 'var(--color-text-primary)',
                       cursor: 'pointer',
                       fontSize: '0.8125rem',
                       userSelect: 'none',

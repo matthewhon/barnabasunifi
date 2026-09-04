@@ -321,7 +321,8 @@ export default function VisitorsPage() {
               padding: '0.5rem 0.875rem',
               borderRadius: 'var(--radius-md)',
               border: '1px solid var(--color-border)',
-              background: 'var(--color-surface)',
+              background: 'var(--color-bg-surface)',
+              color: 'var(--color-text-primary)',
               cursor: syncing ? 'not-allowed' : 'pointer',
               fontSize: '0.875rem',
             }}
@@ -389,7 +390,7 @@ export default function VisitorsPage() {
           <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>
             Upcoming
           </div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.25rem', color: 'var(--color-info, #3b82f6)' }}>
+          <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.25rem', color: 'var(--color-accent, #3b82f6)' }}>
             {counts.upcoming}
           </div>
         </div>
@@ -405,7 +406,7 @@ export default function VisitorsPage() {
           <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>
             Total Managed
           </div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.25rem' }}>
+          <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.25rem', color: 'var(--color-text-primary)' }}>
             {counts.all}
           </div>
         </div>
@@ -426,7 +427,8 @@ export default function VisitorsPage() {
         <div
           style={{
             display: 'flex',
-            background: 'var(--color-surface-hover, rgba(0,0,0,0.04))',
+            background: 'var(--color-bg-surface)',
+            border: '1px solid var(--color-border)',
             padding: '0.25rem',
             borderRadius: 'var(--radius-md)',
             gap: '0.25rem',
@@ -440,26 +442,30 @@ export default function VisitorsPage() {
               { key: 'revoked', label: `Revoked (${counts.revoked})` },
               { key: 'all', label: `All (${counts.all})` },
             ] as const
-          ).map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              style={{
-                padding: '0.375rem 0.75rem',
-                borderRadius: 'var(--radius-sm, 4px)',
-                border: 'none',
-                background: tab === t.key ? 'var(--color-surface, #fff)' : 'transparent',
-                color: tab === t.key ? 'var(--color-text)' : 'var(--color-text-secondary)',
-                fontWeight: tab === t.key ? 600 : 400,
-                fontSize: '0.8125rem',
-                cursor: 'pointer',
-                boxShadow: tab === t.key ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
+          ).map((t) => {
+            const isActive = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTab(t.key)}
+                style={{
+                  padding: '0.4rem 0.85rem',
+                  borderRadius: 'var(--radius-sm, 4px)',
+                  border: 'none',
+                  background: isActive ? 'var(--color-accent)' : 'transparent',
+                  color: isActive ? '#ffffff' : 'var(--color-text-secondary)',
+                  fontWeight: isActive ? 600 : 500,
+                  fontSize: '0.8125rem',
+                  cursor: 'pointer',
+                  boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
+                  transition: 'background var(--transition-fast), color var(--transition-fast)',
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
         </div>
 
         {/* Search & Door Dropdown */}
@@ -602,7 +608,8 @@ export default function VisitorsPage() {
                             fontSize: '0.6875rem',
                             padding: '0.125rem 0.375rem',
                             borderRadius: 'var(--radius-sm, 4px)',
-                            background: 'var(--color-surface-hover, rgba(0,0,0,0.05))',
+                            background: 'var(--color-bg-elevated)',
+                            color: 'var(--color-text-secondary)',
                             border: '1px solid var(--color-border)',
                           }}
                         >
@@ -640,7 +647,8 @@ export default function VisitorsPage() {
                         fontSize: '1.125rem',
                         fontWeight: 700,
                         letterSpacing: '0.15em',
-                        background: 'var(--color-surface-hover, rgba(0,0,0,0.04))',
+                        background: 'var(--color-bg-elevated)',
+                        color: 'var(--color-text-primary)',
                         padding: '0.25rem 0.5rem',
                         borderRadius: 'var(--radius-sm, 4px)',
                         border: '1px solid var(--color-border)',
@@ -657,9 +665,9 @@ export default function VisitorsPage() {
                         padding: '0.375rem 0.625rem',
                         fontSize: '0.75rem',
                         borderRadius: 'var(--radius-sm, 4px)',
-                        border: '1px solid var(--color-border)',
-                        background: isPinCopied ? 'rgba(34, 197, 94, 0.1)' : 'var(--color-surface)',
-                        color: isPinCopied ? 'var(--color-success, #22c55e)' : 'inherit',
+                        border: isPinCopied ? '1px solid var(--color-success)' : '1px solid var(--color-border)',
+                        background: isPinCopied ? 'rgba(34, 197, 94, 0.15)' : 'var(--color-bg-surface)',
+                        color: isPinCopied ? 'var(--color-success, #22c55e)' : 'var(--color-text-primary)',
                         cursor: 'pointer',
                         fontWeight: 500,
                       }}
@@ -705,9 +713,9 @@ export default function VisitorsPage() {
                           padding: '0.5rem',
                           borderRadius: 'var(--radius-md)',
                           border: '1px solid var(--color-border)',
-                          background: 'var(--color-surface)',
+                          background: 'var(--color-bg-surface)',
                           cursor: 'pointer',
-                          color: 'var(--color-text)',
+                          color: 'var(--color-text-primary)',
                         }}
                       >
                         <EditIcon />
@@ -721,8 +729,8 @@ export default function VisitorsPage() {
                           style={{
                             padding: '0.5rem',
                             borderRadius: 'var(--radius-md)',
-                            border: '1px solid rgba(239, 68, 68, 0.25)',
-                            background: 'rgba(239, 68, 68, 0.05)',
+                            border: '1px solid rgba(239, 68, 68, 0.35)',
+                            background: 'rgba(239, 68, 68, 0.1)',
                             color: 'var(--color-danger, #ef4444)',
                             cursor: 'pointer',
                           }}
