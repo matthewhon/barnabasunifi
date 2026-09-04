@@ -63,7 +63,11 @@ export async function syncVisitors(
     if (visitor.mobile_phone) record.mobile_phone = visitor.mobile_phone;
     if (visitor.email) record.email = visitor.email;
     if (visitor.pin_code) record.pin_code = visitor.pin_code;
-    if (visitor.raw_data) record.raw_data = visitor.raw_data;
+    if (visitor.raw_data) {
+      try {
+        record.raw_data_json = JSON.stringify(visitor.raw_data);
+      } catch {}
+    }
 
     batch.set(visitorRef, record, { merge: true });
   }
