@@ -248,9 +248,53 @@ export function startWebServer(
     }
   });
 
+  // POST /api/restart — trigger a bridge restart
+  app.post('/api/restart', async (_req, res) => {
+    logger.info('[WebUI] Restart requested via API.');
+    res.json({ ok: true, message: 'Restarting agent…' });
+    if (state.onRestartRequest) {
+      setTimeout(() => state.onRestartRequest!(), 500);
+    }
+  });
+
+  // POST /api/update-agent — upload a zip of new dist JS files and restart
+  // Accepts multipart form with field "update" containing a zip file
+  const updateUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+  app.post('/api/update-agent', updateUpload.single('update'), async (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'No file uploaded. POST multipart with field "update" containing a zip.' });
+      return;
+    }
+
+    try {
+      const { execSync } = await import('child_process');
+      const os = await import('os');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-update-'));
+      const zipPath = path.join(tmpDir, 'update.zip');
+      fs.writeFileSync(zipPath, req.file.buffer);
+
+      // Determine dist directory (where the running code lives)
+      const distDir = path.resolve(__dirname, '..');
+      logger.info(`[WebUI] Applying update to dist at ${distDir}…`);
+      execSync(`unzip -o "${zipPath}" -d "${distDir}"`, { stdio: 'pipe' });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+
+      logger.info('[WebUI] Agent update applied successfully. Restarting…');
+      res.json({ ok: true, message: 'Update applied. Agent restarting…' });
+
+      if (state.onRestartRequest) {
+        setTimeout(() => state.onRestartRequest!(), 500);
+      }
+    } catch (err: any) {
+      logger.error(`[WebUI] Update failed: ${err.message}`);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
   app.listen(port, '0.0.0.0', () => {
     logger.info(`🌐 Web Configuration Portal running at http://localhost:${port}`);
   });
 
   return app;
 }
+

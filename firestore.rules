@@ -100,11 +100,11 @@ service cloud.firestore {
         allow create, update, delete: if isOrgManager(orgId) || isAgentForOrg(orgId);
       }
 
-      // Door Commands: managers can read and create (manual overrides)
+      // Door Commands: all members can read and create (manual overrides from UI)
       // Only the agent can update (to mark done/failed)
       match /door_commands/{commandId} {
-        allow read: if isOrgManager(orgId);
-        allow create: if isOrgManager(orgId);
+        allow read: if isOrgMember(orgId);
+        allow create: if isOrgMember(orgId);
         allow update: if isAgentForOrg(orgId) || isOrgAdmin(orgId);
         allow delete: if isOrgAdmin(orgId);
       }
