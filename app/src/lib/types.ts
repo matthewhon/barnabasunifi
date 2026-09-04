@@ -115,6 +115,7 @@ export interface DoorCommand {
   id: string;
   org_id: string;
   door_id: string;
+  unifi_door_id?: string;
   door_label?: string;
   action: CommandAction;
   execute_at: string;         // ISO8601

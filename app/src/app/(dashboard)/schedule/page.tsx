@@ -6,7 +6,8 @@ import { functions } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
 import { subscribeToScheduleWindows } from '@/lib/firestore';
 import type { ScheduleWindow, MappingSourceType } from '@/lib/types';
-import { format, isPast } from 'date-fns';
+import { format } from 'date-fns';
+import { safeIsPast } from '@/lib/date-utils';
 import { toZonedTime } from 'date-fns-tz';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -120,8 +121,8 @@ export default function SchedulePage() {
 
   // Filter by tab
   const tabFiltered = allWindows.filter((w) => {
-    if (tab === 'upcoming') return !isPast(new Date(w.lock_at)) && w.status !== 'cancelled';
-    if (tab === 'past') return isPast(new Date(w.lock_at)) || w.status === 'cancelled';
+    if (tab === 'upcoming') return !safeIsPast(w.lock_at) && w.status !== 'cancelled';
+    if (tab === 'past') return safeIsPast(w.lock_at) || w.status === 'cancelled';
     return true;
   });
 

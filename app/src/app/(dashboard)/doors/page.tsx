@@ -256,6 +256,7 @@ export default function DoorsPage() {
       await createDoorCommand(orgId, {
         org_id: orgId,
         door_id: selectedDoor.id,
+        unifi_door_id: selectedDoor.unifi_door_id || selectedDoor.id,
         door_label: selectedDoor.label,
         action: 'unlock',
         execute_at: new Date().toISOString(),
@@ -280,6 +281,7 @@ export default function DoorsPage() {
       await createDoorCommand(orgId, {
         org_id: orgId,
         door_id: lockDoor.id,
+        unifi_door_id: lockDoor.unifi_door_id || lockDoor.id,
         door_label: lockDoor.label,
         action: 'lock',
         execute_at: new Date().toISOString(),

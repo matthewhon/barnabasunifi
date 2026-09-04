@@ -32,7 +32,7 @@ interface SyncResult {
 }
 
 interface TriggerPcoSyncRequest {
-  // No additional input needed; orgId comes from auth claims
+  orgId?: string;
 }
 
 interface TriggerPcoSyncResponse {
@@ -344,28 +344,36 @@ export const triggerPcoSync = onCall<TriggerPcoSyncRequest, Promise<TriggerPcoSy
       throw new HttpsError('unauthenticated', 'You must be signed in to trigger a PCO sync.');
     }
 
-    const { role, orgId } = request.auth.token as { role?: string; orgId?: string };
-
-    if (!role || !['org_admin', 'manager'].includes(role)) {
-      throw new HttpsError(
-        'permission-denied',
-        'You must be an org_admin or manager to trigger a PCO sync.'
-      );
-    }
+    const tokenRole = (request.auth.token as any)?.role;
+    const tokenOrgId = (request.auth.token as any)?.orgId;
+    const orgId = request.data?.orgId || tokenOrgId;
 
     if (!orgId) {
       throw new HttpsError(
-        'failed-precondition',
-        'Your account is not associated with an organization.'
+        'invalid-argument',
+        'Organization ID is required.'
       );
+    }
+
+    const isSuperAdmin = tokenRole === 'super_admin';
+    if (!isSuperAdmin) {
+      const userDoc = await getFirestore().doc(`users/${request.auth.uid}`).get();
+      const membership = userDoc.data()?.org_memberships?.[orgId];
+      const role = membership?.role || (tokenOrgId === orgId ? tokenRole : null);
+      if (!role || !['org_admin', 'manager'].includes(role)) {
+        throw new HttpsError(
+          'permission-denied',
+          'You must be an org_admin or manager to trigger a PCO sync.'
+        );
+      }
     }
 
     try {
       const result = await syncOrgSchedule(orgId);
       return { success: true, ...result };
-    } catch (err) {
+    } catch (err: any) {
       console.error(`PCO sync failed for org ${orgId}:`, err);
-      throw new HttpsError('internal', 'PCO sync failed. Please check the function logs.');
+      throw new HttpsError('internal', err?.message || 'PCO sync failed. Please check the function logs.');
     }
   }
 );
