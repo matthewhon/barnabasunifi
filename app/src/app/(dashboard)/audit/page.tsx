@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { subscribeToAuditLog } from '@/lib/firestore';
 import type { AuditLogEntry, AuditAction } from '@/lib/types';
 import { format, parseISO, isAfter, isBefore, startOfDay, endOfDay } from 'date-fns';
+import { safeFormat } from '@/lib/date-utils';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -267,7 +268,7 @@ export default function AuditPage() {
                 {displayed.map((entry) => (
                   <tr key={entry.id}>
                     <td style={{ whiteSpace: 'nowrap', color: 'var(--color-text-muted)', fontSize: '0.8125rem' }}>
-                      {format(parseISO(entry.timestamp), 'MMM d, yyyy HH:mm:ss')}
+                      {safeFormat(entry.timestamp, 'MMM d, yyyy HH:mm:ss')}
                     </td>
                     <td>
                       <span style={{ fontWeight: 500, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>

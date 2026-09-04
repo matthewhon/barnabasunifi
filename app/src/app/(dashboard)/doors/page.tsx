@@ -8,7 +8,7 @@ import {
   createDoorCommand,
 } from '@/lib/firestore';
 import type { Door, Agent } from '@/lib/types';
-import { formatDistanceToNow } from 'date-fns';
+import { safeFormatDistanceToNow } from '@/lib/date-utils';
 import Modal from '@/components/ui/Modal';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ function DoorCard({ door, onUnlock, onLock, actionLoading }: DoorCardProps) {
           </h3>
           <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>
             {door.last_synced
-              ? `Synced ${formatDistanceToNow(new Date(door.last_synced), { addSuffix: true })}`
+              ? `Synced ${safeFormatDistanceToNow(door.last_synced)}`
               : 'Never synced'}
           </div>
         </div>
@@ -186,7 +186,7 @@ function AgentStatusRow({ agent }: { agent: Agent }) {
         </span>
         <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>
           {agent.last_heartbeat
-            ? formatDistanceToNow(new Date(agent.last_heartbeat), { addSuffix: true })
+            ? safeFormatDistanceToNow(agent.last_heartbeat)
             : '—'}
         </div>
       </div>

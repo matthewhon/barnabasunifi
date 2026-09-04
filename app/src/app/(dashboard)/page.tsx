@@ -10,7 +10,7 @@ import {
   subscribeToAuditLog,
 } from '@/lib/firestore';
 import type { Door, ScheduleWindow, AuditLogEntry } from '@/lib/types';
-import { formatDistanceToNow, format, isPast } from 'date-fns';
+import { safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -112,7 +112,7 @@ function DoorStatusCard({ door }: { door: Door }) {
       <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
         Synced{' '}
         {door.last_synced
-          ? formatDistanceToNow(new Date(door.last_synced), { addSuffix: true })
+          ? safeFormatDistanceToNow(door.last_synced)
           : '—'}
       </div>
     </div>
@@ -154,9 +154,9 @@ function ScheduleWindowRow({ window: win }: { window: ScheduleWindow }) {
         </div>
       </div>
       <div style={{ flex: '1 1 7rem', color: 'var(--color-text-secondary)', fontSize: '0.8125rem', whiteSpace: 'nowrap' }}>
-        {format(new Date(win.unlock_at), 'MMM d, h:mm a')}
+        {safeFormat(win.unlock_at, 'MMM d, h:mm a')}
         <span style={{ color: 'var(--color-text-muted)', margin: '0 0.25rem' }}>→</span>
-        {format(new Date(win.lock_at), 'h:mm a')}
+        {safeFormat(win.lock_at, 'h:mm a')}
       </div>
       <span className={`badge ${statusBadgeClass(win.status)}`} style={{ flexShrink: 0 }}>
         {win.status}
@@ -206,7 +206,7 @@ function AuditRow({ entry }: { entry: AuditLogEntry }) {
         )}
       </span>
       <span style={{ color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
-        {formatDistanceToNow(new Date(entry.timestamp), { addSuffix: true })}
+        {safeFormatDistanceToNow(entry.timestamp)}
       </span>
     </div>
   );
@@ -282,7 +282,7 @@ export default function DashboardPage() {
 
   // Upcoming: future windows, sorted asc, top 5
   const upcoming = scheduleWindows
-    .filter((w) => !isPast(new Date(w.lock_at)) && w.status !== 'cancelled')
+    .filter((w) => !safeIsPast(w.lock_at) && w.status !== 'cancelled')
     .slice(0, 5);
 
   return (

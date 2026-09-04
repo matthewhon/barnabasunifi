@@ -86,16 +86,48 @@ export async function deleteMapping(orgId: string, mappingId: string): Promise<v
   await deleteDoc(doc(db, 'organizations', orgId, 'mappings', mappingId));
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function normalizeTimestamp(val: unknown): string {
+  if (!val) return new Date().toISOString();
+  if (typeof (val as { toDate?: () => Date }).toDate === 'function') {
+    try {
+      return (val as { toDate: () => Date }).toDate().toISOString();
+    } catch {
+      return new Date().toISOString();
+    }
+  }
+  if (typeof val === 'object' && val !== null && 'seconds' in val) {
+    return new Date((val as { seconds: number }).seconds * 1000).toISOString();
+  }
+  const d = new Date(val as string | number);
+  return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+}
+
 // ─── Doors ───────────────────────────────────────────────────────────────────
 
 export async function getDoors(orgId: string): Promise<Door[]> {
   const snap = await getDocs(collection(db, 'organizations', orgId, 'doors'));
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Door));
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ...data,
+      last_synced: data.last_synced ? normalizeTimestamp(data.last_synced) : undefined,
+    } as unknown as Door;
+  });
 }
 
 export function subscribeToDoors(orgId: string, callback: (doors: Door[]) => void): Unsubscribe {
   return onSnapshot(collection(db, 'organizations', orgId, 'doors'), (snap) => {
-    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Door)));
+    callback(snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ...data,
+        last_synced: data.last_synced ? normalizeTimestamp(data.last_synced) : undefined,
+      } as unknown as Door;
+    }));
   });
 }
 
@@ -117,27 +149,20 @@ export function subscribeToScheduleWindows(
   return onSnapshot(q, (snap) => {
     const windows = snap.docs.map((d) => {
       const data = d.data();
-      const formatTimestamp = (val: unknown) => {
-        if (!val) return new Date().toISOString();
-        if (typeof (val as { toDate?: () => Date }).toDate === 'function') {
-          return (val as { toDate: () => Date }).toDate().toISOString();
-        }
-        return new Date(val as string | number).toISOString();
-      };
 
       return {
         id: d.id,
         ...data,
-        starts_at: formatTimestamp(data.starts_at),
-        ends_at: formatTimestamp(data.ends_at),
-        unlock_at: formatTimestamp(data.unlock_at),
-        lock_at: formatTimestamp(data.lock_at),
+        starts_at: normalizeTimestamp(data.starts_at),
+        ends_at: normalizeTimestamp(data.ends_at),
+        unlock_at: normalizeTimestamp(data.unlock_at),
+        lock_at: normalizeTimestamp(data.lock_at),
         source_type: data.source_type ?? (data.source === 'pco_group' ? 'group' : 'service'),
         source_label: data.source_label ?? data.label ?? 'PCO Event',
         door_ids: data.door_ids ?? [],
         door_labels: data.door_labels ?? [],
         status: data.status ?? 'pending',
-      } as ScheduleWindow;
+      } as unknown as ScheduleWindow;
     });
     callback(windows);
   });
@@ -167,7 +192,7 @@ export function subscribeToRecentCommands(
     limit(count),
   );
   return onSnapshot(q, (snap) => {
-    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DoorCommand)));
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() } as unknown as DoorCommand)));
   });
 }
 
@@ -184,7 +209,14 @@ export function subscribeToAuditLog(
     limit(count),
   );
   return onSnapshot(q, (snap) => {
-    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() } as AuditLogEntry)));
+    callback(snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ...data,
+        timestamp: normalizeTimestamp(data.timestamp),
+      } as unknown as AuditLogEntry;
+    }));
   });
 }
 
@@ -199,7 +231,15 @@ export function subscribeToAgents(
     where('org_id', '==', orgId),
   );
   return onSnapshot(q, (snap) => {
-    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Agent)));
+    callback(snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ...data,
+        registered_at: data.registered_at ? normalizeTimestamp(data.registered_at) : undefined,
+        last_heartbeat: data.last_heartbeat ? normalizeTimestamp(data.last_heartbeat) : undefined,
+      } as unknown as Agent;
+    }));
   });
 }
 
