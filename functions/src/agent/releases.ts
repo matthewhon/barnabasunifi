@@ -1,5 +1,7 @@
-import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
+import { randomUUID } from 'crypto';
 
 export interface AgentRelease {
   version: string;
@@ -102,3 +104,68 @@ export const listAgentReleases = onCall(async (request) => {
 
   return { releases };
 });
+
+/**
+ * uploadAgentRelease — HTTPS endpoint to upload agent release zip and publish it.
+ * Accepts POST JSON: { version, zipBase64, changelog, secret }
+ */
+export const uploadAgentRelease = onRequest({ cors: true, maxInstances: 2 }, async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ ok: false, error: 'Method Not Allowed' });
+    return;
+  }
+
+  const { version, zipBase64, changelog = '', secret } = req.body || {};
+  if (!secret || secret !== (process.env.RELEASE_SECRET || 'UPCO_AGENT_OTA_2026')) {
+    res.status(401).json({ ok: false, error: 'Unauthorized' });
+    return;
+  }
+
+  if (!version || !zipBase64) {
+    res.status(400).json({ ok: false, error: 'version and zipBase64 are required' });
+    return;
+  }
+
+  try {
+    const zipBuffer = Buffer.from(zipBase64, 'base64');
+    const bucket = getStorage().bucket('barnabasunfi.firebasestorage.app');
+    const filename = `agent-releases/agent-v${version}.zip`;
+    const file = bucket.file(filename);
+    const token = randomUUID();
+
+    await file.save(zipBuffer, {
+      contentType: 'application/zip',
+      metadata: {
+        metadata: {
+          firebaseStorageDownloadTokens: token,
+        },
+      },
+    });
+
+    const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filename)}?alt=media&token=${token}`;
+
+    const db = getFirestore();
+    const now = FieldValue.serverTimestamp();
+    const releaseData = {
+      version,
+      download_url: downloadUrl,
+      changelog: changelog || `Agent release v${version}`,
+      published_at: now,
+      updated_at: now,
+      published_by: 'cli',
+      file_size_bytes: zipBuffer.length,
+    };
+
+    const batch = db.batch();
+    batch.set(db.doc(`agent_releases/${version}`), releaseData);
+    batch.set(db.doc('agent_releases/latest'), releaseData);
+    await batch.commit();
+
+    console.log(`[Releases] Successfully uploaded & published agent release v${version}`);
+    res.json({ ok: true, version, downloadUrl, size: zipBuffer.length });
+  } catch (err: any) {
+    console.error(`[Releases] Error uploading release:`, err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
