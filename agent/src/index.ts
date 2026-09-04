@@ -38,8 +38,10 @@ const bridgeState: AgentBridgeState = {
   doorCount: 0,
   lastSync: null,
   onRestartRequest: async () => {
-    logger.info('[Bridge] Reload requested via Web Portal.');
-    await startBridgeWorker();
+    logger.info('[Bridge] Reload/restart requested — exiting process for supervisor/Docker reboot…');
+    setTimeout(() => {
+      process.exit(0);
+    }, 500);
   },
 };
 
