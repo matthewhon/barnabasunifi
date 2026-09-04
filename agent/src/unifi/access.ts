@@ -385,7 +385,10 @@ function isReaderDevice(d: any): boolean {
   );
 }
 
-function parseHubDoorStatus(hubDevice: any): {
+function parseHubDoorStatus(
+  hubDevice: any,
+  port: 'd1' | 'd2' = 'd1'
+): {
   relayStatus: 'lock' | 'unlock';
   positionStatus: 'open' | 'close';
   isHeld: boolean;
@@ -404,21 +407,27 @@ function parseHubDoorStatus(hubDevice: any): {
   }
 
   // 1. Direct relay outputs: 'on' = unlocked/energized, 'off' = locked
-  const d1Relay = map.get('output_d1_lock_relay');
-  const d2Relay = map.get('output_d2_lock_relay');
-  const rlyDry = map.get('input_state_rly-lock_dry');
+  let isUnlocked = false;
+  if (port === 'd2') {
+    isUnlocked = map.get('output_d2_lock_relay') === 'on';
+  } else {
+    isUnlocked = map.get('output_d1_lock_relay') === 'on' || map.get('input_state_rly-lock_dry') === 'on';
+  }
 
   // 2. Temporary hold-open / unlock schedules
   const nowSec = Math.floor(Date.now() / 1000);
   const lockEndTime = parseInt(map.get('lock_end_time') || '0', 10);
   const tempUnlockEnd = parseInt(map.get('temporary_unlock_suspend_end_time') || '0', 10);
   const isHeld = lockEndTime > nowSec || tempUnlockEnd > nowSec;
+  if (isHeld) {
+    isUnlocked = true;
+  }
 
-  // 3. Overall lock status
-  const isUnlocked = d1Relay === 'on' || d2Relay === 'on' || rlyDry === 'on' || isHeld;
+  // 3. Door position sensor (DPS): 'off' = open circuit (door open), 'on' = closed
+  const dps = port === 'd2'
+    ? map.get('input_d2_dps')
+    : (map.get('input_d1_dps') || map.get('input_state_dps'));
 
-  // 4. Door position sensor (DPS): 'off' = open circuit (door open), 'on' = closed
-  const dps = map.get('input_d1_dps') || map.get('input_state_dps');
   let positionStatus: 'open' | 'close' = 'close';
   if (dps === 'off') {
     positionStatus = 'open';
@@ -442,6 +451,7 @@ export class UnifiAccessClient {
   private readonly http: AxiosInstance;
   private host: string;
   private doorToHubMap: Map<string, string> = new Map();
+  private doorToPortMap: Map<string, 'd1' | 'd2'> = new Map();
 
   /**
    * @param host           - Base URL of the UniFi console, e.g. https://192.168.1.1
@@ -538,16 +548,33 @@ export class UnifiAccessClient {
 
       const devices = response.data?.data || [];
 
-      // Pass 1: Map any device that is explicitly a Hub and has a door/location assigned
+      // Pass 1: Multi-port hub extensions (e.g. UA Retrofit Hub 2)
+      for (const d of devices) {
+        if (d.extensions && Array.isArray(d.extensions)) {
+          for (const ext of d.extensions) {
+            if (ext.target_type === 'door' && ext.target_value) {
+              const port = ext.source_id === 'port2' ? 'd2' : 'd1';
+              this.doorToHubMap.set(ext.target_value, d.unique_id);
+              this.doorToPortMap.set(ext.target_value, port);
+              logger.info(
+                `[UniFi] Mapped Hub ${d.unique_id} (${ext.source_id}) to door ${ext.target_value} (${ext.target_name || 'Door'})`
+              );
+            }
+          }
+        }
+      }
+
+      // Pass 2: Hubs with d.door or location_id
       for (const d of devices) {
         const doorId = d.door?.unique_id || d.location_id;
-        if (doorId && isHubDevice(d)) {
+        if (doorId && isHubDevice(d) && !this.doorToHubMap.has(doorId)) {
           this.doorToHubMap.set(doorId, d.unique_id);
+          this.doorToPortMap.set(doorId, 'd1');
           logger.info(`[UniFi] Mapped Hub ${d.unique_id} to door ${doorId} (${d.door?.name || d.name || 'Door'})`);
         }
       }
 
-      // Pass 2: For readers, map their connected hub (via connected_uah_id, hub_id, connected_hub_id)
+      // Pass 3: Readers with connected_uah_id
       for (const d of devices) {
         const doorId = d.door?.unique_id || d.location_id;
         const linkedHubId = d.connected_uah_id || d.hub_id || d.connected_hub_id;
@@ -622,11 +649,23 @@ export class UnifiAccessClient {
       deviceById.set(d.unique_id, d);
     }
 
-    // Ensure doorToHubMap is populated
+    // Ensure doorToHubMap and doorToPortMap are populated
+    for (const d of devices) {
+      if (d.extensions && Array.isArray(d.extensions)) {
+        for (const ext of d.extensions) {
+          if (ext.target_type === 'door' && ext.target_value) {
+            const port = ext.source_id === 'port2' ? 'd2' : 'd1';
+            this.doorToHubMap.set(ext.target_value, d.unique_id);
+            this.doorToPortMap.set(ext.target_value, port);
+          }
+        }
+      }
+    }
     for (const d of devices) {
       const doorId = d.door?.unique_id || d.location_id;
-      if (doorId && isHubDevice(d)) {
+      if (doorId && isHubDevice(d) && !this.doorToHubMap.has(doorId)) {
         this.doorToHubMap.set(doorId, d.unique_id);
+        this.doorToPortMap.set(doorId, 'd1');
       }
     }
     for (const d of devices) {
@@ -639,16 +678,43 @@ export class UnifiAccessClient {
 
     const doorMap = new Map<string, UnifiDoor>();
 
+    // Pass 1: Add doors from multi-port hub extensions (e.g. Front Door & Main Door on UA Retrofit Hub 2)
+    for (const d of devices) {
+      if (d.extensions && Array.isArray(d.extensions)) {
+        for (const ext of d.extensions) {
+          if (ext.target_type === 'door' && ext.target_value) {
+            const doorId = ext.target_value;
+            const port = ext.source_id === 'port2' ? 'd2' : 'd1';
+            const status = parseHubDoorStatus(d, port);
+            doorMap.set(doorId, {
+              id: doorId,
+              name: ext.target_name || d.alias || d.name,
+              door_lock_relay_status: status.relayStatus,
+              door_position_status: status.positionStatus,
+              is_held_unlocked: status.isHeld,
+              hold_unlock_end_time: status.holdEndTime,
+              type: d.device_type,
+              location_id: d.location_id || '',
+              full_name: `${d.alias || d.name} - ${ext.target_name || 'Door'}`,
+              device_state: d.device_state || d.state || 'connected',
+            });
+          }
+        }
+      }
+    }
+
+    // Pass 2: Add or enhance doors from devices with d.door
     for (const d of devices) {
       if (d.door && d.door.unique_id) {
         const doorId = d.door.unique_id;
         const isHub = isHubDevice(d);
         const hubId = this.doorToHubMap.get(doorId);
         const hub = hubId ? deviceById.get(hubId) : (isHub ? d : null);
-        const status = parseHubDoorStatus(hub);
+        const port = this.doorToPortMap.get(doorId) || 'd1';
+        const status = parseHubDoorStatus(hub, port);
 
         const existing = doorMap.get(doorId);
-        if (!existing || isHub) {
+        if (!existing) {
           doorMap.set(doorId, {
             id: doorId,
             name: d.door.name || d.alias || d.name,
@@ -661,6 +727,18 @@ export class UnifiAccessClient {
             full_name: d.door.full_name || d.door.name,
             device_state: d.device_state || d.state || 'connected',
           });
+        } else {
+          // If already in doorMap (from hub extensions), prefer official name from reader/door if cleaner
+          if (d.door.name) {
+            existing.name = d.door.name;
+          }
+          if (d.door.full_name) {
+            existing.full_name = d.door.full_name;
+          }
+          existing.door_lock_relay_status = status.relayStatus;
+          existing.door_position_status = status.positionStatus;
+          existing.is_held_unlocked = status.isHeld;
+          existing.hold_unlock_end_time = status.holdEndTime;
         }
       }
     }
@@ -703,12 +781,16 @@ export class UnifiAccessClient {
     // 1. If we know the physical hub ID, try hub relay_unlock first (UniFi OS Access v2 standard)
     if (hubId) {
       attempts.push({
+        name: `PUT /proxy/access/api/v2/device/${hubId}/relay_unlock (door_id: ${doorId})`,
+        fn: () => this.http.put(`/proxy/access/api/v2/device/${encodeURIComponent(hubId!)}/relay_unlock`, { door_id: doorId }),
+      });
+      attempts.push({
         name: `PUT /proxy/access/api/v2/device/${hubId}/relay_unlock`,
         fn: () => this.http.put(`/proxy/access/api/v2/device/${encodeURIComponent(hubId!)}/relay_unlock`, {}),
       });
       attempts.push({
         name: `POST /proxy/access/api/v2/device/${hubId}/relay_unlock`,
-        fn: () => this.http.post(`/proxy/access/api/v2/device/${encodeURIComponent(hubId!)}/relay_unlock`, {}),
+        fn: () => this.http.post(`/proxy/access/api/v2/device/${encodeURIComponent(hubId!)}/relay_unlock`, { door_id: doorId }),
       });
     }
 
