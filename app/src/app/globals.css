@@ -57,6 +57,11 @@ h6 {
   --color-warning: #f59e0b;
   --color-danger: #ef4444;
 
+  /* Aliases for backwards compatibility */
+  --color-surface: var(--color-bg-surface);
+  --color-surface-hover: var(--color-bg-elevated);
+  --color-text: var(--color-text-primary);
+
   /* ─── Spacing Tokens ──────────────────────────────────────────────────── */
   --space-1: 0.25rem;
   --space-2: 0.5rem;

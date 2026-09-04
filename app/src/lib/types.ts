@@ -332,3 +332,14 @@ export interface ApiError {
   message: string;
   details?: unknown;
 }
+
+// ─── Agent Releases (OTA Updates) ─────────────────────────────────────────────
+
+export interface AgentRelease {
+  version: string;
+  download_url: string;
+  changelog: string;
+  published_at: string; // ISO8601
+  published_by: string;
+  file_size_bytes?: number;
+}

@@ -334,9 +334,12 @@
           <p>On-Premises UniFi Access & Cloud Bridge</p>
         </div>
       </div>
-      <div id="statusBadge" class="badge badge-unconfigured">
-        <span class="badge-dot"></span>
-        <span id="statusText">Checking...</span>
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span id="versionBadge" style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace; background: var(--bg-surface); border: 1px solid var(--border); padding: 0.2rem 0.6rem; border-radius: 6px;">v—</span>
+        <div id="statusBadge" class="badge badge-unconfigured">
+          <span class="badge-dot"></span>
+          <span id="statusText">Checking...</span>
+        </div>
       </div>
     </header>
 
@@ -358,6 +361,26 @@
         <div class="card-title">Doors Managed</div>
         <div id="cardDoorCount" class="card-value">0</div>
         <div id="cardLastSync" class="card-subtext">Sync idle</div>
+      </div>
+    </div>
+
+    <!-- Software Update Section -->
+    <div id="updateSection" class="section" style="display: none; border-color: var(--warning); background: var(--warning-bg);">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div>
+          <h2 class="section-title" style="color: var(--warning); margin-bottom: 0.25rem;">⬆️ Software Update Available</h2>
+          <p style="font-size: 0.8125rem; color: var(--text-secondary); margin: 0;">
+            Current: <span id="updateCurrentVer" style="font-family: monospace;">—</span>
+            &nbsp;→&nbsp;
+            Latest: <span id="updateLatestVer" style="font-family: monospace; color: var(--warning); font-weight: 600;">—</span>
+          </p>
+          <p id="updateChangelog" style="font-size: 0.8125rem; color: var(--text-muted); margin-top: 0.5rem;"></p>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <button id="btnApplyUpdate" class="btn btn-primary" onclick="applyUpdate()">
+            ⬆️ Apply Update &amp; Restart
+          </button>
+        </div>
       </div>
     </div>
 
@@ -471,7 +494,10 @@
     <div class="section">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
         <h2 class="section-title" style="margin: 0;">📜 Agent Logs</h2>
-        <button class="btn btn-secondary btn-sm" onclick="loadLogs()">🔄 Refresh</button>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-secondary btn-sm" onclick="checkForUpdates()">🔄 Check for Updates</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadLogs()">🔄 Refresh Logs</button>
+        </div>
       </div>
       <div id="logsView" class="logs-box">Connecting to agent...</div>
     </div>
@@ -513,6 +539,21 @@
           if (!document.getElementById('agentLabel').value) document.getElementById('agentLabel').value = data.config.agentLabel || 'Main Campus Agent';
           if (!document.getElementById('firebaseProjectId').value) document.getElementById('firebaseProjectId').value = data.config.firebaseProjectId || 'barnabasunfi';
           document.getElementById('skipTls').checked = data.config.skipTlsVerify ?? true;
+        }
+
+        // Version badge
+        if (data.version) {
+          document.getElementById('versionBadge').innerText = `v${data.version}`;
+        }
+
+        // Update banner
+        if (data.updateAvailable && data.latestVersion) {
+          document.getElementById('updateSection').style.display = 'block';
+          document.getElementById('updateCurrentVer').innerText = `v${data.version}`;
+          document.getElementById('updateLatestVer').innerText = `v${data.latestVersion}`;
+          document.getElementById('updateChangelog').innerText = data.updateChangelog || '';
+        } else {
+          document.getElementById('updateSection').style.display = 'none';
         }
 
         // Cards
@@ -736,11 +777,50 @@
       }
     }
 
+    async function checkForUpdates() {
+      showAlert('Checking for updates…', 'info');
+      try {
+        const res = await fetch('/api/check-update', { method: 'POST' });
+        const data = await res.json();
+        if (data.updateAvailable) {
+          showAlert(`Update available: v${data.latestVersion}`, 'success');
+        } else {
+          showAlert(`Up to date (v${data.currentVersion})`, 'success');
+        }
+        await loadStatus();
+      } catch (err) {
+        showAlert(`Update check failed: ${err.message}`, 'danger');
+      }
+    }
+
+    async function applyUpdate() {
+      const btn = document.getElementById('btnApplyUpdate');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Downloading & Applying…';
+      try {
+        const res = await fetch('/api/apply-update', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          showAlert('Update applied! Agent is restarting — this page will refresh in 10s…', 'success');
+          setTimeout(() => window.location.reload(), 10000);
+        } else {
+          showAlert(`Update failed: ${data.error}`, 'danger');
+          btn.disabled = false;
+          btn.innerHTML = '⬆️ Apply Update & Restart';
+        }
+      } catch (err) {
+        showAlert(`Update error: ${err.message}`, 'danger');
+        btn.disabled = false;
+        btn.innerHTML = '⬆️ Apply Update & Restart';
+      }
+    }
+
     // Initialize
     loadStatus();
     loadLogs();
     setInterval(loadStatus, 5000);
     setInterval(loadLogs, 4000);
+
   </script>
 </body>
 </html>

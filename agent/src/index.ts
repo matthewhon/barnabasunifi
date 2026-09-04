@@ -19,6 +19,7 @@ import { syncDoors, startDoorSyncInterval } from './firebase/doorSync';
 import { syncSchedules, startScheduleSyncInterval } from './firebase/scheduleSync';
 import { syncVisitors, startVisitorSyncInterval } from './firebase/visitorSync';
 import { startCommandListener } from './firebase/commandListener';
+import { startUpdateChecker } from './firebase/updateChecker';
 import { startWebServer, AgentBridgeState } from './web/server';
 import { autoDiscoverUnifiConsole } from './web/scanner';
 import axios from 'axios';
@@ -241,6 +242,12 @@ async function startBridgeWorker(): Promise<void> {
     config.heartbeatIntervalMs
   );
 
+  // 5b. Start OTA update checker (checks hourly)
+  const stopUpdateChecker = startUpdateChecker(
+    60 * 60 * 1000,
+    bridgeState.onRestartRequest
+  );
+
   // 6. Initial door sync
   logger.info('Running initial door sync…');
   try {
@@ -355,6 +362,7 @@ async function startBridgeWorker(): Promise<void> {
     stopScheduleSync();
     stopDoorSync();
     stopHeartbeat();
+    stopUpdateChecker();
   };
 }
 

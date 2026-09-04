@@ -482,10 +482,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           borderTop: '1px solid var(--color-border)',
           padding: '0.875rem 1rem',
           display: 'flex',
-          alignItems: 'center',
+          flexDirection: 'column',
           gap: '0.625rem',
         }}
       >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.625rem',
+          }}
+        >
         <div
           style={{
             width: '2rem',
@@ -537,6 +544,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         >
           <LogOutIcon />
         </button>
+        </div>
+        {/* Version badge */}
+        <div
+          style={{
+            fontSize: '0.625rem',
+            color: 'var(--color-text-muted)',
+            textAlign: 'center',
+            opacity: 0.7,
+            letterSpacing: '0.02em',
+          }}
+        >
+          Dashboard v{process.env.NEXT_PUBLIC_APP_VERSION || '1.0.0'}
+        </div>
       </div>
     </div>
   );

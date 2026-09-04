@@ -17,3 +17,4 @@ export { testPcoConnection, testUnifiConnection } from './config/testConnections
 export { generateAgentToken, registerAgentWithToken } from './agent/agentRegistration';
 export { syncUnifiSchedules, saveUnifiSchedule, deleteUnifiSchedule } from './unifi/schedules';
 export { syncUnifiVisitors, saveUnifiVisitor, deleteUnifiVisitor } from './unifi/visitors';
+export { publishAgentRelease, getLatestAgentRelease, listAgentReleases } from './agent/releases';

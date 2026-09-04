@@ -363,3 +363,11 @@ export function subscribeToVisitors(
     }));
   });
 }
+
+// ─── Agent Releases ──────────────────────────────────────────────────────────
+
+export async function getLatestAgentRelease(): Promise<import('@/lib/types').AgentRelease | null> {
+  const snap = await getDoc(doc(db, 'agent_releases', 'latest'));
+  return snap.exists() ? (snap.data() as import('@/lib/types').AgentRelease) : null;
+}
+

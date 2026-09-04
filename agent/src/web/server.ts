@@ -13,6 +13,7 @@ import { getConfigurationStatus, saveConfig, isServiceAccountPresent } from '../
 import axios from 'axios';
 import { scanSubnet } from './scanner';
 import { UnifiAccessClient } from '../unifi/access';
+import { getUpdateState, checkForUpdate, applyPendingUpdate } from '../firebase/updateChecker';
 
 export interface AgentBridgeState {
   status: 'unconfigured' | 'starting' | 'running' | 'error';
@@ -69,6 +70,15 @@ export function startWebServer(
       doorCount: state.doorCount,
       lastSync: state.lastSync ? state.lastSync.toISOString() : null,
       error: state.errorMessage,
+      ...(() => {
+        const upd = getUpdateState();
+        return {
+          version: upd.currentVersion,
+          latestVersion: upd.latestVersion,
+          updateAvailable: upd.updateAvailable,
+          updateChangelog: upd.changelog,
+        };
+      })(),
       config: configStatus.config
         ? {
             unifiHost: configStatus.config.unifiHost,
@@ -230,7 +240,54 @@ export function startWebServer(
     }
   });
 
+  // GET /api/version — returns version info and update status
+  app.get('/api/version', (_req, res) => {
+    const upd = getUpdateState();
+    res.json({
+      currentVersion: upd.currentVersion,
+      latestVersion: upd.latestVersion,
+      updateAvailable: upd.updateAvailable,
+      changelog: upd.changelog,
+      lastChecked: upd.lastChecked?.toISOString() ?? null,
+      applying: upd.applying,
+      error: upd.error,
+    });
+  });
+
+  // POST /api/check-update — manually trigger an update check
+  app.post('/api/check-update', async (_req, res) => {
+    logger.info('[WebUI] Manual update check triggered.');
+    try {
+      const result = await checkForUpdate();
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // POST /api/apply-update — download and apply pending update, then restart
+  app.post('/api/apply-update', async (_req, res) => {
+    const upd = getUpdateState();
+    if (!upd.updateAvailable) {
+      res.status(400).json({ ok: false, error: 'No update available.' });
+      return;
+    }
+    if (upd.applying) {
+      res.status(409).json({ ok: false, error: 'Update is already in progress.' });
+      return;
+    }
+    logger.info('[WebUI] Apply update requested.');
+    res.json({ ok: true, message: `Downloading and applying v${upd.latestVersion}… Agent will restart.` });
+    // Apply asynchronously after responding
+    setTimeout(() => {
+      applyPendingUpdate(state.onRestartRequest).catch((err) => {
+        logger.error(`[WebUI] Apply update failed: ${err.message}`);
+      });
+    }, 100);
+  });
+
   // POST /api/save-config
+
   app.post('/api/save-config', async (req, res) => {
     const updates = req.body || {};
     try {

@@ -147,6 +147,14 @@ service cloud.firestore {
       allow read, write: if isSuperAdmin();
     }
 
+    // ─── Agent Releases (OTA Updates) ────────────────────────────────────────
+    // All authenticated users can read (agents check for updates; dashboard shows version)
+    // Only super_admins can write (Cloud Functions use Admin SDK which bypasses rules)
+    match /agent_releases/{releaseId} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
     // ─── Deny everything else ─────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
