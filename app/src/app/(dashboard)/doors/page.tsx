@@ -9,6 +9,8 @@ import {
   subscribeToUnifiSchedules,
   createDoorCommand,
   getLatestAgentRelease,
+  approveAgentUpdate,
+  setAgentAutoUpdate,
 } from '@/lib/firestore';
 import type { Door, Agent, UnifiSchedule, AgentRelease } from '@/lib/types';
 import { safeFormatDistanceToNow } from '@/lib/date-utils';
@@ -189,65 +191,228 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
 
 // ─── Agent Status ─────────────────────────────────────────────────────────────
 
-function AgentStatusRow({ agent, latestVersion }: { agent: Agent; latestVersion: string | null }) {
+function AgentStatusRow({
+  agent,
+  latestVersion,
+}: {
+  agent: Agent;
+  latestVersion: string | null;
+}) {
   const isOnline = agent.status === 'online';
   const isDegraded = agent.status === 'degraded';
-  const isOutdated = latestVersion && agent.version && agent.version !== latestVersion;
+  const targetVersion = agent.latest_version || latestVersion;
+  const isOutdated = Boolean(targetVersion && agent.version && agent.version !== targetVersion);
+  const [approving, setApproving] = useState(false);
+  const [togglingAuto, setTogglingAuto] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const isUpdating =
+    agent.update_status === 'downloading' ||
+    agent.update_status === 'applying' ||
+    agent.update_status === 'restarting';
+
+  const isApprovedWaiting =
+    isOutdated &&
+    agent.update_approved_version === targetVersion &&
+    !isUpdating &&
+    agent.update_status !== 'error';
+
+  const handleApprove = async () => {
+    if (!targetVersion) return;
+    setApproving(true);
+    setMsg(null);
+    try {
+      await approveAgentUpdate(agent.id, targetVersion, agent.org_id);
+      setMsg(`Approved! Agent will deploy v${targetVersion}.`);
+    } catch (err: any) {
+      setMsg(`Error: ${err.message}`);
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const handleToggleAuto = async () => {
+    setTogglingAuto(true);
+    try {
+      await setAgentAutoUpdate(agent.id, !agent.auto_update);
+    } catch (err: any) {
+      alert(`Failed to update auto-deploy: ${err.message}`);
+    } finally {
+      setTogglingAuto(false);
+    }
+  };
 
   return (
     <div
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.75rem',
-        padding: '0.625rem 0',
+        padding: '0.875rem 0',
         borderBottom: '1px solid var(--color-border)',
         fontSize: '0.875rem',
       }}
     >
       <div
         style={{
-          width: '0.5rem',
-          height: '0.5rem',
-          borderRadius: '50%',
-          flexShrink: 0,
-          background: isOnline
-            ? 'var(--color-success)'
-            : isDegraded
-            ? 'var(--color-warning)'
-            : 'var(--color-text-muted)',
-          boxShadow: isOnline ? '0 0 0 3px rgba(34,197,94,0.25)' : undefined,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
         }}
-      />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>{agent.label}</div>
-        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-          v{agent.version} · {agent.capabilities.join(', ')}
-          {isOutdated && (
+      >
+        <div
+          style={{
+            width: '0.5rem',
+            height: '0.5rem',
+            borderRadius: '50%',
+            flexShrink: 0,
+            background: isOnline
+              ? 'var(--color-success)'
+              : isDegraded
+              ? 'var(--color-warning)'
+              : 'var(--color-text-muted)',
+            boxShadow: isOnline ? '0 0 0 3px rgba(34,197,94,0.25)' : undefined,
+          }}
+        />
+        <div style={{ flex: 1, minWidth: '200px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+              {agent.label}
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+              v{agent.version}
+            </span>
+            {isOutdated && (
+              <span
+                className="badge badge-warning"
+                style={{ fontSize: '0.6875rem', fontWeight: 600 }}
+              >
+                Update: v{targetVersion}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>
+            Capabilities: {agent.capabilities?.join(', ') || 'door management'}
+          </div>
+        </div>
+
+        {/* Update action / status controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', flexWrap: 'wrap' }}>
+          {isUpdating && (
             <span
               className="badge badge-warning"
-              style={{ fontSize: '0.625rem', marginLeft: '0.375rem' }}
-              title={`Update available: v${latestVersion}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                fontSize: '0.75rem',
+                padding: '0.25rem 0.5rem',
+              }}
             >
-              ⚠️ v{latestVersion} available
+              <span>⚙️</span>
+              {agent.update_status === 'downloading'
+                ? 'Downloading update…'
+                : agent.update_status === 'applying'
+                ? 'Installing update…'
+                : 'Restarting agent…'}
             </span>
           )}
+
+          {isApprovedWaiting && (
+            <span
+              className="badge badge-warning"
+              style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+            >
+              ⏳ Approved — agent deploying shortly…
+            </span>
+          )}
+
+          {agent.update_status === 'error' && (
+            <span
+              className="badge badge-danger"
+              style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+              title={agent.update_error || undefined}
+            >
+              ⚠️ Update failed: {agent.update_error || 'Unknown error'}
+            </span>
+          )}
+
+          {isOutdated && !isUpdating && !isApprovedWaiting && (
+            <button
+              className="btn btn-primary"
+              style={{
+                fontSize: '0.75rem',
+                padding: '0.25rem 0.625rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+              }}
+              onClick={handleApprove}
+              disabled={approving}
+            >
+              {approving ? 'Approving…' : `🚀 Approve & Deploy v${targetVersion}`}
+            </button>
+          )}
+
+          {/* Auto-deploy toggle */}
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              cursor: 'pointer',
+              fontSize: '0.75rem',
+              color: 'var(--color-text-secondary)',
+              background: 'var(--color-surface)',
+              border: '1px solid var(--color-border)',
+              padding: '0.25rem 0.5rem',
+              borderRadius: '6px',
+              userSelect: 'none',
+            }}
+            title="When enabled, newly published releases deploy to this agent automatically without needing manual approval."
+          >
+            <input
+              type="checkbox"
+              checked={Boolean(agent.auto_update)}
+              onChange={handleToggleAuto}
+              disabled={togglingAuto}
+              style={{ cursor: 'pointer' }}
+            />
+            <span>Auto-Deploy</span>
+          </label>
+
+          {/* Agent status badge */}
+          <div style={{ textAlign: 'right', minWidth: '70px' }}>
+            <span
+              className={`badge ${
+                isOnline ? 'badge-success' : isDegraded ? 'badge-warning' : 'badge-neutral'
+              }`}
+              style={{ fontSize: '0.75rem' }}
+            >
+              {agent.status}
+            </span>
+            <div
+              style={{
+                fontSize: '0.6875rem',
+                color: 'var(--color-text-muted)',
+                marginTop: '0.2rem',
+              }}
+            >
+              {agent.last_heartbeat ? safeFormatDistanceToNow(agent.last_heartbeat) : '—'}
+            </div>
+          </div>
         </div>
       </div>
-      <div style={{ textAlign: 'right', flexShrink: 0 }}>
-        <span
-          className={`badge ${
-            isOnline ? 'badge-success' : isDegraded ? 'badge-warning' : 'badge-neutral'
-          }`}
+
+      {msg && (
+        <div
+          style={{
+            fontSize: '0.75rem',
+            marginTop: '0.375rem',
+            color: msg.startsWith('Error') ? 'var(--color-danger)' : 'var(--color-success)',
+          }}
         >
-          {agent.status}
-        </span>
-        <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>
-          {agent.last_heartbeat
-            ? safeFormatDistanceToNow(agent.last_heartbeat)
-            : '—'}
+          {msg}
         </div>
-      </div>
+      )}
     </div>
   );
 }

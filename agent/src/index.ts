@@ -244,9 +244,11 @@ async function startBridgeWorker(): Promise<void> {
     config.heartbeatIntervalMs
   );
 
-  // 5b. Start OTA update checker (checks hourly)
+  // 5b. Start OTA update checker (polls every 60s, listens real-time for approvals)
   const stopUpdateChecker = startUpdateChecker(
-    60 * 60 * 1000,
+    config.agentId,
+    config.orgId,
+    60 * 1000,
     bridgeState.onRestartRequest
   );
 

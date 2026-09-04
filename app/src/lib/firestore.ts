@@ -255,6 +255,43 @@ export function subscribeToAgents(
   });
 }
 
+export async function approveAgentUpdate(
+  agentId: string,
+  targetVersion: string,
+  orgId?: string
+): Promise<void> {
+  const agentRef = doc(db, 'agents', agentId);
+  await updateDoc(agentRef, {
+    update_approved_version: targetVersion,
+    update_status: 'downloading',
+  });
+
+  if (orgId) {
+    try {
+      await addDoc(collection(db, 'organizations', orgId, 'door_commands'), {
+        agent_id: agentId,
+        door_id: 'agent',
+        action: 'apply_update',
+        target_version: targetVersion,
+        created_at: serverTimestamp(),
+        status: 'pending',
+      });
+    } catch {
+      // Non-critical redundancy
+    }
+  }
+}
+
+export async function setAgentAutoUpdate(
+  agentId: string,
+  autoUpdate: boolean
+): Promise<void> {
+  const agentRef = doc(db, 'agents', agentId);
+  await updateDoc(agentRef, {
+    auto_update: autoUpdate,
+  });
+}
+
 // ─── Super Admin ──────────────────────────────────────────────────────────────
 
 export async function getAllOrganizations(): Promise<Organization[]> {

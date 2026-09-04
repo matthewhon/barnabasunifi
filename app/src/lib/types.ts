@@ -201,6 +201,13 @@ export interface Agent {
   last_heartbeat: string;
   version: string;
   capabilities: string[];
+  update_available?: boolean;
+  latest_version?: string;
+  update_changelog?: string;
+  update_status?: 'idle' | 'downloading' | 'applying' | 'restarting' | 'error';
+  update_error?: string | null;
+  update_approved_version?: string;
+  auto_update?: boolean;
 }
 
 // ─── PCO API ──────────────────────────────────────────────────────────────────

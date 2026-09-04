@@ -94,13 +94,24 @@ function isNewer(candidate: string, current: string): boolean {
 // Check for update
 // ---------------------------------------------------------------------------
 
-export async function checkForUpdate(): Promise<UpdateState> {
+export async function checkForUpdate(agentId?: string): Promise<UpdateState> {
   try {
     const db = getDb();
     const snap = await db.doc('agent_releases/latest').get();
 
     if (!snap.exists) {
       _state = { ..._state, latestVersion: null, updateAvailable: false, lastChecked: new Date(), error: null };
+      if (agentId) {
+        await db.doc(`agents/${agentId}`).set(
+          {
+            update_available: false,
+            latest_version: _state.currentVersion,
+            current_version: _state.currentVersion,
+            update_checked_at: admin.firestore.Timestamp.now(),
+          },
+          { merge: true }
+        ).catch(() => {});
+      }
       return getUpdateState();
     }
 
@@ -120,6 +131,20 @@ export async function checkForUpdate(): Promise<UpdateState> {
       lastChecked: new Date(),
       error: null,
     };
+
+    if (agentId) {
+      await db.doc(`agents/${agentId}`).set(
+        {
+          update_available: updateAvailable,
+          latest_version: latestVersion,
+          current_version: _state.currentVersion,
+          update_changelog: changelog,
+          update_checked_at: admin.firestore.Timestamp.now(),
+          update_status: updateAvailable ? (_state.applying ? 'applying' : 'idle') : 'idle',
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
 
     if (updateAvailable) {
       logger.info(`[UpdateChecker] Update available: ${_state.currentVersion} → ${latestVersion}`);
@@ -165,7 +190,10 @@ function downloadFile(url: string, destPath: string): Promise<void> {
 // Apply pending update
 // ---------------------------------------------------------------------------
 
-export async function applyPendingUpdate(onRestart?: () => Promise<void>): Promise<void> {
+export async function applyPendingUpdate(
+  onRestart?: () => Promise<void>,
+  agentId?: string
+): Promise<void> {
   if (!_state.updateAvailable || !_state.downloadUrl) {
     throw new Error('No update available to apply.');
   }
@@ -179,6 +207,17 @@ export async function applyPendingUpdate(onRestart?: () => Promise<void>): Promi
 
   logger.info(`[UpdateChecker] Applying update v${targetVersion} from ${downloadUrl}…`);
 
+  if (agentId) {
+    const db = getDb();
+    await db.doc(`agents/${agentId}`).set(
+      {
+        update_status: 'downloading',
+        update_error: null,
+      },
+      { merge: true }
+    ).catch(() => {});
+  }
+
   try {
     // 1. Create temp staging directory
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-update-'));
@@ -190,6 +229,16 @@ export async function applyPendingUpdate(onRestart?: () => Promise<void>): Promi
     logger.info(`[UpdateChecker] Downloading update zip…`);
     await downloadFile(downloadUrl, zipPath);
     logger.info(`[UpdateChecker] Download complete (${Math.round(fs.statSync(zipPath).size / 1024)} KB)`);
+
+    if (agentId) {
+      const db = getDb();
+      await db.doc(`agents/${agentId}`).set(
+        {
+          update_status: 'applying',
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
 
     // 3. Extract zip directly into dist directory
     const distDir = path.resolve(__dirname, '..');
@@ -218,6 +267,20 @@ export async function applyPendingUpdate(onRestart?: () => Promise<void>): Promi
     logger.info(`[UpdateChecker] Update v${targetVersion} installed successfully. Restarting…`);
     _state = { ..._state, applying: false, currentVersion: targetVersion, updateAvailable: false };
 
+    if (agentId) {
+      const db = getDb();
+      await db.doc(`agents/${agentId}`).set(
+        {
+          version: targetVersion,
+          current_version: targetVersion,
+          update_available: false,
+          update_status: 'restarting',
+          update_approved_version: null,
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+
     // 6. Restart
     if (onRestart) {
       await onRestart();
@@ -228,16 +291,28 @@ export async function applyPendingUpdate(onRestart?: () => Promise<void>): Promi
     const msg = String(err);
     logger.error(`[UpdateChecker] Update failed: ${msg}`);
     _state = { ..._state, applying: false, error: msg };
+    if (agentId) {
+      const db = getDb();
+      await db.doc(`agents/${agentId}`).set(
+        {
+          update_status: 'error',
+          update_error: msg,
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
     throw err;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Start periodic check interval
+// Start periodic check interval & remote approval listener
 // ---------------------------------------------------------------------------
 
 export function startUpdateChecker(
-  intervalMs: number = 60 * 60 * 1000, // default: 1 hour
+  agentId?: string,
+  orgId?: string,
+  intervalMs: number = 60 * 1000,
   onRestart?: () => Promise<void>
 ): () => void {
   // Set current version from package.json
@@ -249,19 +324,63 @@ export function startUpdateChecker(
     }
   } catch {}
 
-  logger.info(`[UpdateChecker] Starting — current version: v${_state.currentVersion}, check interval: ${intervalMs / 60000}min`);
+  logger.info(
+    `[UpdateChecker] Starting — current version: v${_state.currentVersion}, poll interval: ${intervalMs / 1000}s`
+  );
 
   // Check immediately on startup
-  checkForUpdate().catch(() => {});
+  checkForUpdate(agentId).catch(() => {});
 
+  // Periodic poll interval
   const handle = setInterval(() => {
-    checkForUpdate().catch(() => {});
+    checkForUpdate(agentId).catch(() => {});
   }, intervalMs);
+
+  let unsubSnapshot: (() => void) | null = null;
+
+  // Real-time listener on agents/{agentId} for remote approval from app
+  if (agentId) {
+    try {
+      const db = getDb();
+      unsubSnapshot = db.doc(`agents/${agentId}`).onSnapshot(async (snap) => {
+        if (!snap.exists) return;
+        const data = snap.data();
+        const approvedVersion = data?.update_approved_version;
+        const autoUpdate = Boolean(data?.auto_update);
+
+        // Ensure we have current release data
+        if (!_state.latestVersion) {
+          await checkForUpdate(agentId);
+        }
+
+        if (
+          !_state.applying &&
+          _state.updateAvailable &&
+          _state.downloadUrl &&
+          _state.latestVersion &&
+          (approvedVersion === _state.latestVersion || autoUpdate) &&
+          isNewer(_state.latestVersion, _state.currentVersion)
+        ) {
+          logger.info(
+            `[UpdateChecker] 🚀 Auto-deploying approved update: v${_state.currentVersion} → v${_state.latestVersion}…`
+          );
+          try {
+            await applyPendingUpdate(onRestart, agentId);
+          } catch (err: any) {
+            logger.error(`[UpdateChecker] Remote auto-deploy failed: ${err.message}`);
+          }
+        }
+      });
+    } catch (err: any) {
+      logger.warn(`[UpdateChecker] Failed to attach agent document listener: ${err.message}`);
+    }
+  }
 
   if (handle.unref) handle.unref();
 
   return () => {
     clearInterval(handle);
+    if (unsubSnapshot) unsubSnapshot();
     logger.info('[UpdateChecker] Stopped.');
   };
 }

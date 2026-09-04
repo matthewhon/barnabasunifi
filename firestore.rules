@@ -135,8 +135,12 @@ service cloud.firestore {
       allow read: if isSignedIn() && (
         isOrgMember(resource.data.org_id) || isSuperAdmin()
       );
-      // Agents register and update their own docs
-      allow create, update: if isAgentForOrg(resource.data.org_id)
+      // Agents register and update their own docs; org admins/managers can approve updates
+      allow create: if isAgentForOrg(request.resource.data.org_id)
+        || isSuperAdmin();
+      allow update: if isAgentForOrg(resource.data.org_id)
+        || isOrgAdmin(resource.data.org_id)
+        || isOrgManager(resource.data.org_id)
         || isSuperAdmin();
       allow delete: if isSuperAdmin();
     }
