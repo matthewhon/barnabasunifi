@@ -31,7 +31,7 @@ async function main() {
 
   // 3. Upload to Cloud Function
   const changelog = process.argv[2] || `UniFi credential auto-population, token visibility toggle, and stability improvements`;
-  const endpoint = `https://uploadagentrelease-khvx4wjgnq-uc.a.run.app`;
+  const endpoint = `https://us-central1-barnabasunfi.cloudfunctions.net/uploadAgentRelease`;
   console.log(`3. Uploading to ${endpoint}…`);
 
   const payload = JSON.stringify({

@@ -128,27 +128,30 @@ export const uploadAgentRelease = onRequest({ cors: true, maxInstances: 2 }, asy
 
   try {
     const zipBuffer = Buffer.from(zipBase64, 'base64');
-    const bucket = getStorage().bucket('barnabasunfi.firebasestorage.app');
-    const filename = `agent-releases/agent-v${version}.zip`;
-    const file = bucket.file(filename);
-    const token = randomUUID();
+    const projectId = process.env.GCLOUD_PROJECT || 'barnabasunfi';
+    const directDownloadUrl = `https://us-central1-${projectId}.cloudfunctions.net/downloadAgentRelease?version=${version}`;
 
-    await file.save(zipBuffer, {
-      contentType: 'application/zip',
-      metadata: {
-        metadata: {
-          firebaseStorageDownloadTokens: token,
-        },
-      },
-    });
-
-    const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filename)}?alt=media&token=${token}`;
+    let downloadUrl = directDownloadUrl;
+    try {
+      const bucket = getStorage().bucket('barnabasunfi.firebasestorage.app');
+      const filename = `agent-releases/agent-v${version}.zip`;
+      const file = bucket.file(filename);
+      const token = randomUUID();
+      await file.save(zipBuffer, {
+        contentType: 'application/zip',
+        metadata: { metadata: { firebaseStorageDownloadTokens: token } },
+      });
+      downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filename)}?alt=media&token=${token}`;
+    } catch (storageErr) {
+      console.warn(`[Releases] Cloud Storage upload fallback to direct download URL: ${directDownloadUrl}`);
+    }
 
     const db = getFirestore();
     const now = FieldValue.serverTimestamp();
     const releaseData = {
       version,
       download_url: downloadUrl,
+      zip_base64: zipBase64,
       changelog: changelog || `Agent release v${version}`,
       published_at: now,
       updated_at: now,
@@ -166,6 +169,41 @@ export const uploadAgentRelease = onRequest({ cors: true, maxInstances: 2 }, asy
   } catch (err: any) {
     console.error(`[Releases] Error uploading release:`, err);
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * downloadAgentRelease — Serves the agent release zip directly via HTTP GET.
+ */
+export const downloadAgentRelease = onRequest({ cors: true }, async (req, res) => {
+  const version = (req.query.version as string) || 'latest';
+  try {
+    const db = getFirestore();
+    const docPath = version === 'latest' ? 'agent_releases/latest' : `agent_releases/${version}`;
+    const snap = await db.doc(docPath).get();
+    if (!snap.exists) {
+      res.status(404).send('Release not found');
+      return;
+    }
+
+    const data = snap.data()!;
+    if (data.zip_base64) {
+      const buffer = Buffer.from(data.zip_base64, 'base64');
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="agent-v${data.version || version}.zip"`);
+      res.setHeader('Content-Length', buffer.length);
+      res.send(buffer);
+      return;
+    }
+
+    if (data.download_url) {
+      res.redirect(data.download_url);
+      return;
+    }
+
+    res.status(404).send('No binary found for this release');
+  } catch (err: any) {
+    res.status(500).send(`Error: ${err.message}`);
   }
 });
 
