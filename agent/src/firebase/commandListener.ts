@@ -16,6 +16,7 @@ import { logger } from '../logger';
 import { syncDoors } from './doorSync';
 import { syncSchedules } from './scheduleSync';
 import { syncVisitors } from './visitorSync';
+import { checkForUpdate, applyPendingUpdate } from './updateChecker';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,7 +32,9 @@ export type CommandAction =
   | 'sync_visitors'
   | 'create_visitor'
   | 'update_visitor'
-  | 'delete_visitor';
+  | 'delete_visitor'
+  | 'apply_update'
+  | 'upgrade_agent';
 
 export type CommandStatus =
   | 'queued'
@@ -367,6 +370,16 @@ export function startCommandListener(
           { merge: true }
         );
         resultMessage = `Visitor ${command.visitor_id} revoked successfully.`;
+      } else if (command.action === 'apply_update' || command.action === 'upgrade_agent') {
+        const updateState = await checkForUpdate();
+        if (updateState.updateAvailable) {
+          applyPendingUpdate().catch((err) => {
+            logger.error(`[CommandListener] Apply update failed: ${String(err)}`);
+          });
+          resultMessage = `Agent update to v${updateState.latestVersion} initiated. Restarting...`;
+        } else {
+          resultMessage = `Agent is already up to date (v${updateState.currentVersion}).`;
+        }
       } else {
         throw new Error(`Unknown action: ${String((command as any).action)}`);
       }
