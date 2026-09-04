@@ -194,8 +194,8 @@ export function startWebServer(
       );
 
       if (response.data?.ok) {
-        const { orgId, customToken, projectId } = response.data;
-        // Save to .env
+        const { orgId, customToken, projectId, unifiHost: returnedHost, unifiAccessToken, skipTlsVerify } = response.data;
+        // Save to config
         saveConfig({
           ORG_ID: orgId,
           FIREBASE_PROJECT_ID: projectId || 'barnabasunfi',
@@ -203,6 +203,9 @@ export function startWebServer(
           AGENT_LABEL: label || process.env.AGENT_LABEL || 'Main Campus Agent',
           AGENT_AUTH_TOKEN: customToken,
           CONNECTION_TOKEN: token,
+          ...(returnedHost ? { UNIFI_HOST: returnedHost } : {}),
+          ...(unifiAccessToken ? { UNIFI_ACCESS_TOKEN: unifiAccessToken } : {}),
+          ...(skipTlsVerify !== undefined ? { SKIP_TLS_VERIFY: String(skipTlsVerify) } : {}),
         });
 
         logger.info(`[WebUI] Successfully registered and associated with organization: ${orgId}!`);
@@ -211,7 +214,12 @@ export function startWebServer(
           await state.onRestartRequest();
         }
 
-        res.json({ ok: true, orgId, message: 'Agent registered and linked successfully!' });
+        res.json({
+          ok: true,
+          orgId,
+          unifiHost: returnedHost || unifiHost,
+          message: 'Agent registered and linked successfully! Credentials pulled from cloud.',
+        });
       } else {
         res.status(400).json({ ok: false, error: response.data?.error || 'Registration failed' });
       }

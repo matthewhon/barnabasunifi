@@ -31,6 +31,7 @@ export interface ConfigStatus {
   missing: string[];
   config: AgentConfig | null;
   serviceAccountFound: boolean;
+  canAutoRegister: boolean;
 }
 
 const ENV_PATH = path.resolve(process.cwd(), '.env');
@@ -40,9 +41,13 @@ const ENV_PATH = path.resolve(process.cwd(), '.env');
  */
 export function reloadEnv(): void {
   if (fs.existsSync(ENV_PATH)) {
-    const envConfig = dotenv.parse(fs.readFileSync(ENV_PATH, 'utf-8'));
-    for (const k in envConfig) {
-      process.env[k] = envConfig[k];
+    try {
+      const envConfig = dotenv.parse(fs.readFileSync(ENV_PATH, 'utf-8'));
+      for (const k in envConfig) {
+        process.env[k] = envConfig[k];
+      }
+    } catch {
+      // ignore
     }
   }
 }
@@ -143,6 +148,8 @@ export function getConfigurationStatus(): ConfigStatus {
     missing.push('Authentication (Connection Token or service-account.json)');
   }
 
+  const canAutoRegister = Boolean(connectionToken && (!agentAuthToken || !unifiAccessToken));
+
   const config: AgentConfig = {
     unifiHost: unifiHost.replace(/\/$/, ''),
     unifiAccessToken,
@@ -166,16 +173,21 @@ export function getConfigurationStatus(): ConfigStatus {
     missing,
     config: missing.length === 0 ? config : null,
     serviceAccountFound: Boolean(resolvedSaPath),
+    canAutoRegister,
   };
 }
 
 /**
- * Save configuration to .env file and update process.env.
+ * Save configuration to memory and persist to .env file if writable.
  */
 export function saveConfig(updates: Record<string, string>): void {
   let currentEnv: Record<string, string> = {};
   if (fs.existsSync(ENV_PATH)) {
-    currentEnv = dotenv.parse(fs.readFileSync(ENV_PATH, 'utf-8'));
+    try {
+      currentEnv = dotenv.parse(fs.readFileSync(ENV_PATH, 'utf-8'));
+    } catch {
+      // ignore
+    }
   }
 
   for (const [key, value] of Object.entries(updates)) {
@@ -185,6 +197,10 @@ export function saveConfig(updates: Record<string, string>): void {
     }
   }
 
-  const lines = Object.entries(currentEnv).map(([k, v]) => `${k}=${v}`);
-  fs.writeFileSync(ENV_PATH, lines.join('\n') + '\n', 'utf-8');
+  try {
+    const lines = Object.entries(currentEnv).map(([k, v]) => `${k}=${v}`);
+    fs.writeFileSync(ENV_PATH, lines.join('\n') + '\n', 'utf-8');
+  } catch {
+    // In read-only environments, process.env is still updated in memory
+  }
 }

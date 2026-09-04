@@ -144,3 +144,39 @@ export async function scanSubnet(
     return a.responseTimeMs - b.responseTimeMs;
   });
 }
+
+/**
+ * Automatically scan candidate subnets to find the UniFi Access console on LAN.
+ * If token is provided, tests the token against candidate consoles to ensure authentication.
+ */
+export async function autoDiscoverUnifiConsole(token?: string): Promise<string | null> {
+  const candidateSubnets = getCandidateSubnets();
+  for (const subnet of candidateSubnets) {
+    const consoles = await scanSubnet(subnet);
+    if (consoles.length > 0) {
+      if (token) {
+        for (const candidate of consoles) {
+          try {
+            const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+            const res = await axios.get(`${candidate.url}/api/v1/developer/doors`, {
+              headers: { Authorization: `Bearer ${token}` },
+              httpsAgent,
+              timeout: 1500,
+              validateStatus: () => true,
+            });
+            if (res.status === 200) {
+              return candidate.url;
+            }
+          } catch {
+            // continue checking
+          }
+        }
+      }
+      const confirmed = consoles.find((c) => c.isConfirmedUnifi) || consoles[0];
+      if (confirmed) {
+        return confirmed.url;
+      }
+    }
+  }
+  return null;
+}

@@ -22,6 +22,10 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   schedule_updated: 'Schedule Updated',
   schedule_synced: 'Schedule Synced',
   schedule_deleted: 'Schedule Deleted',
+  visitor_created: 'Visitor Created',
+  visitor_updated: 'Visitor Updated',
+  visitor_deleted: 'Visitor Revoked/Deleted',
+  visitor_synced: 'Visitor Synced',
 };
 
 const ALL_ACTIONS: AuditAction[] = [
@@ -29,6 +33,7 @@ const ALL_ACTIONS: AuditAction[] = [
   'pco_sync', 'agent_online', 'agent_offline',
   'schedule_created', 'schedule_cancelled',
   'schedule_updated', 'schedule_synced', 'schedule_deleted',
+  'visitor_created', 'visitor_updated', 'visitor_deleted', 'visitor_synced',
 ];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────

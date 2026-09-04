@@ -103,14 +103,29 @@ export interface ScheduleWindow {
 
 // ─── Door Commands ────────────────────────────────────────────────────────────
 
-export type CommandAction = 'unlock' | 'lock';
+export type CommandAction =
+  | 'unlock'
+  | 'lock'
+  | 'sync_schedules'
+  | 'update_schedule'
+  | 'create_schedule'
+  | 'delete_schedule'
+  | 'sync_visitors'
+  | 'create_visitor'
+  | 'update_visitor'
+  | 'delete_visitor';
+
 export type CommandStatus = 'queued' | 'executing' | 'done' | 'failed' | 'cancelled';
 
 export interface DoorCommand {
   id: string;
   org_id: string;
-  door_id: string;
+  door_id?: string;
   door_label?: string;
+  schedule_id?: string;
+  schedule_data?: Record<string, unknown>;
+  visitor_id?: string;
+  visitor_data?: Record<string, unknown>;
   action: CommandAction;
   execute_at: string;         // ISO8601
   duration_min?: number;      // for temporary unlocks
@@ -136,7 +151,14 @@ export type AuditAction =
   | 'agent_online'
   | 'agent_offline'
   | 'schedule_created'
-  | 'schedule_cancelled';
+  | 'schedule_cancelled'
+  | 'schedule_updated'
+  | 'schedule_synced'
+  | 'schedule_deleted'
+  | 'visitor_created'
+  | 'visitor_updated'
+  | 'visitor_deleted'
+  | 'visitor_synced';
 
 export interface AuditLogEntry {
   id: string;
@@ -213,6 +235,73 @@ export interface UnifiDoor {
 export interface UnifiLockRulePayload {
   type: 'custom' | 'lock_early' | 'reset';
   interval?: number; // minutes — for type 'custom'
+}
+
+export type DayOfWeek =
+  | 'monday'
+  | 'tuesday'
+  | 'wednesday'
+  | 'thursday'
+  | 'friday'
+  | 'saturday'
+  | 'sunday';
+
+export interface UnifiScheduleTimeSlot {
+  start_time: string; // "HH:MM" e.g. "08:00"
+  end_time: string;   // "HH:MM" e.g. "17:00"
+}
+
+export interface UnifiWeeklyScheduleDay {
+  day: DayOfWeek;
+  active: boolean;
+  slots: UnifiScheduleTimeSlot[];
+}
+
+export interface UnifiSchedule {
+  id: string;
+  org_id: string;
+  unifi_schedule_id: string;
+  name: string;
+  type?: 'unlock' | 'access' | 'custom' | string;
+  is_default?: boolean;
+  weekly_schedule: UnifiWeeklyScheduleDay[];
+  door_ids?: string[];
+  door_labels?: string[];
+  holiday_group_id?: string;
+  raw_data?: Record<string, unknown>;
+  last_synced?: string; // ISO8601
+  sync_status?: 'synced' | 'pending' | 'error';
+  sync_error?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// ─── Visitors ─────────────────────────────────────────────────────────────────
+
+export type VisitorStatus = 'active' | 'upcoming' | 'expired' | 'revoked' | 'pending';
+
+export interface UnifiVisitor {
+  id: string;                      // Firestore document ID
+  org_id: string;
+  unifi_visitor_id?: string;       // ID returned by UniFi Access
+  first_name: string;
+  last_name?: string;
+  full_name?: string;
+  mobile_phone?: string;
+  email?: string;
+  pin_code: string;                // 4-8 digit numeric PIN
+  start_time: string;              // ISO8601 string
+  end_time: string;                // ISO8601 string
+  door_ids: string[];              // UniFi door IDs
+  door_labels?: string[];          // Human-readable door names
+  status: VisitorStatus;
+  purpose?: string;                // e.g. "Contractor", "Guest Speaker"
+  sync_status?: 'synced' | 'pending' | 'error';
+  sync_error?: string;
+  raw_data?: Record<string, unknown>;
+  last_synced?: string;            // ISO8601
+  created_at?: string;             // ISO8601
+  updated_at?: string;             // ISO8601
 }
 
 // ─── API Response Wrappers ────────────────────────────────────────────────────

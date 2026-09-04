@@ -2,12 +2,14 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import Link from 'next/link';
 import {
   subscribeToDoors,
   subscribeToAgents,
+  subscribeToUnifiSchedules,
   createDoorCommand,
 } from '@/lib/firestore';
-import type { Door, Agent } from '@/lib/types';
+import type { Door, Agent, UnifiSchedule } from '@/lib/types';
 import { safeFormatDistanceToNow } from '@/lib/date-utils';
 import Modal from '@/components/ui/Modal';
 
@@ -46,14 +48,21 @@ function ServerIcon({ size = 16 }: { size?: number }) {
 
 interface DoorCardProps {
   door: Door;
+  schedules?: UnifiSchedule[];
   onUnlock: (door: Door) => void;
   onLock: (door: Door) => void;
   actionLoading: boolean;
 }
 
-function DoorCard({ door, onUnlock, onLock, actionLoading }: DoorCardProps) {
+function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: DoorCardProps) {
   const isLocked = door.current_state === 'locked';
   const isUnknown = door.current_state === 'unknown';
+
+  const assignedSchedules = schedules.filter((s) => {
+    const doorId = door.id;
+    const unifiDoorId = door.unifi_door_id;
+    return s.door_ids?.includes(doorId) || (unifiDoorId && s.door_ids?.includes(unifiDoorId));
+  });
 
   const borderColor = isUnknown
     ? 'var(--color-border)'
@@ -103,8 +112,8 @@ function DoorCard({ door, onUnlock, onLock, actionLoading }: DoorCardProps) {
         </div>
       </div>
 
-      {/* State badge */}
-      <div>
+      {/* State & Schedule badges */}
+      <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', alignItems: 'center' }}>
         <span
           className={`badge ${
             isUnknown ? 'badge-neutral' : isLocked ? 'badge-danger' : 'badge-success'
@@ -112,6 +121,27 @@ function DoorCard({ door, onUnlock, onLock, actionLoading }: DoorCardProps) {
         >
           {isUnknown ? 'Unknown' : isLocked ? 'Locked' : 'Unlocked'}
         </span>
+
+        {assignedSchedules.map((s) => (
+          <Link
+            key={s.id}
+            href="/schedule"
+            style={{ textDecoration: 'none' }}
+            title={`Assigned to UniFi schedule: ${s.name}`}
+          >
+            <span
+              className="badge badge-neutral"
+              style={{
+                fontSize: '0.6875rem',
+                gap: '0.25rem',
+                border: '1px solid var(--color-border)',
+                cursor: 'pointer',
+              }}
+            >
+              🗓️ {s.name}
+            </span>
+          </Link>
+        ))}
       </div>
 
       {/* Actions */}
@@ -201,6 +231,7 @@ export default function DoorsPage() {
 
   const [doors, setDoors] = useState<Door[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [schedules, setSchedules] = useState<UnifiSchedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -227,9 +258,14 @@ export default function DoorsPage() {
       setAgents(a);
     });
 
+    const unsubSchedules = subscribeToUnifiSchedules(orgId, (s) => {
+      setSchedules(s);
+    });
+
     return () => {
       unsubDoors();
       unsubAgents();
+      unsubSchedules();
     };
   }, [orgId]);
 
@@ -345,6 +381,7 @@ export default function DoorsPage() {
             <DoorCard
               key={door.id}
               door={door}
+              schedules={schedules}
               onUnlock={openUnlockModal}
               onLock={openLockModal}
               actionLoading={actionLoading}

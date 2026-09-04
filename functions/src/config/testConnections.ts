@@ -28,7 +28,7 @@ interface TestUnifiResponse {
 /**
  * Helper: Check caller authorization for an organization
  */
-function verifyOrgAdminPermission(auth: { uid: string; token: Record<string, unknown> } | undefined, orgId: string) {
+async function verifyOrgAdminPermission(auth: { uid: string; token: Record<string, unknown> } | undefined, orgId: string) {
   if (!auth) {
     throw new HttpsError('unauthenticated', 'Authentication required.');
   }
@@ -40,6 +40,23 @@ function verifyOrgAdminPermission(auth: { uid: string; token: Record<string, unk
 
   if (tokenOrgId === orgId && (role === 'org_admin' || role === 'manager')) {
     return;
+  }
+
+  const db = getFirestore();
+  const userDoc = await db.doc(`users/${auth.uid}`).get();
+  if (userDoc.exists) {
+    const userData = userDoc.data();
+    if (userData?.role === 'super_admin') return;
+    const memberships = userData?.org_memberships;
+    let membershipRole: string | undefined;
+    if (Array.isArray(memberships)) {
+      membershipRole = memberships.find((m: any) => m.org_id === orgId)?.role;
+    } else if (memberships && typeof memberships === 'object') {
+      membershipRole = memberships[orgId]?.role;
+    }
+    if (membershipRole && ['org_admin', 'manager'].includes(membershipRole)) {
+      return;
+    }
   }
 
   throw new HttpsError('permission-denied', 'You do not have permission to test connections for this organization.');
@@ -55,7 +72,7 @@ export const testPcoConnection = onCall<TestConnectionRequest, Promise<TestPcoRe
       throw new HttpsError('invalid-argument', 'orgId is required.');
     }
 
-    verifyOrgAdminPermission(request.auth, orgId);
+    await verifyOrgAdminPermission(request.auth, orgId);
 
     const db = getFirestore();
     const configSnap = await db.collection('organizations').doc(orgId).collection('settings').doc('config').get();
@@ -145,7 +162,7 @@ export const testUnifiConnection = onCall<TestConnectionRequest, Promise<TestUni
       throw new HttpsError('invalid-argument', 'orgId is required.');
     }
 
-    verifyOrgAdminPermission(request.auth, orgId);
+    await verifyOrgAdminPermission(request.auth, orgId);
 
     const db = getFirestore();
 

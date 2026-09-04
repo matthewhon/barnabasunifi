@@ -680,8 +680,11 @@
         });
         const data = await res.json();
         if (data.ok) {
-          resEl.innerHTML = `<span style="color: var(--success); font-weight: 600;">✓ Successfully paired with Organization: ${data.orgId}!</span>`;
-          showAlert(`Registered and paired with organization: ${data.orgId}!`, 'success');
+          if (data.unifiHost) {
+            document.getElementById('unifiHost').value = data.unifiHost;
+          }
+          resEl.innerHTML = `<span style="color: var(--success); font-weight: 600;">✓ Paired with Organization: ${data.orgId}! Credentials pulled from cloud.</span>`;
+          showAlert(`Registered and paired with organization: ${data.orgId}! Config pulled from cloud.`, 'success');
           loadStatus();
           loadLogs();
         } else {

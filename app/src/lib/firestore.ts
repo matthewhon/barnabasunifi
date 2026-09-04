@@ -26,6 +26,8 @@ import type {
   DoorCommand,
   AuditLogEntry,
   Agent,
+  UnifiSchedule,
+  UnifiVisitor,
 } from '@/lib/types';
 
 // ─── Organizations ───────────────────────────────────────────────────────────
@@ -258,4 +260,106 @@ export function subscribeToAgents(
 export async function getAllOrganizations(): Promise<Organization[]> {
   const snap = await getDocs(collection(db, 'organizations'));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Organization));
+}
+
+// ─── UniFi Schedules ─────────────────────────────────────────────────────────
+
+export async function getUnifiSchedules(orgId: string): Promise<UnifiSchedule[]> {
+  const snap = await getDocs(collection(db, 'organizations', orgId, 'unifi_schedules'));
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ...data,
+      last_synced: data.last_synced ? normalizeTimestamp(data.last_synced) : undefined,
+      updated_at: data.updated_at ? normalizeTimestamp(data.updated_at) : undefined,
+    } as unknown as UnifiSchedule;
+  });
+}
+
+export function subscribeToUnifiSchedules(
+  orgId: string,
+  callback: (schedules: UnifiSchedule[]) => void,
+): Unsubscribe {
+  const q = collection(db, 'organizations', orgId, 'unifi_schedules');
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ...data,
+        last_synced: data.last_synced ? normalizeTimestamp(data.last_synced) : undefined,
+        updated_at: data.updated_at ? normalizeTimestamp(data.updated_at) : undefined,
+      } as unknown as UnifiSchedule;
+    }));
+  });
+}
+
+// ─── UniFi Visitors ──────────────────────────────────────────────────────────
+
+export async function getVisitors(orgId: string): Promise<UnifiVisitor[]> {
+  const snap = await getDocs(collection(db, 'organizations', orgId, 'visitors'));
+  const now = Date.now();
+  return snap.docs.map((d) => {
+    const data = d.data();
+    const startTimeIso = normalizeTimestamp(data.start_time);
+    const endTimeIso = normalizeTimestamp(data.end_time);
+    let status = data.status || 'active';
+    if (status !== 'revoked') {
+      const startMs = new Date(startTimeIso).getTime();
+      const endMs = new Date(endTimeIso).getTime();
+      if (now < startMs) {
+        status = 'upcoming';
+      } else if (now >= endMs) {
+        status = 'expired';
+      } else {
+        status = 'active';
+      }
+    }
+    return {
+      id: d.id,
+      ...data,
+      start_time: startTimeIso,
+      end_time: endTimeIso,
+      status,
+      last_synced: data.last_synced ? normalizeTimestamp(data.last_synced) : undefined,
+      updated_at: data.updated_at ? normalizeTimestamp(data.updated_at) : undefined,
+    } as unknown as UnifiVisitor;
+  });
+}
+
+export function subscribeToVisitors(
+  orgId: string,
+  callback: (visitors: UnifiVisitor[]) => void,
+): Unsubscribe {
+  const q = collection(db, 'organizations', orgId, 'visitors');
+  return onSnapshot(q, (snap) => {
+    const now = Date.now();
+    callback(snap.docs.map((d) => {
+      const data = d.data();
+      const startTimeIso = normalizeTimestamp(data.start_time);
+      const endTimeIso = normalizeTimestamp(data.end_time);
+      let status = data.status || 'active';
+      if (status !== 'revoked') {
+        const startMs = new Date(startTimeIso).getTime();
+        const endMs = new Date(endTimeIso).getTime();
+        if (now < startMs) {
+          status = 'upcoming';
+        } else if (now >= endMs) {
+          status = 'expired';
+        } else {
+          status = 'active';
+        }
+      }
+      return {
+        id: d.id,
+        ...data,
+        start_time: startTimeIso,
+        end_time: endTimeIso,
+        status,
+        last_synced: data.last_synced ? normalizeTimestamp(data.last_synced) : undefined,
+        updated_at: data.updated_at ? normalizeTimestamp(data.updated_at) : undefined,
+      } as unknown as UnifiVisitor;
+    }));
+  });
 }

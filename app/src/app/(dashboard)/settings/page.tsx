@@ -278,6 +278,10 @@ export default function SettingsPage() {
   const [unifiMode, setUnifiMode] = useState<'agent' | 'remote'>('agent');
   const [remoteHost, setRemoteHost] = useState('');
   const [remoteToken, setRemoteToken] = useState('');
+  const [agentHost, setAgentHost] = useState('');
+  const [agentToken, setAgentToken] = useState('');
+  const [agentSkipTls, setAgentSkipTls] = useState(true);
+  const [agentDiscoveredHost, setAgentDiscoveredHost] = useState('');
   const [wizardStep, setWizardStep] = useState(1);
   const [showWizard, setShowWizard] = useState(false);
   const [connectionToken, setConnectionToken] = useState('');
@@ -318,6 +322,12 @@ export default function SettingsPage() {
         setRemoteHost(settings.unifi_remote.host ?? '');
         setRemoteToken(settings.unifi_remote.access_token ?? '');
       }
+      if (settings.unifi_agent) {
+        setAgentHost(settings.unifi_agent.host ?? '');
+        setAgentToken(settings.unifi_agent.access_token ?? '');
+        setAgentSkipTls(settings.unifi_agent.skip_tls_verify ?? true);
+        setAgentDiscoveredHost(settings.unifi_agent.auto_discovered_host ?? '');
+      }
     }
   }, [settings]);
 
@@ -333,6 +343,26 @@ export default function SettingsPage() {
       showToast(`UniFi connection mode updated to ${mode === 'agent' ? 'Local Agent' : 'Remote Direct'}.`, 'success');
     } catch {
       showToast('Failed to update UniFi connection mode.', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveAgentUniFi = async () => {
+    if (!orgId) return;
+    setSaving(true);
+    try {
+      await updateOrgSettings(orgId, {
+        unifi_agent: {
+          host: agentHost.trim(),
+          access_token: agentToken.trim(),
+          skip_tls_verify: agentSkipTls,
+          auto_discovered_host: agentDiscoveredHost,
+        },
+      });
+      showToast('UniFi Access credentials stored in cloud!', 'success');
+    } catch {
+      showToast('Failed to save UniFi credentials.', 'error');
     } finally {
       setSaving(false);
     }
@@ -615,6 +645,68 @@ export default function SettingsPage() {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              {/* UniFi Credentials in Cloud */}
+              <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+                <h4 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: '0.25rem' }}>
+                  🏢 UniFi Access Credentials
+                </h4>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginBottom: '1rem' }}>
+                  Store your UniFi Access API token securely in the cloud. The Docker agent will pull it automatically upon pairing.
+                </p>
+
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label className="form-label">UniFi Developer API Bearer Token <span style={{ color: 'var(--color-danger)' }}>*</span></label>
+                  <input
+                    type="password"
+                    className="form-input"
+                    placeholder="API Token generated in UniFi Access -> Settings -> Developer API"
+                    value={agentToken}
+                    onChange={(e) => setAgentToken(e.target.value)}
+                  />
+                  <span className="form-hint">Created inside your local UniFi Access app under Settings &gt; General &gt; Developer API.</span>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label className="form-label">UniFi Console Host URL (Optional)</label>
+                    {agentDiscoveredHost && (
+                      <span className="badge badge-success" style={{ fontSize: '0.75rem' }}>
+                        🟢 Discovered on LAN: {agentDiscoveredHost}
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="url"
+                    className="form-input"
+                    placeholder="https://192.168.1.1 (or leave blank to auto-discover)"
+                    value={agentHost}
+                    onChange={(e) => setAgentHost(e.target.value)}
+                  />
+                  <span className="form-hint">
+                    Leave blank to let the Docker container automatically scan your local network and discover the console.
+                  </span>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={agentSkipTls}
+                      onChange={(e) => setAgentSkipTls(e.target.checked)}
+                    />
+                    Skip TLS Certificate Validation (Recommended for local consoles using self-signed certs)
+                  </label>
+                </div>
+
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={handleSaveAgentUniFi}
+                  disabled={saving || !agentToken}
+                >
+                  {saving ? 'Saving...' : 'Save UniFi Credentials to Cloud'}
+                </button>
+              </div>
+
               {/* Token Generation Box */}
               <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
@@ -623,7 +715,7 @@ export default function SettingsPage() {
                       🔑 Agent Connection Token
                     </h4>
                     <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginTop: '0.25rem' }}>
-                      Pair your Local Agent Docker container directly to this church organization without needing Google Cloud keys.
+                      Pair your Local Agent Docker container to this church organization.
                     </p>
                   </div>
                   <button
@@ -652,32 +744,38 @@ export default function SettingsPage() {
                       </button>
                     </div>
                     <span className="form-hint" style={{ color: 'var(--color-success)', marginTop: '0.5rem', display: 'block' }}>
-                      ✓ Token ready! Paste this into the agent web portal at <strong>http://localhost:8080</strong>.
+                      ✓ Token ready! Pass this to the Docker container or paste into the local portal at <strong>http://localhost:8080</strong>.
                     </span>
                   </div>
                 ) : (
                   <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: '4px', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
-                    Click <strong>Generate Connection Token</strong> to create an instant setup token for your local machine.
+                    Save your UniFi API token above, then click <strong>Generate Connection Token</strong>.
                   </div>
                 )}
               </div>
 
-              {/* 3-Step Setup Instructions */}
+              {/* Setup Instructions */}
               <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
                 <h4 style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--color-text-primary)' }}>
-                  📖 3-Step Setup Instructions:
+                  📖 Docker Deployment Options:
                 </h4>
-                <ol style={{ paddingLeft: '1.25rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.8 }}>
-                  <li>
-                    <strong>Start Container:</strong> On the church local network machine, open the agent folder and run <code>START_AGENT.bat</code> (or <code>docker compose up -d</code>).
-                  </li>
-                  <li>
-                    <strong>Open Setup Portal:</strong> Open your browser to <a href="http://localhost:8080" target="_blank" rel="noreferrer" style={{ color: 'var(--color-accent)' }}><code>http://localhost:8080</code></a>.
-                  </li>
-                  <li>
-                    <strong>Paste Token:</strong> Paste your <strong>Connection Token</strong> into the portal, scan/set your local UniFi Console IP, and click <strong>Connect & Register</strong>.
-                  </li>
-                </ol>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                  <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
+                    <strong style={{ color: 'var(--color-text-primary)' }}>Option 1: Zero-Touch CLI (Recommended)</strong>
+                    <p style={{ margin: '0.25rem 0 0.5rem 0' }}>
+                      Run this single command on your on-premises machine. The container pairs automatically, pulls your UniFi token, auto-scans the LAN for the console if needed, and starts syncing:
+                    </p>
+                    <code style={{ display: 'block', background: 'var(--color-bg-base)', padding: '0.5rem', borderRadius: '4px', wordBreak: 'break-all' }}>
+                      docker run -d --name unifi-pco-agent --restart unless-stopped --network host -e CONNECTION_TOKEN={connectionToken || '&lt;YOUR_TOKEN&gt;'} unifi-pco-agent
+                    </code>
+                  </div>
+                  <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
+                    <strong style={{ color: 'var(--color-text-primary)' }}>Option 2: Interactive Web Portal</strong>
+                    <p style={{ margin: '0.25rem 0 0' }}>
+                      Start the container with <code>START_AGENT.bat</code> or <code>docker compose up -d</code>, then open <a href="http://localhost:8080" target="_blank" rel="noreferrer" style={{ color: 'var(--color-accent)' }}><code>http://localhost:8080</code></a> in your browser to paste your token or scan subnets interactively.
+                    </p>
+                  </div>
+                </div>
               </div>
 
               {/* Advanced: Manual Config */}

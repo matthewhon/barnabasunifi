@@ -130,6 +130,7 @@ interface AddMappingModalProps {
   sourceType: MappingSourceType;
   pcoResources: Array<PcoServiceType | PcoGroup>;
   doors: Door[];
+  pcoError?: string | null;
   onSave: (data: {
     pco_resource_id: string;
     pco_resource_label: string;
@@ -147,6 +148,7 @@ function AddMappingModal({
   sourceType,
   pcoResources,
   doors,
+  pcoError,
   onSave,
   saving,
 }: AddMappingModalProps) {
@@ -310,9 +312,13 @@ function AddMappingModal({
           <label className="form-label">
             {sourceType === 'service' ? 'Service Type' : 'Group'}
           </label>
-          {pcoResources.length === 0 ? (
+          {pcoError ? (
+            <p style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.875rem' }}>
+              Failed to load {sourceType === 'service' ? 'service types' : 'groups'}: {pcoError}
+            </p>
+          ) : pcoResources.length === 0 ? (
             <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-              No {sourceType === 'service' ? 'service types' : 'groups'} found. Ensure PCO is connected.
+              No {sourceType === 'service' ? 'service types' : 'groups'} found. Ensure PCO is connected in Settings.
             </p>
           ) : (
             <select
@@ -447,6 +453,7 @@ export default function MappingsPage() {
   const [doors, setDoors] = useState<Door[]>([]);
   const [pcoResources, setPcoResources] = useState<Array<PcoServiceType | PcoGroup>>([]);
   const [pcoLoading, setPcoLoading] = useState(false);
+  const [pcoError, setPcoError] = useState<string | null>(null);
   const [mappingsLoading, setMappingsLoading] = useState(true);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -475,20 +482,32 @@ export default function MappingsPage() {
     });
   }, [orgId]);
 
-  // Load PCO resources when tab changes
-  useEffect(() => {
+  // Load PCO resources when tab changes or orgId changes
+  const fetchPcoResources = useCallback(() => {
     if (!orgId) return;
     setPcoLoading(true);
+    setPcoError(null);
     const getPcoResources = httpsCallable<
       { orgId: string; type: MappingSourceType },
       { items?: Array<PcoServiceType | PcoGroup>; resources?: Array<PcoServiceType | PcoGroup> }
     >(functions, 'getPcoResources');
 
     getPcoResources({ orgId, type: tab })
-      .then((res) => setPcoResources(res.data.items ?? res.data.resources ?? []))
-      .catch(() => setPcoResources([]))
+      .then((res) => {
+        setPcoResources(res.data.items ?? res.data.resources ?? []);
+        setPcoError(null);
+      })
+      .catch((err: any) => {
+        console.error('Failed to load PCO resources:', err);
+        setPcoError(err?.message || 'Failed to load Planning Center resources.');
+        setPcoResources([]);
+      })
       .finally(() => setPcoLoading(false));
   }, [orgId, tab]);
+
+  useEffect(() => {
+    fetchPcoResources();
+  }, [fetchPcoResources]);
 
   const filteredMappings = mappings.filter((m) => m.source_type === tab);
 
@@ -609,6 +628,19 @@ export default function MappingsPage() {
                 <div key={i} className="skeleton" style={{ height: '2.25rem', borderRadius: 'var(--radius-md)' }} />
               ))}
             </div>
+          ) : pcoError ? (
+            <div style={{ padding: '1rem', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-md)' }}>
+              <p style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.8125rem', marginBottom: '0.75rem', fontWeight: 500 }}>
+                {pcoError}
+              </p>
+              <button
+                className="btn btn-secondary btn-sm"
+                style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
+                onClick={fetchPcoResources}
+              >
+                Retry
+              </button>
+            </div>
           ) : pcoResources.length === 0 ? (
             <div className="empty-state" style={{ padding: '1.5rem 0' }}>
               <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
@@ -700,6 +732,7 @@ export default function MappingsPage() {
         sourceType={tab}
         pcoResources={pcoResources}
         doors={doors}
+        pcoError={pcoError}
         onSave={handleSaveMapping}
         saving={saving}
       />

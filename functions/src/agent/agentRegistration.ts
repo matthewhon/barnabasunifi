@@ -147,7 +147,16 @@ export const registerAgentWithToken = onRequest({ cors: true }, async (req, res)
       return;
     }
 
-    // 3. Register or update the agent in Firestore
+    // 3. Read tenant UniFi configuration from Firestore
+    const configSnap = await db.doc(`organizations/${orgId}/settings/config`).get();
+    const configData = configSnap.exists ? configSnap.data() : null;
+    const unifiAgentConfig = configData?.unifi_agent || configData?.unifi_remote;
+
+    const effectiveUnifiHost = unifiHost || unifiAgentConfig?.host || unifiAgentConfig?.auto_discovered_host || '';
+    const unifiAccessToken = unifiAgentConfig?.access_token || '';
+    const skipTlsVerify = unifiAgentConfig?.skip_tls_verify ?? true;
+
+    // 4. Register or update the agent in Firestore
     const agentRef = db.doc(`agents/${agentId}`);
     await agentRef.set(
       {
@@ -157,27 +166,40 @@ export const registerAgentWithToken = onRequest({ cors: true }, async (req, res)
         status: 'online',
         registered_at: FieldValue.serverTimestamp(),
         last_heartbeat: FieldValue.serverTimestamp(),
-        unifi_host: unifiHost || '',
+        unifi_host: effectiveUnifiHost,
         capabilities: ['unlock', 'lock', 'door_sync'],
         token_id: tokenId,
       },
       { merge: true }
     );
 
-    // 4. Create an authorized custom token for the agent
+    // If agent reported a host and none was recorded or it was auto-discovered, update config
+    if (unifiHost && unifiAgentConfig) {
+      await db.doc(`organizations/${orgId}/settings/config`).set(
+        {
+          unifi_agent: {
+            ...unifiAgentConfig,
+            auto_discovered_host: unifiHost,
+          },
+        },
+        { merge: true }
+      );
+    }
+
+    // 5. Create an authorized custom token for the agent
     const auth = getAuth();
     const customToken = await auth.createCustomToken(`agent:${orgId}:${agentId}`, {
       agent: true,
       orgId,
     });
 
-    // 5. Audit log
+    // 6. Audit log
     await db.collection(`organizations/${orgId}/audit_log`).add({
       action: 'agent_registered',
       agent_id: agentId,
       label: label || 'Main Campus Agent',
       token_id: tokenId,
-      unifi_host: unifiHost || '',
+      unifi_host: effectiveUnifiHost,
       timestamp: FieldValue.serverTimestamp(),
     });
 
@@ -187,6 +209,9 @@ export const registerAgentWithToken = onRequest({ cors: true }, async (req, res)
       agentId,
       customToken,
       projectId: process.env.GCLOUD_PROJECT || 'barnabasunfi',
+      unifiHost: effectiveUnifiHost,
+      unifiAccessToken,
+      skipTlsVerify,
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: `Registration error: ${err.message}` });

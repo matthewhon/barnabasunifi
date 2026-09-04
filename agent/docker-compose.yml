@@ -9,8 +9,10 @@ services:
       - "8080:8080"
     environment:
       - PORT=8080
+      - CONNECTION_TOKEN=${CONNECTION_TOKEN:-}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./service-account.json:/app/service-account.json
       - ./.env:/app/.env

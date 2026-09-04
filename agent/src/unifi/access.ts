@@ -32,12 +32,318 @@ interface UnifiApiResponse<T> {
   msg?: string;
 }
 
-type LockRuleType = 'lock_early' | 'unlock_early' | 'custom' | 'schedule';
+export type LockRuleType = 'lock_early' | 'unlock_early' | 'custom' | 'schedule';
 
-interface LockRulePayload {
+export interface LockRulePayload {
   type: LockRuleType;
   /** Duration in minutes; only used when type === 'custom' */
   interval?: number;
+}
+
+export type DayOfWeek =
+  | 'monday'
+  | 'tuesday'
+  | 'wednesday'
+  | 'thursday'
+  | 'friday'
+  | 'saturday'
+  | 'sunday';
+
+export interface UnifiScheduleTimeSlot {
+  start_time: string; // "HH:MM" e.g. "08:00"
+  end_time: string;   // "HH:MM" e.g. "17:00"
+}
+
+export interface UnifiWeeklyScheduleDay {
+  day: DayOfWeek;
+  active: boolean;
+  slots: UnifiScheduleTimeSlot[];
+}
+
+export interface UnifiSchedule {
+  id: string;
+  org_id?: string;
+  unifi_schedule_id: string;
+  name: string;
+  type?: 'unlock' | 'access' | 'custom' | string;
+  is_default?: boolean;
+  weekly_schedule: UnifiWeeklyScheduleDay[];
+  door_ids?: string[];
+  door_labels?: string[];
+  holiday_group_id?: string;
+  raw_data?: Record<string, unknown>;
+  last_synced?: string;
+  sync_status?: 'synced' | 'pending' | 'error';
+  sync_error?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type VisitorStatus = 'active' | 'upcoming' | 'expired' | 'revoked' | 'pending';
+
+export interface UnifiVisitor {
+  id: string;
+  org_id?: string;
+  unifi_visitor_id?: string;
+  first_name: string;
+  last_name?: string;
+  full_name?: string;
+  mobile_phone?: string;
+  email?: string;
+  pin_code?: string;
+  start_time: string;
+  end_time: string;
+  door_ids: string[];
+  door_labels?: string[];
+  status?: VisitorStatus;
+  purpose?: string;
+  sync_status?: 'synced' | 'pending' | 'error';
+  sync_error?: string;
+  raw_data?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export function normalizeUnifiVisitor(raw: any, orgId = ''): UnifiVisitor {
+  const id = String(raw.id || raw.unique_id || raw._id || '');
+  const firstName = String(raw.first_name || raw.firstName || (raw.name ? String(raw.name).split(' ')[0] : 'Visitor'));
+  const lastName = String(raw.last_name || raw.lastName || (raw.name ? String(raw.name).split(' ').slice(1).join(' ') : ''));
+  const fullName = String(raw.full_name || raw.name || `${firstName} ${lastName}`.trim());
+
+  let startTimeIso = new Date().toISOString();
+  if (raw.start_time || raw.startTime) {
+    const val = raw.start_time || raw.startTime;
+    if (typeof val === 'number') {
+      startTimeIso = new Date(val > 10000000000 ? val : val * 1000).toISOString();
+    } else {
+      startTimeIso = new Date(val).toISOString();
+    }
+  }
+
+  let endTimeIso = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  if (raw.end_time || raw.endTime) {
+    const val = raw.end_time || raw.endTime;
+    if (typeof val === 'number') {
+      endTimeIso = new Date(val > 10000000000 ? val : val * 1000).toISOString();
+    } else {
+      endTimeIso = new Date(val).toISOString();
+    }
+  }
+
+  const doorIds: string[] = [];
+  const doorLabels: string[] = [];
+  if (Array.isArray(raw.doors || raw.door_ids || raw.device_ids)) {
+    for (const d of raw.doors || raw.door_ids || raw.device_ids) {
+      if (typeof d === 'string') {
+        doorIds.push(d);
+      } else if (d && typeof d === 'object') {
+        if (d.id || d.unique_id) doorIds.push(String(d.id || d.unique_id));
+        if (d.name || d.label) doorLabels.push(String(d.name || d.label));
+      }
+    }
+  }
+
+  // Derive status
+  const now = Date.now();
+  const startMs = new Date(startTimeIso).getTime();
+  const endMs = new Date(endTimeIso).getTime();
+  let status: VisitorStatus = 'active';
+  if (raw.status === 'canceled' || raw.status === 'revoked') {
+    status = 'revoked';
+  } else if (now < startMs) {
+    status = 'upcoming';
+  } else if (now >= endMs) {
+    status = 'expired';
+  }
+
+  return {
+    id,
+    org_id: orgId,
+    unifi_visitor_id: id,
+    first_name: firstName,
+    last_name: lastName,
+    full_name: fullName,
+    mobile_phone: raw.mobile_phone || raw.phone,
+    email: raw.email,
+    pin_code: raw.pin_code || raw.pin || raw.passcode,
+    start_time: startTimeIso,
+    end_time: endTimeIso,
+    door_ids: doorIds,
+    door_labels: doorLabels,
+    status,
+    purpose: raw.purpose || raw.note || raw.remarks,
+    raw_data: raw,
+    last_synced: new Date().toISOString(),
+    sync_status: 'synced',
+  } as any;
+}
+
+export function serializeUnifiVisitor(visitor: Partial<UnifiVisitor>): any {
+  const base: Record<string, any> = visitor.raw_data ? { ...visitor.raw_data } : {};
+
+  if (visitor.first_name) base.first_name = visitor.first_name;
+  if (visitor.last_name !== undefined) base.last_name = visitor.last_name;
+  if (visitor.mobile_phone !== undefined) base.mobile_phone = visitor.mobile_phone;
+  if (visitor.email !== undefined) base.email = visitor.email;
+  if (visitor.purpose !== undefined) base.purpose = visitor.purpose;
+
+  if (visitor.door_ids) {
+    base.doors = visitor.door_ids;
+    base.door_ids = visitor.door_ids;
+  }
+
+  if (visitor.start_time) {
+    const ms = new Date(visitor.start_time).getTime();
+    base.start_time = Math.floor(ms / 1000);
+    base.start_time_millis = ms;
+  }
+
+  if (visitor.end_time) {
+    const ms = new Date(visitor.end_time).getTime();
+    base.end_time = Math.floor(ms / 1000);
+    base.end_time_millis = ms;
+  }
+
+  if (visitor.pin_code) {
+    base.pin_code = String(visitor.pin_code);
+    base.pin = String(visitor.pin_code);
+  }
+
+  return base;
+}
+
+export const DAYS_OF_WEEK: DayOfWeek[] = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
+
+export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
+  const id = String(raw.id || raw.unique_id || raw._id || '');
+  const name = String(raw.name || raw.schedule_name || raw.alias || 'Schedule');
+  const type = raw.type || (raw.is_unlock ? 'unlock' : 'access');
+  const isDefault = Boolean(raw.is_default || raw.default);
+  const holidayGroupId = raw.holiday_group_id || raw.holiday_id;
+
+  const weeklySchedule: UnifiWeeklyScheduleDay[] = DAYS_OF_WEEK.map((day) => ({
+    day,
+    active: false,
+    slots: [],
+  }));
+
+  const rawWeekly = raw.weekly_schedule || raw.week_schedule || raw.schedule || raw.schedules;
+  if (Array.isArray(rawWeekly)) {
+    for (const item of rawWeekly) {
+      let targetDay: DayOfWeek | undefined;
+      if (typeof item.day === 'string') {
+        const d = item.day.toLowerCase() as DayOfWeek;
+        if (DAYS_OF_WEEK.includes(d)) targetDay = d;
+      } else if (typeof item.day_of_week === 'number') {
+        const idx = item.day_of_week === 0 ? 6 : item.day_of_week - 1;
+        targetDay = DAYS_OF_WEEK[idx] || DAYS_OF_WEEK[item.day_of_week];
+      }
+
+      if (targetDay) {
+        const dayEntry = weeklySchedule.find((w) => w.day === targetDay);
+        if (dayEntry) {
+          if (Array.isArray(item.slots) && item.slots.length > 0) {
+            dayEntry.active = item.active !== false;
+            dayEntry.slots = item.slots.map((s: any) => ({
+              start_time: String(s.start_time || s.start || '08:00'),
+              end_time: String(s.end_time || s.end || '17:00'),
+            }));
+          } else if (item.start_time || item.start) {
+            dayEntry.active = true;
+            dayEntry.slots.push({
+              start_time: String(item.start_time || item.start || '08:00'),
+              end_time: String(item.end_time || item.end || '17:00'),
+            });
+          }
+        }
+      }
+    }
+  } else if (rawWeekly && typeof rawWeekly === 'object') {
+    for (const day of DAYS_OF_WEEK) {
+      const dayData = rawWeekly[day] || rawWeekly[day.slice(0, 3)];
+      const dayEntry = weeklySchedule.find((w) => w.day === day);
+      if (dayEntry && dayData) {
+        if (Array.isArray(dayData) && dayData.length > 0) {
+          dayEntry.active = true;
+          dayEntry.slots = dayData.map((s: any) => ({
+            start_time: String(s.start_time || s.start || '08:00'),
+            end_time: String(s.end_time || s.end || '17:00'),
+          }));
+        } else if (typeof dayData === 'object' && (dayData.start_time || dayData.start)) {
+          dayEntry.active = true;
+          dayEntry.slots = [{
+            start_time: String(dayData.start_time || dayData.start || '08:00'),
+            end_time: String(dayData.end_time || dayData.end || '17:00'),
+          }];
+        }
+      }
+    }
+  }
+
+  const doorIds: string[] = [];
+  const doorLabels: string[] = [];
+  if (Array.isArray(raw.doors || raw.door_ids || raw.device_ids)) {
+    for (const d of raw.doors || raw.door_ids || raw.device_ids) {
+      if (typeof d === 'string') {
+        doorIds.push(d);
+      } else if (d && typeof d === 'object') {
+        if (d.id || d.unique_id) doorIds.push(String(d.id || d.unique_id));
+        if (d.name || d.label) doorLabels.push(String(d.name || d.label));
+      }
+    }
+  }
+
+  return {
+    id,
+    org_id: orgId,
+    unifi_schedule_id: id,
+    name,
+    type,
+    is_default: isDefault,
+    weekly_schedule: weeklySchedule,
+    door_ids: doorIds,
+    door_labels: doorLabels,
+    holiday_group_id: holidayGroupId,
+    raw_data: raw,
+    last_synced: new Date().toISOString(),
+    sync_status: 'synced',
+  };
+}
+
+export function serializeUnifiSchedule(schedule: Partial<UnifiSchedule>): any {
+  const base: Record<string, any> = schedule.raw_data ? { ...schedule.raw_data } : {};
+
+  if (schedule.name) base.name = schedule.name;
+  if (schedule.type) base.type = schedule.type;
+  if (schedule.holiday_group_id !== undefined) base.holiday_group_id = schedule.holiday_group_id;
+
+  if (schedule.weekly_schedule) {
+    base.weekly_schedule = schedule.weekly_schedule.map((dayObj, idx) => ({
+      day: dayObj.day,
+      day_of_week: idx + 1,
+      active: dayObj.active,
+      slots: dayObj.active ? dayObj.slots : [],
+    }));
+    const weekScheduleObj: Record<string, any[]> = {};
+    for (const d of schedule.weekly_schedule) {
+      weekScheduleObj[d.day] = d.active ? d.slots : [];
+    }
+    base.week_schedule = weekScheduleObj;
+  }
+
+  if (schedule.door_ids) {
+    base.door_ids = schedule.door_ids;
+  }
+
+  return base;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,7 +352,7 @@ interface LockRulePayload {
 
 export class UnifiAccessClient {
   private readonly http: AxiosInstance;
-  private readonly host: string;
+  private host: string;
   private doorToHubMap: Map<string, string> = new Map();
 
   /**
@@ -96,6 +402,16 @@ export class UnifiAccessClient {
         return Promise.reject(error);
       }
     );
+  }
+
+  /**
+   * Dynamically update host and token (e.g. after cloud config pull or token rotation).
+   */
+  updateCredentials(host: string, token: string): void {
+    this.host = host.replace(/\/$/, '');
+    this.http.defaults.baseURL = this.host;
+    this.http.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    this.http.defaults.headers.common['X-API-KEY'] = token;
   }
 
   // ---------------------------------------------------------------------------
@@ -250,5 +566,378 @@ export class UnifiAccessClient {
       );
       return false;
     }
+  }
+
+  /**
+   * Fetch all schedules from UniFi Access.
+   * Tries Developer v1 -> Integration v1 -> Access v2.
+   */
+  async getSchedules(): Promise<UnifiSchedule[]> {
+    // 1. Try Developer API v1
+    try {
+      const res = await this.http.get<UnifiApiResponse<any[]>>('/api/v1/developer/schedules');
+      if (Array.isArray(res.data?.data)) {
+        return res.data.data.map((item) => normalizeUnifiSchedule(item));
+      }
+    } catch {
+      // Fall through
+    }
+
+    // 2. Try Integration v1 via proxy
+    try {
+      const res = await this.http.get<UnifiApiResponse<any[]>>(
+        '/proxy/access/integration/v1/developer/schedules'
+      );
+      if (Array.isArray(res.data?.data)) {
+        return res.data.data.map((item) => normalizeUnifiSchedule(item));
+      }
+    } catch {
+      // Fall through
+    }
+
+    // 3. Try UniFi Access v2 API
+    try {
+      const res = await this.http.get<{
+        code: number;
+        data: any[];
+      }>('/proxy/access/api/v2/schedules');
+      if (Array.isArray(res.data?.data)) {
+        return res.data.data.map((item) => normalizeUnifiSchedule(item));
+      }
+    } catch (err) {
+      logger.warn(`UniFi getSchedules failed on all endpoints: ${err}`);
+      throw err;
+    }
+
+    return [];
+  }
+
+  /**
+   * Get a single schedule by ID.
+   */
+  async getSchedule(scheduleId: string): Promise<UnifiSchedule> {
+    try {
+      const res = await this.http.get<UnifiApiResponse<any>>(
+        `/api/v1/developer/schedules/${encodeURIComponent(scheduleId)}`
+      );
+      if (res.data?.data) return normalizeUnifiSchedule(res.data.data);
+    } catch {
+      // Fall through
+    }
+
+    try {
+      const res = await this.http.get<UnifiApiResponse<any>>(
+        `/proxy/access/integration/v1/developer/schedules/${encodeURIComponent(scheduleId)}`
+      );
+      if (res.data?.data) return normalizeUnifiSchedule(res.data.data);
+    } catch {
+      // Fall through
+    }
+
+    const res = await this.http.get<{ code: number; data: any }>(
+      `/proxy/access/api/v2/schedule/${encodeURIComponent(scheduleId)}`
+    );
+    if (res.data?.data) return normalizeUnifiSchedule(res.data.data);
+    throw new Error(`Schedule ${scheduleId} not found in UniFi Access.`);
+  }
+
+  /**
+   * Create a new schedule in UniFi Access.
+   */
+  async createSchedule(schedule: Partial<UnifiSchedule>): Promise<UnifiSchedule> {
+    const payload = serializeUnifiSchedule(schedule);
+
+    try {
+      const res = await this.http.post<UnifiApiResponse<any>>(
+        '/api/v1/developer/schedules',
+        payload
+      );
+      if (res.data?.data) {
+        logger.info(`UniFi schedule created via Developer API: ${res.data.data.id || schedule.name}`);
+        return normalizeUnifiSchedule(res.data.data);
+      }
+    } catch {
+      // Fall through
+    }
+
+    try {
+      const res = await this.http.post<UnifiApiResponse<any>>(
+        '/proxy/access/integration/v1/developer/schedules',
+        payload
+      );
+      if (res.data?.data) {
+        logger.info(`UniFi schedule created via Integration API: ${res.data.data.id || schedule.name}`);
+        return normalizeUnifiSchedule(res.data.data);
+      }
+    } catch {
+      // Fall through
+    }
+
+    const res = await this.http.post<{ code: number; data: any }>(
+      '/proxy/access/api/v2/schedules',
+      payload
+    );
+    logger.info(`UniFi schedule created via v2 API: ${res.data?.data?.id || schedule.name}`);
+    return normalizeUnifiSchedule(res.data?.data ?? payload);
+  }
+
+  /**
+   * Update an existing schedule in UniFi Access.
+   */
+  async updateSchedule(scheduleId: string, updates: Partial<UnifiSchedule>): Promise<UnifiSchedule> {
+    const payload = serializeUnifiSchedule(updates);
+
+    try {
+      const res = await this.http.put<UnifiApiResponse<any>>(
+        `/api/v1/developer/schedules/${encodeURIComponent(scheduleId)}`,
+        payload
+      );
+      if (res.data?.data) {
+        logger.info(`UniFi schedule ${scheduleId} updated via Developer API.`);
+        return normalizeUnifiSchedule(res.data.data);
+      }
+      return normalizeUnifiSchedule({ id: scheduleId, ...payload });
+    } catch {
+      // Fall through
+    }
+
+    try {
+      const res = await this.http.put<UnifiApiResponse<any>>(
+        `/proxy/access/integration/v1/developer/schedules/${encodeURIComponent(scheduleId)}`,
+        payload
+      );
+      if (res.data?.data) {
+        logger.info(`UniFi schedule ${scheduleId} updated via Integration API.`);
+        return normalizeUnifiSchedule(res.data.data);
+      }
+      return normalizeUnifiSchedule({ id: scheduleId, ...payload });
+    } catch {
+      // Fall through
+    }
+
+    const res = await this.http.put<{ code: number; data: any }>(
+      `/proxy/access/api/v2/schedule/${encodeURIComponent(scheduleId)}`,
+      payload
+    );
+    logger.info(`UniFi schedule ${scheduleId} updated via v2 API.`);
+    return normalizeUnifiSchedule(res.data?.data ?? { id: scheduleId, ...payload });
+  }
+
+  /**
+   * Delete a schedule from UniFi Access.
+   */
+  async deleteSchedule(scheduleId: string): Promise<void> {
+    try {
+      await this.http.delete(
+        `/api/v1/developer/schedules/${encodeURIComponent(scheduleId)}`
+      );
+      logger.info(`UniFi schedule ${scheduleId} deleted via Developer API.`);
+      return;
+    } catch {
+      // Fall through
+    }
+
+    try {
+      await this.http.delete(
+        `/proxy/access/integration/v1/developer/schedules/${encodeURIComponent(scheduleId)}`
+      );
+      logger.info(`UniFi schedule ${scheduleId} deleted via Integration API.`);
+      return;
+    } catch {
+      // Fall through
+    }
+
+    await this.http.delete(
+      `/proxy/access/api/v2/schedule/${encodeURIComponent(scheduleId)}`
+    );
+    logger.info(`UniFi schedule ${scheduleId} deleted via v2 API.`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Visitor Management
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch all visitors from UniFi Access.
+   */
+  async getVisitors(): Promise<UnifiVisitor[]> {
+    // 1. Try Developer API v1
+    try {
+      const res = await this.http.get<UnifiApiResponse<any[]>>('/api/v1/developer/visitors');
+      if (Array.isArray(res.data?.data)) {
+        return res.data.data.map((item) => normalizeUnifiVisitor(item));
+      }
+    } catch {
+      // Fall through
+    }
+
+    // 2. Try Integration v1 via proxy
+    try {
+      const res = await this.http.get<UnifiApiResponse<any[]>>(
+        '/proxy/access/integration/v1/developer/visitors'
+      );
+      if (Array.isArray(res.data?.data)) {
+        return res.data.data.map((item) => normalizeUnifiVisitor(item));
+      }
+    } catch {
+      // Fall through
+    }
+
+    // 3. Try UniFi Access v2 API
+    try {
+      const res = await this.http.get<{
+        code: number;
+        data: any[];
+      }>('/proxy/access/api/v2/visitors');
+      if (Array.isArray(res.data?.data)) {
+        return res.data.data.map((item) => normalizeUnifiVisitor(item));
+      }
+    } catch (err) {
+      logger.warn(`UniFi getVisitors failed on all endpoints: ${err}`);
+      throw err;
+    }
+
+    return [];
+  }
+
+  /**
+   * Get a single visitor by ID.
+   */
+  async getVisitor(visitorId: string): Promise<UnifiVisitor> {
+    try {
+      const res = await this.http.get<UnifiApiResponse<any>>(
+        `/api/v1/developer/visitors/${encodeURIComponent(visitorId)}`
+      );
+      if (res.data?.data) return normalizeUnifiVisitor(res.data.data);
+    } catch {
+      // Fall through
+    }
+
+    try {
+      const res = await this.http.get<UnifiApiResponse<any>>(
+        `/proxy/access/integration/v1/developer/visitors/${encodeURIComponent(visitorId)}`
+      );
+      if (res.data?.data) return normalizeUnifiVisitor(res.data.data);
+    } catch {
+      // Fall through
+    }
+
+    const res = await this.http.get<{ code: number; data: any }>(
+      `/proxy/access/api/v2/visitor/${encodeURIComponent(visitorId)}`
+    );
+    if (res.data?.data) return normalizeUnifiVisitor(res.data.data);
+    throw new Error(`Visitor ${visitorId} not found in UniFi Access.`);
+  }
+
+  /**
+   * Create a new visitor in UniFi Access.
+   */
+  async createVisitor(visitor: Partial<UnifiVisitor>): Promise<UnifiVisitor> {
+    const payload = serializeUnifiVisitor(visitor);
+
+    try {
+      const res = await this.http.post<UnifiApiResponse<any>>(
+        '/api/v1/developer/visitors',
+        payload
+      );
+      if (res.data?.data) {
+        logger.info(`UniFi visitor created via Developer API: ${res.data.data.id || visitor.first_name}`);
+        return normalizeUnifiVisitor(res.data.data);
+      }
+    } catch {
+      // Fall through
+    }
+
+    try {
+      const res = await this.http.post<UnifiApiResponse<any>>(
+        '/proxy/access/integration/v1/developer/visitors',
+        payload
+      );
+      if (res.data?.data) {
+        logger.info(`UniFi visitor created via Integration API: ${res.data.data.id || visitor.first_name}`);
+        return normalizeUnifiVisitor(res.data.data);
+      }
+    } catch {
+      // Fall through
+    }
+
+    const res = await this.http.post<{ code: number; data: any }>(
+      '/proxy/access/api/v2/visitors',
+      payload
+    );
+    logger.info(`UniFi visitor created via v2 API: ${res.data?.data?.id || visitor.first_name}`);
+    return normalizeUnifiVisitor(res.data?.data ?? payload);
+  }
+
+  /**
+   * Update an existing visitor in UniFi Access.
+   */
+  async updateVisitor(visitorId: string, updates: Partial<UnifiVisitor>): Promise<UnifiVisitor> {
+    const payload = serializeUnifiVisitor(updates);
+
+    try {
+      const res = await this.http.put<UnifiApiResponse<any>>(
+        `/api/v1/developer/visitors/${encodeURIComponent(visitorId)}`,
+        payload
+      );
+      if (res.data?.data) {
+        logger.info(`UniFi visitor ${visitorId} updated via Developer API.`);
+        return normalizeUnifiVisitor(res.data.data);
+      }
+      return normalizeUnifiVisitor({ id: visitorId, ...payload });
+    } catch {
+      // Fall through
+    }
+
+    try {
+      const res = await this.http.put<UnifiApiResponse<any>>(
+        `/proxy/access/integration/v1/developer/visitors/${encodeURIComponent(visitorId)}`,
+        payload
+      );
+      if (res.data?.data) {
+        logger.info(`UniFi visitor ${visitorId} updated via Integration API.`);
+        return normalizeUnifiVisitor(res.data.data);
+      }
+      return normalizeUnifiVisitor({ id: visitorId, ...payload });
+    } catch {
+      // Fall through
+    }
+
+    const res = await this.http.put<{ code: number; data: any }>(
+      `/proxy/access/api/v2/visitor/${encodeURIComponent(visitorId)}`,
+      payload
+    );
+    logger.info(`UniFi visitor ${visitorId} updated via v2 API.`);
+    return normalizeUnifiVisitor(res.data?.data ?? { id: visitorId, ...payload });
+  }
+
+  /**
+   * Delete or revoke a visitor from UniFi Access.
+   */
+  async deleteVisitor(visitorId: string): Promise<void> {
+    try {
+      await this.http.delete(
+        `/api/v1/developer/visitors/${encodeURIComponent(visitorId)}`
+      );
+      logger.info(`UniFi visitor ${visitorId} deleted via Developer API.`);
+      return;
+    } catch {
+      // Fall through
+    }
+
+    try {
+      await this.http.delete(
+        `/proxy/access/integration/v1/developer/visitors/${encodeURIComponent(visitorId)}`
+      );
+      logger.info(`UniFi visitor ${visitorId} deleted via Integration API.`);
+      return;
+    } catch {
+      // Fall through
+    }
+
+    await this.http.delete(
+      `/proxy/access/api/v2/visitor/${encodeURIComponent(visitorId)}`
+    );
+    logger.info(`UniFi visitor ${visitorId} deleted via v2 API.`);
   }
 }

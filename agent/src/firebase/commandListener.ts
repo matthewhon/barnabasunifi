@@ -14,6 +14,7 @@ import { UnifiAccessClient } from '../unifi/access';
 import { logger } from '../logger';
 
 import { syncSchedules } from './scheduleSync';
+import { syncVisitors } from './visitorSync';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,7 +26,11 @@ export type CommandAction =
   | 'sync_schedules'
   | 'update_schedule'
   | 'create_schedule'
-  | 'delete_schedule';
+  | 'delete_schedule'
+  | 'sync_visitors'
+  | 'create_visitor'
+  | 'update_visitor'
+  | 'delete_visitor';
 
 export type CommandStatus =
   | 'queued'
@@ -42,6 +47,8 @@ export interface DoorCommand {
   unifi_door_id?: string;
   schedule_id?: string;
   schedule_data?: Record<string, unknown>;
+  visitor_id?: string;
+  visitor_data?: Record<string, unknown>;
   status: CommandStatus;
   execute_at: FirebaseFirestore.Timestamp | string | Date;
   duration_min?: number;
@@ -87,16 +94,38 @@ async function writeAuditLog(
 ): Promise<void> {
   try {
     const isManual = command.triggered_by === 'manual' || !command.schedule_window_id;
-    const action = command.action === 'unlock'
-      ? (isManual ? 'manual_unlock' : 'unlock')
-      : (isManual ? 'manual_lock' : 'lock');
+    let action: string;
+    if (command.action === 'unlock') {
+      action = isManual ? 'manual_unlock' : 'unlock';
+    } else if (command.action === 'lock') {
+      action = isManual ? 'manual_lock' : 'lock';
+    } else if (command.action === 'sync_schedules') {
+      action = 'schedule_synced';
+    } else if (command.action === 'update_schedule') {
+      action = 'schedule_updated';
+    } else if (command.action === 'create_schedule') {
+      action = 'schedule_created';
+    } else if (command.action === 'delete_schedule') {
+      action = 'schedule_deleted';
+    } else if (command.action === 'sync_visitors') {
+      action = 'visitor_synced';
+    } else if (command.action === 'create_visitor') {
+      action = 'visitor_created';
+    } else if (command.action === 'update_visitor') {
+      action = 'visitor_updated';
+    } else if (command.action === 'delete_visitor') {
+      action = 'visitor_deleted';
+    } else {
+      action = command.action;
+    }
 
     await db.collection(`organizations/${orgId}/audit_log`).add({
       command_id: command.id,
       action,
-      door_id: command.door_id,
+      door_id: command.door_id ?? null,
       door_label: command.door_label ?? null,
-      unifi_door_id: command.unifi_door_id,
+      unifi_door_id: command.unifi_door_id ?? null,
+      schedule_id: command.schedule_id ?? null,
       status,
       result: status === 'done' ? 'success' : 'error',
       result_message: resultMessage,
@@ -118,7 +147,7 @@ async function updateScheduleWindow(
   db: FirebaseFirestore.Firestore,
   orgId: string,
   windowId: string,
-  action: DoorAction,
+  action: CommandAction,
   status: CommandStatus
 ): Promise<void> {
   try {
@@ -194,14 +223,18 @@ export function startCommandListener(
         return;
       }
 
-      const unifiDoorId = (rawData.unifi_door_id || rawData.door_id) as string;
+      const unifiDoorId = (rawData.unifi_door_id || rawData.door_id) as string | undefined;
 
       command = {
         id: commandId,
-        action: rawData.action as DoorAction,
-        door_id: rawData.door_id as string,
+        action: rawData.action as CommandAction,
+        door_id: rawData.door_id as string | undefined,
         door_label: rawData.door_label as string | undefined,
         unifi_door_id: unifiDoorId,
+        schedule_id: rawData.schedule_id as string | undefined,
+        schedule_data: rawData.schedule_data as Record<string, unknown> | undefined,
+        visitor_id: rawData.visitor_id as string | undefined,
+        visitor_data: rawData.visitor_data as Record<string, unknown> | undefined,
         status: 'executing',
         execute_at: rawData.execute_at,
         duration_min: rawData.duration_min as number | undefined,
@@ -213,7 +246,11 @@ export function startCommandListener(
       };
 
       logger.info(
-        `[CommandListener] Claimed command ${commandId}: ${command.action} door ${command.unifi_door_id}`
+        `[CommandListener] Claimed command ${commandId}: ${command.action}${
+          command.unifi_door_id ? ` door ${command.unifi_door_id}` : ''
+        }${command.schedule_id ? ` schedule ${command.schedule_id}` : ''}${
+          command.visitor_id ? ` visitor ${command.visitor_id}` : ''
+        }`
       );
     } catch (err) {
       logger.error(
@@ -228,14 +265,107 @@ export function startCommandListener(
 
     try {
       if (command.action === 'unlock') {
+        if (!command.unifi_door_id) throw new Error('Missing unifi_door_id for unlock action');
         const durationMin = command.duration_min ?? 60;
         await unifiClient.unlockDoor(command.unifi_door_id, durationMin);
         resultMessage = `Door unlocked for ${durationMin} minute(s).`;
       } else if (command.action === 'lock') {
+        if (!command.unifi_door_id) throw new Error('Missing unifi_door_id for lock action');
         await unifiClient.lockDoor(command.unifi_door_id);
         resultMessage = 'Door locked successfully.';
+      } else if (command.action === 'sync_schedules') {
+        const synced = await syncSchedules(orgId, unifiClient);
+        resultMessage = `Synced ${synced.length} schedule(s) from UniFi Access.`;
+      } else if (command.action === 'update_schedule') {
+        if (!command.schedule_id) throw new Error('Missing schedule_id for update_schedule');
+        const updated = await unifiClient.updateSchedule(
+          command.schedule_id,
+          command.schedule_data || {}
+        );
+        await db.doc(`organizations/${orgId}/unifi_schedules/${command.schedule_id}`).set(
+          {
+            ...updated,
+            org_id: orgId,
+            last_synced: nowTimestamp(),
+            sync_status: 'synced',
+            sync_error: null,
+            updated_at: nowTimestamp(),
+          },
+          { merge: true }
+        );
+        resultMessage = `Schedule ${command.schedule_id} updated successfully.`;
+      } else if (command.action === 'create_schedule') {
+        const created = await unifiClient.createSchedule(command.schedule_data || {});
+        await db.doc(`organizations/${orgId}/unifi_schedules/${created.id}`).set(
+          {
+            ...created,
+            org_id: orgId,
+            last_synced: nowTimestamp(),
+            sync_status: 'synced',
+            sync_error: null,
+            updated_at: nowTimestamp(),
+          },
+          { merge: true }
+        );
+        resultMessage = `Schedule ${created.id} created successfully.`;
+      } else if (command.action === 'delete_schedule') {
+        if (!command.schedule_id) throw new Error('Missing schedule_id for delete_schedule');
+        await unifiClient.deleteSchedule(command.schedule_id);
+        await db.doc(`organizations/${orgId}/unifi_schedules/${command.schedule_id}`).delete();
+        resultMessage = `Schedule ${command.schedule_id} deleted successfully.`;
+      } else if (command.action === 'sync_visitors') {
+        const synced = await syncVisitors(orgId, unifiClient);
+        resultMessage = `Synced ${synced.length} visitor(s) from UniFi Access.`;
+      } else if (command.action === 'create_visitor') {
+        const created = await unifiClient.createVisitor(command.visitor_data || {});
+        const targetVisitorId = command.visitor_id || created.id;
+        await db.doc(`organizations/${orgId}/visitors/${targetVisitorId}`).set(
+          {
+            ...created,
+            id: targetVisitorId,
+            org_id: orgId,
+            unifi_visitor_id: created.id,
+            last_synced: nowTimestamp(),
+            sync_status: 'synced',
+            sync_error: null,
+            updated_at: nowTimestamp(),
+          },
+          { merge: true }
+        );
+        resultMessage = `Visitor ${created.full_name || created.first_name || targetVisitorId} created successfully.`;
+      } else if (command.action === 'update_visitor') {
+        if (!command.visitor_id) throw new Error('Missing visitor_id for update_visitor');
+        const unifiVisitorId = (command.visitor_data?.unifi_visitor_id as string) || command.visitor_id;
+        const updated = await unifiClient.updateVisitor(unifiVisitorId, command.visitor_data || {});
+        await db.doc(`organizations/${orgId}/visitors/${command.visitor_id}`).set(
+          {
+            ...updated,
+            id: command.visitor_id,
+            unifi_visitor_id: unifiVisitorId,
+            org_id: orgId,
+            last_synced: nowTimestamp(),
+            sync_status: 'synced',
+            sync_error: null,
+            updated_at: nowTimestamp(),
+          },
+          { merge: true }
+        );
+        resultMessage = `Visitor ${command.visitor_id} updated successfully.`;
+      } else if (command.action === 'delete_visitor') {
+        if (!command.visitor_id) throw new Error('Missing visitor_id for delete_visitor');
+        const unifiVisitorId = (command.visitor_data?.unifi_visitor_id as string) || command.visitor_id;
+        await unifiClient.deleteVisitor(unifiVisitorId);
+        await db.doc(`organizations/${orgId}/visitors/${command.visitor_id}`).set(
+          {
+            status: 'revoked',
+            sync_status: 'synced',
+            updated_at: nowTimestamp(),
+          },
+          { merge: true }
+        );
+        resultMessage = `Visitor ${command.visitor_id} revoked successfully.`;
       } else {
-        throw new Error(`Unknown action: ${String((command as DoorCommand).action)}`);
+        throw new Error(`Unknown action: ${String((command as any).action)}`);
       }
 
       logger.info(

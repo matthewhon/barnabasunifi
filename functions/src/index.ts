@@ -15,3 +15,5 @@ export { updatePlatformConfig, getPlatformConfigCallable } from './admin/platfor
 export { getPlatformOverview, adminDeleteUser, adminDeleteTenant } from './admin/platformAdmin';
 export { testPcoConnection, testUnifiConnection } from './config/testConnections';
 export { generateAgentToken, registerAgentWithToken } from './agent/agentRegistration';
+export { syncUnifiSchedules, saveUnifiSchedule, deleteUnifiSchedule } from './unifi/schedules';
+export { syncUnifiVisitors, saveUnifiVisitor, deleteUnifiVisitor } from './unifi/visitors';

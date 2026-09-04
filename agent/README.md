@@ -39,22 +39,59 @@ The agent:
 
 ---
 
-## Setup Steps
+## Quick Setup (Zero-Touch Cloud Pairing — Recommended)
 
-### 1. Download the agent
+With the UnFi-PCO cloud dashboard, there is no need to manually copy service account JSON keys or configure local `.env` files.
 
-Clone this repository or download the `agent/` folder to the machine that will run the agent (any always-on device on the same LAN as the UniFi console — a Raspberry Pi, NUC, or server works well).
+### 1. Configure UniFi in the Web Dashboard
+1. Go to your dashboard: **Settings → UniFi Controller Connection**.
+2. Select **Option A: On-Premises Local Agent**.
+3. Paste your **UniFi Access Developer API Token**.
+4. *(Optional)* Enter your local UniFi Console IP (e.g. `https://192.168.1.1`). If left blank, the Docker container will automatically scan your local network to find it.
+5. Click **Save UniFi Credentials to Cloud**, then click **Generate Connection Token**.
 
-### 2. Copy the example environment file
+### 2. Run the Docker Container
+On any machine on your church's local network (server, mini-PC, or Raspberry Pi), run:
 
+```bash
+docker run -d \
+  --name unifi-pco-agent \
+  --restart unless-stopped \
+  --network host \
+  -e CONNECTION_TOKEN=UPCO_ey... \
+  unifi-pco-agent
+```
+
+*(Replace `UPCO_ey...` with your token copied from the dashboard.)*
+
+The container will automatically:
+1. Contact the cloud pairing endpoint and authenticate with your organization.
+2. Pull down your UniFi Access token.
+3. Auto-discover the UniFi console on the local network (if host was left blank or changed).
+4. Synchronize your doors with Firestore and begin listening for unlock/lock schedules!
+
+---
+
+## Alternative: Interactive Web Portal
+
+If you prefer to configure the agent via a browser on the local machine:
+
+1. Run `START_AGENT.bat` (Windows) or `docker compose up -d`.
+2. Open your browser to **`http://localhost:8080`**.
+3. Paste your **Connection Token**, click **Scan Subnet** (or enter your console IP), and click **Connect & Register**.
+
+---
+
+## Alternative: Manual Environment File Setup (.env)
+
+If running in an isolated environment without connection tokens:
+
+### 1. Copy the example environment file
 ```bash
 cp .env.example .env
 ```
 
-### 3. Fill in `.env`
-
-Open `.env` in a text editor and set the required values:
-
+### 2. Fill in `.env`
 ```env
 # IP or hostname of your UniFi console (include https://)
 UNIFI_HOST=https://192.168.1.1
@@ -65,32 +102,13 @@ UNIFI_ACCESS_TOKEN=your-token-here
 # Firebase project — do not change
 FIREBASE_PROJECT_ID=barnabasunfi
 
-# Org ID and Agent ID — copy these from the app Settings > Agent page
+# Org ID and Agent ID
 ORG_ID=your-org-id
 AGENT_ID=agent-main-campus
-
-# Human-readable label shown in the dashboard
 AGENT_LABEL=Main Campus Agent
 ```
 
-### 4. Place your Firebase service account
-
-Copy the `service-account.json` file (downloaded from the app **Settings → Agent** page) into this directory:
-
-```
-agent/
-  service-account.json   ← place it here
-  .env
-  docker-compose.yml
-  ...
-```
-
-> [!CAUTION]
-> Never commit `service-account.json` or `.env` to version control.
-> Add both to your `.gitignore`.
-
-### 5. Start the agent
-
+### 3. Start the agent
 ```bash
 docker compose up -d
 ```

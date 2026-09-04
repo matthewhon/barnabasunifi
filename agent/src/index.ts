@@ -10,14 +10,18 @@
 
 import 'dotenv/config';
 
-import { getConfigurationStatus } from './config';
+import { getConfigurationStatus, saveConfig } from './config';
 import { logger, setLogLevel } from './logger';
 import { initializeFirebase, getDb } from './firebase';
 import { UnifiAccessClient } from './unifi/access';
 import { startHeartbeat } from './firebase/heartbeat';
 import { syncDoors, startDoorSyncInterval } from './firebase/doorSync';
+import { syncSchedules, startScheduleSyncInterval } from './firebase/scheduleSync';
+import { syncVisitors, startVisitorSyncInterval } from './firebase/visitorSync';
 import { startCommandListener } from './firebase/commandListener';
 import { startWebServer, AgentBridgeState } from './web/server';
+import { autoDiscoverUnifiConsole } from './web/scanner';
+import axios from 'axios';
 import * as admin from 'firebase-admin';
 
 // ---------------------------------------------------------------------------
@@ -38,6 +42,55 @@ const bridgeState: AgentBridgeState = {
   },
 };
 
+/**
+ * Automatically exchange CONNECTION_TOKEN with Cloud Functions to configure the agent.
+ */
+async function attemptAutoRegistration(connectionToken: string): Promise<boolean> {
+  try {
+    const base64Str = connectionToken.replace(/^UPCO_/, '').trim();
+    const raw = Buffer.from(base64Str, 'base64').toString('utf-8');
+    const parsed = JSON.parse(raw);
+    const endpoint =
+      parsed.endpoint ||
+      `https://us-central1-${parsed.projectId || 'barnabasunfi'}.cloudfunctions.net/registerAgentWithToken`;
+
+    logger.info(`[AutoRegister] Discovered CONNECTION_TOKEN. Contacting pairing endpoint: ${endpoint}…`);
+
+    const response = await axios.post(
+      endpoint,
+      {
+        token: connectionToken,
+        agentId: process.env.AGENT_ID || 'agent-main-campus',
+        label: process.env.AGENT_LABEL || 'Main Campus Agent',
+        unifiHost: process.env.UNIFI_HOST || '',
+        version: process.env.npm_package_version || '1.0.0',
+      },
+      { timeout: 15000 }
+    );
+
+    if (response.data?.ok) {
+      const { orgId, customToken, projectId, unifiHost, unifiAccessToken, skipTlsVerify } = response.data;
+      logger.info(`[AutoRegister] ✓ Paired successfully with Organization: ${orgId}`);
+
+      saveConfig({
+        ORG_ID: orgId,
+        FIREBASE_PROJECT_ID: projectId || 'barnabasunfi',
+        AGENT_AUTH_TOKEN: customToken,
+        ...(unifiHost ? { UNIFI_HOST: unifiHost } : {}),
+        ...(unifiAccessToken ? { UNIFI_ACCESS_TOKEN: unifiAccessToken } : {}),
+        ...(skipTlsVerify !== undefined ? { SKIP_TLS_VERIFY: String(skipTlsVerify) } : {}),
+      });
+      return true;
+    } else {
+      logger.warn(`[AutoRegister] Pairing failed: ${response.data?.error || 'Unknown error'}`);
+    }
+  } catch (err: any) {
+    const msg = err.response?.data?.error || err.message;
+    logger.warn(`[AutoRegister] Pairing handshake error: ${msg}`);
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Worker Launcher
 // ---------------------------------------------------------------------------
@@ -53,7 +106,31 @@ async function startBridgeWorker(): Promise<void> {
     cleanupPreviousWorker = null;
   }
 
-  const configStatus = getConfigurationStatus();
+  let configStatus = getConfigurationStatus();
+
+  // 1. If not yet fully configured but Connection Token is present, attempt auto-pairing handshake
+  if (!configStatus.isConfigured && configStatus.canAutoRegister) {
+    const token = process.env.CONNECTION_TOKEN || configStatus.config?.connectionToken;
+    if (token) {
+      await attemptAutoRegistration(token);
+      configStatus = getConfigurationStatus();
+    }
+  }
+
+  // 2. If token is present but host is missing, auto-scan local subnets to discover console
+  if (
+    !configStatus.isConfigured &&
+    process.env.UNIFI_ACCESS_TOKEN &&
+    (!process.env.UNIFI_HOST || configStatus.missing.some((m) => m.startsWith('UNIFI_HOST')))
+  ) {
+    logger.info('[Bridge] UniFi Host URL not set. Scanning local network for UniFi Access console…');
+    const discovered = await autoDiscoverUnifiConsole(process.env.UNIFI_ACCESS_TOKEN);
+    if (discovered) {
+      logger.info(`[Bridge] Discovered UniFi Access console on LAN at: ${discovered}`);
+      saveConfig({ UNIFI_HOST: discovered });
+      configStatus = getConfigurationStatus();
+    }
+  }
 
   if (!configStatus.isConfigured || !configStatus.config) {
     bridgeState.status = 'unconfigured';
@@ -75,7 +152,7 @@ async function startBridgeWorker(): Promise<void> {
   logger.info(`  Version : ${config.version}`);
   logger.info(`  Org     : ${config.orgId}`);
   logger.info(`  Agent   : ${config.agentId} (${config.agentLabel})`);
-  logger.info(`  UniFi   : ${config.unifiHost}`);
+  logger.info(`  UniFi   : ${config.unifiHost || '(Scanning network...)'}`);
   logger.info('═══════════════════════════════════════════════');
 
   bridgeState.status = 'starting';
@@ -101,10 +178,22 @@ async function startBridgeWorker(): Promise<void> {
     config.skipTlsVerify
   );
 
-  // 3. Test UniFi connectivity
+  // 3. Test UniFi connectivity with auto-discovery fallback
   logger.info('Testing UniFi Access connection…');
   try {
-    const connected = await unifiClient.testConnection();
+    let connected = await unifiClient.testConnection();
+    if (!connected) {
+      logger.warn(`[Bridge] Could not connect to configured host (${config.unifiHost}). Scanning LAN for active console…`);
+      const discovered = await autoDiscoverUnifiConsole(config.unifiAccessToken);
+      if (discovered && discovered !== config.unifiHost) {
+        logger.info(`[Bridge] Discovered active console on LAN at: ${discovered}. Connecting…`);
+        config.unifiHost = discovered;
+        saveConfig({ UNIFI_HOST: discovered });
+        unifiClient.updateCredentials(discovered, config.unifiAccessToken);
+        connected = await unifiClient.testConnection();
+      }
+    }
+
     if (!connected) {
       bridgeState.status = 'error';
       bridgeState.unifiConnected = false;
@@ -170,7 +259,39 @@ async function startBridgeWorker(): Promise<void> {
     config.doorSyncIntervalMs
   );
 
-  // 8. Start Firestore command listener
+  // 8. Initial schedule sync
+  logger.info('Running initial schedule sync…');
+  try {
+    const schedules = await syncSchedules(config.orgId, unifiClient);
+    logger.info(`[ScheduleSync] Initial sync completed (${schedules.length} schedules found).`);
+  } catch (err: any) {
+    logger.error(`[ScheduleSync] Initial sync error: ${err.message}`);
+  }
+
+  // 9. Recurring schedule sync (every 15 minutes)
+  const stopScheduleSync = startScheduleSyncInterval(
+    config.orgId,
+    unifiClient,
+    15 * 60 * 1000
+  );
+
+  // 10. Initial visitor sync
+  logger.info('Running initial visitor sync…');
+  try {
+    const visitors = await syncVisitors(config.orgId, unifiClient);
+    logger.info(`[VisitorSync] Initial sync completed (${visitors.length} visitors found).`);
+  } catch (err: any) {
+    logger.error(`[VisitorSync] Initial sync error: ${err.message}`);
+  }
+
+  // 11. Recurring visitor sync (every 15 minutes)
+  const stopVisitorSync = startVisitorSyncInterval(
+    config.orgId,
+    unifiClient,
+    15 * 60 * 1000
+  );
+
+  // 12. Start Firestore command listener
   const stopCommandListener = startCommandListener(
     config.orgId,
     config.agentId,
@@ -182,13 +303,56 @@ async function startBridgeWorker(): Promise<void> {
     }
   );
 
+  // 9. Subscribe to real-time cloud settings updates (token rotation, host changes)
+  const stopSettingsListener = db.doc(`organizations/${config.orgId}/settings/config`).onSnapshot(
+    async (snap: any) => {
+      if (!snap.exists) return;
+      const data = snap.data();
+      const unifiConfig = data?.unifi_agent || data?.unifi_remote;
+      if (!unifiConfig) return;
+
+      let changed = false;
+      if (unifiConfig.access_token && unifiConfig.access_token !== config.unifiAccessToken) {
+        logger.info('[Bridge] Detected updated UniFi Access API token in cloud settings. Updating…');
+        config.unifiAccessToken = unifiConfig.access_token;
+        saveConfig({ UNIFI_ACCESS_TOKEN: unifiConfig.access_token });
+        changed = true;
+      }
+
+      if (unifiConfig.host && unifiConfig.host !== config.unifiHost) {
+        logger.info(`[Bridge] Detected updated UniFi Host (${unifiConfig.host}) in cloud settings. Updating…`);
+        config.unifiHost = unifiConfig.host;
+        saveConfig({ UNIFI_HOST: unifiConfig.host });
+        changed = true;
+      }
+
+      if (changed) {
+        logger.info('[Bridge] Re-applying cloud credentials to UniFi client…');
+        unifiClient.updateCredentials(config.unifiHost, config.unifiAccessToken);
+        const testOk = await unifiClient.testConnection();
+        bridgeState.unifiConnected = testOk;
+        if (testOk) {
+          logger.info('[Bridge] ✓ Connection verified with new credentials! Running door sync…');
+          await syncDoors(config.orgId, unifiClient);
+          bridgeState.lastSync = new Date();
+        }
+      }
+    },
+    (err: any) => {
+      logger.warn(`[Bridge] Cloud settings listener notice: ${err.message}`);
+    }
+  );
+
   bridgeState.status = 'running';
   bridgeState.errorMessage = undefined;
   logger.info('✓ Agent bridge running — listening for door commands.');
 
   cleanupPreviousWorker = () => {
     logger.info('[Bridge] Stopping previous bridge worker…');
+    stopSettingsListener();
     stopCommandListener();
+    stopVisitorSync();
+    stopScheduleSync();
     stopDoorSync();
     stopHeartbeat();
   };
