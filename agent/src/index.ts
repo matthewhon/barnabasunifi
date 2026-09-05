@@ -18,6 +18,7 @@ import { startHeartbeat } from './firebase/heartbeat';
 import { syncDoors, startDoorSyncInterval } from './firebase/doorSync';
 import { syncSchedules, startScheduleSyncInterval } from './firebase/scheduleSync';
 import { syncVisitors, startVisitorSyncInterval } from './firebase/visitorSync';
+import { syncAccessLogs, startAccessLogSyncInterval } from './firebase/accessLogSync';
 import { startCommandListener } from './firebase/commandListener';
 import { startUpdateChecker } from './firebase/updateChecker';
 import { startWebServer, AgentBridgeState } from './web/server';
@@ -302,7 +303,23 @@ async function startBridgeWorker(): Promise<void> {
     15 * 60 * 1000
   );
 
-  // 12. Start Firestore command listener
+  // 12. Initial access log sync
+  logger.info('Running initial access log sync…');
+  try {
+    const logs = await syncAccessLogs(config.orgId, unifiClient);
+    logger.info(`[AccessLogSync] Initial sync completed (${logs.length} access logs found).`);
+  } catch (err: any) {
+    logger.error(`[AccessLogSync] Initial sync error: ${err.message}`);
+  }
+
+  // 13. Recurring access log sync (every 25 seconds for near-instant access tracking)
+  const stopAccessLogSync = startAccessLogSyncInterval(
+    config.orgId,
+    unifiClient,
+    25 * 1000
+  );
+
+  // 14. Start Firestore command listener
   const stopCommandListener = startCommandListener(
     config.orgId,
     config.agentId,
@@ -314,7 +331,7 @@ async function startBridgeWorker(): Promise<void> {
     }
   );
 
-  // 9. Subscribe to real-time cloud settings updates (token rotation, host changes)
+  // 15. Subscribe to real-time cloud settings updates (token rotation, host changes)
   const stopSettingsListener = db.doc(`organizations/${config.orgId}/settings/config`).onSnapshot(
     async (snap: any) => {
       if (!snap.exists) return;
@@ -369,6 +386,7 @@ async function startBridgeWorker(): Promise<void> {
     logger.info('[Bridge] Stopping previous bridge worker…');
     stopSettingsListener();
     stopCommandListener();
+    stopAccessLogSync();
     stopVisitorSync();
     stopScheduleSync();
     stopDoorSync();

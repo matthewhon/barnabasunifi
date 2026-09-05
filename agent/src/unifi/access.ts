@@ -110,6 +110,34 @@ export interface UnifiVisitor {
   updated_at?: string;
 }
 
+export type AccessMethod =
+  | 'nfc_card'       // Keycard, Key fob, NFC badge
+  | 'pin_code'       // Keypad PIN
+  | 'mobile_tap'     // UniFi Identity app (NFC / Bluetooth)
+  | 'hand_wave'      // Wave to unlock sensor
+  | 'remote'         // Admin / manual dashboard unlock
+  | 'face'           // Face recognition
+  | 'visitor_pin'    // Temporary visitor PIN / QR
+  | 'schedule'       // Automated schedule unlock
+  | 'unknown';
+
+export interface AccessLogEntry {
+  id: string;                      // UniFi system log event ID
+  org_id?: string;
+  timestamp: string;               // ISO 8601 string
+  event_type: 'door_unlock' | 'door_open' | 'door_close' | 'access_denied' | string;
+  event_result: 'success' | 'denied' | 'failed';
+  door_id: string;
+  door_label: string;
+  user_id?: string;
+  user_name?: string;
+  user_type?: 'user' | 'visitor' | 'admin' | 'unknown';
+  access_method: AccessMethod;
+  access_method_label: string;     // e.g. "Key Card / Fob", "Keypad PIN", "Mobile Tap"
+  display_message?: string;
+  raw_data?: Record<string, unknown>;
+}
+
 export function normalizeUnifiVisitor(raw: any, orgId = ''): UnifiVisitor {
   const id = String(raw.id || raw.unique_id || raw.visitor_id || raw.user_id || raw._id || '');
   const firstName = String(raw.first_name || raw.firstName || (raw.name ? String(raw.name).split(' ')[0] : 'Visitor'));
@@ -226,6 +254,135 @@ export function serializeUnifiVisitor(visitor: Partial<UnifiVisitor>): any {
   }
 
   return base;
+}
+
+export function normalizeAccessLogEntry(raw: any, orgId = ''): AccessLogEntry {
+  const id = String(raw.id || raw._id || raw.event_id || `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+
+  // Parse timestamp
+  let timestampIso = new Date().toISOString();
+  const rawTs = raw.timestamp || raw.event_time || raw.created_at || raw.published;
+  if (rawTs) {
+    if (typeof rawTs === 'number') {
+      timestampIso = new Date(rawTs > 10000000000 ? rawTs : rawTs * 1000).toISOString();
+    } else {
+      const parsed = new Date(rawTs).getTime();
+      if (!isNaN(parsed)) timestampIso = new Date(parsed).toISOString();
+    }
+  }
+
+  const source = raw.source || {};
+  const event = source.event || raw.event || {};
+  const actor = source.actor || raw.actor || raw.user || {};
+  const auth = source.authentication || raw.authentication || {};
+  const target = source.target || raw.target || raw.door || {};
+
+  // Event Type
+  const rawEventType = String(event.type || raw.event_type || raw.type || '').toLowerCase();
+  let eventType: 'door_unlock' | 'door_open' | 'door_close' | 'access_denied' | string = 'door_unlock';
+  if (rawEventType.includes('door.open') || rawEventType.includes('dps.open') || rawEventType.includes('open')) {
+    eventType = 'door_open';
+  } else if (rawEventType.includes('door.close') || rawEventType.includes('dps.close') || rawEventType.includes('close')) {
+    eventType = 'door_close';
+  } else if (rawEventType.includes('reject') || rawEventType.includes('denied') || rawEventType.includes('failed')) {
+    eventType = 'access_denied';
+  } else if (rawEventType.includes('unlock')) {
+    eventType = 'door_unlock';
+  }
+
+  // Result
+  const rawResult = String(event.result || raw.result || '').toUpperCase();
+  const eventResult: 'success' | 'denied' | 'failed' =
+    rawResult.includes('DENIED') || rawResult.includes('REJECT') || eventType === 'access_denied'
+      ? 'denied'
+      : rawResult.includes('FAIL')
+      ? 'failed'
+      : 'success';
+
+  // Access Method
+  const rawMethod = String(
+    auth.credential_provider ||
+    raw.credential_type ||
+    raw.method ||
+    raw.access_method ||
+    event.type ||
+    ''
+  ).toLowerCase();
+
+  let accessMethod: AccessMethod = 'unknown';
+  let accessMethodLabel = 'Access Method';
+
+  if (rawMethod.includes('card') || rawMethod.includes('nfc') || rawMethod.includes('rfid') || rawMethod.includes('fob')) {
+    accessMethod = 'nfc_card';
+    accessMethodLabel = 'Key Card / Fob';
+  } else if (rawMethod.includes('pin') || rawMethod.includes('passcode') || rawMethod.includes('password')) {
+    accessMethod = 'pin_code';
+    accessMethodLabel = 'Keypad PIN';
+  } else if (rawMethod.includes('mobile') || rawMethod.includes('bluetooth') || rawMethod.includes('bt') || rawMethod.includes('app')) {
+    accessMethod = 'mobile_tap';
+    accessMethodLabel = 'Mobile Tap';
+  } else if (rawMethod.includes('wave') || rawMethod.includes('hand')) {
+    accessMethod = 'hand_wave';
+    accessMethodLabel = 'Hand Wave';
+  } else if (rawMethod.includes('remote') || rawMethod.includes('manual') || rawMethod.includes('button')) {
+    accessMethod = 'remote';
+    accessMethodLabel = 'Remote Unlock';
+  } else if (rawMethod.includes('face')) {
+    accessMethod = 'face';
+    accessMethodLabel = 'Face Recognition';
+  } else if (rawMethod.includes('visitor') || rawMethod.includes('qr')) {
+    accessMethod = 'visitor_pin';
+    accessMethodLabel = 'Visitor PIN / QR';
+  } else if (rawMethod.includes('schedule')) {
+    accessMethod = 'schedule';
+    accessMethodLabel = 'Schedule';
+  }
+
+  // User details
+  const userName = String(
+    actor.display_name ||
+    actor.name ||
+    actor.full_name ||
+    raw.user_name ||
+    (actor.id ? `User ${actor.id}` : 'Unknown User')
+  ).trim();
+
+  const userId = actor.id ? String(actor.id) : (raw.user_id ? String(raw.user_id) : undefined);
+  const userType: 'user' | 'visitor' | 'admin' | 'unknown' =
+    actor.type === 'visitor' ? 'visitor' : actor.type === 'admin' ? 'admin' : actor.type === 'user' ? 'user' : 'unknown';
+
+  // Door details
+  const doorId = String(target.id || raw.door_id || raw.unique_id || '');
+  const doorLabel = String(target.display_name || target.name || raw.door_label || raw.door_name || 'Door');
+
+  // Display message
+  const displayMessage =
+    event.display_message ||
+    raw.display_message ||
+    (eventType === 'door_open'
+      ? `${doorLabel} opened`
+      : eventType === 'door_close'
+      ? `${doorLabel} closed`
+      : eventResult === 'denied'
+      ? `Access denied for ${userName} at ${doorLabel} (${accessMethodLabel})`
+      : `${userName} opened ${doorLabel} via ${accessMethodLabel}`);
+
+  return {
+    id,
+    org_id: orgId,
+    timestamp: timestampIso,
+    event_type: eventType,
+    event_result: eventResult,
+    door_id: doorId,
+    door_label: doorLabel,
+    user_id: userId,
+    user_name: userName,
+    user_type: userType,
+    access_method: accessMethod,
+    access_method_label: accessMethodLabel,
+    display_message: displayMessage,
+    raw_data: raw,
+  };
 }
 
 export const DAYS_OF_WEEK: DayOfWeek[] = [
@@ -1680,5 +1837,69 @@ export class UnifiAccessClient {
         lastErr?.response?.data?.msg || lastErr?.response?.data?.message || lastErr?.message || lastErr
       }`
     );
+  }
+
+  /**
+   * Fetch system access logs from UniFi Access.
+   * Tracks who opened or closed doors, timestamps, and access methods
+   * (NFC Card/Fob, Keypad PIN, Mobile Tap, Hand Wave, Remote, Face).
+   */
+  async getAccessLogs(options?: {
+    since?: number;
+    until?: number;
+    pageSize?: number;
+    topic?: string;
+  }): Promise<AccessLogEntry[]> {
+    const endpoints = [
+      ...this.getDeveloperEndpoints('system/logs'),
+      '/proxy/access/api/v2/activities',
+      '/proxy/access/api/v2/events',
+    ];
+
+    const body: Record<string, any> = {
+      topic: options?.topic || 'door_openings',
+      page_num: 1,
+      page_size: options?.pageSize || 50,
+    };
+    if (options?.since) body.since = options.since;
+    if (options?.until) body.until = options.until;
+
+    for (const endpoint of endpoints) {
+      try {
+        let res: any;
+        if (endpoint.includes('/v2/')) {
+          res = await this.http.get(endpoint, {
+            params: {
+              page: 1,
+              page_size: options?.pageSize || 50,
+              since: options?.since,
+            },
+          });
+        } else {
+          res = await this.http.post(endpoint, body);
+        }
+
+        const rawList = Array.isArray(res.data?.data)
+          ? res.data.data
+          : Array.isArray(res.data?.data?.list)
+          ? res.data.data.list
+          : Array.isArray(res.data?.data?.activities)
+          ? res.data.data.activities
+          : Array.isArray(res.data?.list)
+          ? res.data.list
+          : Array.isArray(res.data)
+          ? res.data
+          : null;
+
+        if (rawList !== null && rawList.length > 0) {
+          logger.info(`[UniFi] Fetched ${rawList.length} access log(s) via ${endpoint}`);
+          return rawList.map((item: any) => normalizeAccessLogEntry(item));
+        }
+      } catch (err: any) {
+        logger.debug(`[UniFi] getAccessLogs tried ${endpoint} -> ${err.response?.status || err.message}`);
+      }
+    }
+
+    return [];
   }
 }

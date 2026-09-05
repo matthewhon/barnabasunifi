@@ -94,6 +94,9 @@ export interface Door {
   schedule_id?: string | null;
   schedule_name?: string | null;
   unlock_schedule_name?: string | null;
+  last_accessed_at?: string | null;
+  last_accessed_by?: string | null;
+  last_access_method?: AccessMethod | string | null;
   last_synced: string; // ISO8601
 }
 
@@ -355,4 +358,34 @@ export interface AgentRelease {
   published_at: string; // ISO8601
   published_by: string;
   file_size_bytes?: number;
+}
+
+// ─── UniFi Access Logs (User Access & Method Tracking) ─────────────────────────
+
+export type AccessMethod =
+  | 'nfc_card'       // Keycard, Key fob, NFC badge
+  | 'pin_code'       // Keypad PIN
+  | 'mobile_tap'     // UniFi Identity app (NFC / Bluetooth)
+  | 'hand_wave'      // Wave to unlock sensor
+  | 'remote'         // Admin / manual dashboard unlock
+  | 'face'           // Face recognition
+  | 'visitor_pin'    // Temporary visitor PIN / QR
+  | 'schedule'       // Automated schedule unlock
+  | 'unknown';
+
+export interface AccessLogEntry {
+  id: string;                      // UniFi system log event ID
+  org_id: string;
+  timestamp: string;               // ISO 8601 string
+  event_type: 'door_unlock' | 'door_open' | 'door_close' | 'access_denied' | string;
+  event_result: 'success' | 'denied' | 'failed';
+  door_id: string;
+  door_label: string;
+  user_id?: string;
+  user_name?: string;
+  user_type?: 'user' | 'visitor' | 'admin' | 'unknown';
+  access_method: AccessMethod;
+  access_method_label: string;     // e.g. "Key Card / Fob", "Keypad PIN", "Mobile Tap"
+  display_message?: string;
+  raw_data?: Record<string, unknown>;
 }

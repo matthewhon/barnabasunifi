@@ -16,6 +16,7 @@ import { logger } from '../logger';
 import { syncDoors } from './doorSync';
 import { syncSchedules } from './scheduleSync';
 import { syncVisitors } from './visitorSync';
+import { syncAccessLogs } from './accessLogSync';
 import { checkForUpdate, applyPendingUpdate } from './updateChecker';
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,7 @@ export type CommandAction =
   | 'create_visitor'
   | 'update_visitor'
   | 'delete_visitor'
+  | 'sync_access_logs'
   | 'apply_update'
   | 'upgrade_agent';
 
@@ -121,6 +123,8 @@ async function writeAuditLog(
       action = 'visitor_updated';
     } else if (command.action === 'delete_visitor') {
       action = 'visitor_deleted';
+    } else if (command.action === 'sync_access_logs') {
+      action = 'access_logs_synced';
     } else {
       action = command.action;
     }
@@ -383,6 +387,9 @@ export function startCommandListener(
           { merge: true }
         );
         resultMessage = `Visitor ${command.visitor_id} revoked successfully.`;
+      } else if (command.action === 'sync_access_logs') {
+        const synced = await syncAccessLogs(orgId, unifiClient);
+        resultMessage = `Synced ${synced.length} access log(s) from UniFi Access.`;
       } else if (command.action === 'apply_update' || command.action === 'upgrade_agent') {
         const updateState = await checkForUpdate();
         if (updateState.updateAvailable) {

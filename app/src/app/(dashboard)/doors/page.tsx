@@ -13,7 +13,7 @@ import {
   setAgentAutoUpdate,
 } from '@/lib/firestore';
 import type { Door, Agent, UnifiSchedule, AgentRelease } from '@/lib/types';
-import { safeFormatDistanceToNow } from '@/lib/date-utils';
+import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
 import Modal from '@/components/ui/Modal';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -182,6 +182,32 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
             </span>
           </Link>
         ) : null}
+
+        {door.last_accessed_by && (
+          <div
+            style={{
+              fontSize: '0.75rem',
+              color: 'var(--color-text-muted)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              marginTop: '0.25rem',
+              width: '100%',
+            }}
+          >
+            <span>👤 Last: <strong style={{ color: 'var(--color-text-primary)' }}>{door.last_accessed_by}</strong></span>
+            {door.last_access_method && (
+              <span className="badge badge-neutral" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>
+                {door.last_access_method}
+              </span>
+            )}
+            {door.last_accessed_at && (
+              <span style={{ marginLeft: 'auto', fontSize: '0.6875rem' }}>
+                {safeFormat(door.last_accessed_at, 'h:mm a')}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Actions */}

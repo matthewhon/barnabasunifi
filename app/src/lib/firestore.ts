@@ -28,6 +28,7 @@ import type {
   Agent,
   UnifiSchedule,
   UnifiVisitor,
+  AccessLogEntry,
 } from '@/lib/types';
 
 // ─── Organizations ───────────────────────────────────────────────────────────
@@ -407,4 +408,48 @@ export async function getLatestAgentRelease(): Promise<import('@/lib/types').Age
   const snap = await getDoc(doc(db, 'agent_releases', 'latest'));
   return snap.exists() ? (snap.data() as import('@/lib/types').AgentRelease) : null;
 }
+
+// ─── Access Logs (User Door Activity & Method Tracking) ───────────────────────
+
+export async function getAccessLogs(orgId: string, maxLimit = 100): Promise<AccessLogEntry[]> {
+  const q = query(
+    collection(db, 'organizations', orgId, 'access_logs'),
+    orderBy('timestamp', 'desc'),
+    limit(maxLimit)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ...data,
+      timestamp: normalizeTimestamp(data.timestamp),
+    } as unknown as AccessLogEntry;
+  });
+}
+
+export function subscribeToAccessLogs(
+  orgId: string,
+  callback: (entries: AccessLogEntry[]) => void,
+  maxLimit = 100
+): Unsubscribe {
+  const q = query(
+    collection(db, 'organizations', orgId, 'access_logs'),
+    orderBy('timestamp', 'desc'),
+    limit(maxLimit)
+  );
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          ...data,
+          timestamp: normalizeTimestamp(data.timestamp),
+        } as unknown as AccessLogEntry;
+      })
+    );
+  });
+}
+
 
