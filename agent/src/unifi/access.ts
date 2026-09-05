@@ -655,6 +655,8 @@ export class UnifiAccessClient {
   private host: string;
   private doorToHubMap: Map<string, string> = new Map();
   private doorToPortMap: Map<string, 'd1' | 'd2'> = new Map();
+  /** Latest raw device list from the v2 devices API, used for hub validation in unlockDoor */
+  private deviceCache: any[] = [];
 
   /**
    * @param host           - Base URL of the UniFi console, e.g. https://192.168.1.1
@@ -941,8 +943,11 @@ export class UnifiAccessClient {
     for (const d of devices) {
       deviceById.set(d.unique_id, d);
     }
+    // Cache raw device list for use in unlockDoor hub validation
+    this.deviceCache = devices;
 
     // Ensure doorToHubMap and doorToPortMap are populated
+    // Pass A: Multi-port hub extensions (highest priority — explicit port→door mapping)
     for (const d of devices) {
       if (d.extensions && Array.isArray(d.extensions)) {
         for (const ext of d.extensions) {
@@ -950,22 +955,27 @@ export class UnifiAccessClient {
             const port = ext.source_id === 'port2' ? 'd2' : 'd1';
             this.doorToHubMap.set(ext.target_value, d.unique_id);
             this.doorToPortMap.set(ext.target_value, port);
+            logger.debug(`[UniFi] getDoors: extension mapped door ${ext.target_value} -> hub ${d.unique_id} port ${port}`);
           }
         }
       }
     }
+    // Pass B: Hub devices with d.door or d.location_id (only if not already set)
     for (const d of devices) {
       const doorId = d.door?.unique_id || d.location_id;
       if (doorId && isHubDevice(d) && !this.doorToHubMap.has(doorId)) {
         this.doorToHubMap.set(doorId, d.unique_id);
         this.doorToPortMap.set(doorId, 'd1');
+        logger.debug(`[UniFi] getDoors: hub location mapped door ${doorId} -> hub ${d.unique_id}`);
       }
     }
+    // Pass C: Readers with connected_uah_id — only fill gaps (never overwrite extension mappings)
     for (const d of devices) {
       const doorId = d.door?.unique_id || d.location_id;
       const linkedHubId = d.connected_uah_id || d.hub_id || d.connected_hub_id;
-      if (doorId && linkedHubId) {
+      if (doorId && linkedHubId && !this.doorToHubMap.has(doorId)) {
         this.doorToHubMap.set(doorId, linkedHubId);
+        logger.debug(`[UniFi] getDoors: connected_uah_id mapped door ${doorId} -> hub ${linkedHubId} (from device ${d.unique_id})`);
       }
     }
 
@@ -1102,6 +1112,32 @@ export class UnifiAccessClient {
       await this.populateDoorToHubMap().catch(() => {});
       hubId = this.doorToHubMap.get(doorId);
       port = this.doorToPortMap.get(doorId) || 'd1';
+    }
+
+    // Validate that hubId is actually a hub device, not a reader.
+    // This guards against the hub map being populated with a reader's device ID
+    // (e.g. when a Retrofit Reader's connected_uah_id overwrites extension mappings).
+    if (hubId) {
+      const deviceList = this.deviceCache.length > 0 ? this.deviceCache : [];
+      const hubDevice = deviceList.find((d: any) => d.unique_id === hubId);
+      if (hubDevice && isReaderDevice(hubDevice)) {
+        // The stored 'hub' is actually a reader — look up its parent hub
+        const actualHubId = hubDevice.connected_uah_id || hubDevice.hub_id || hubDevice.connected_hub_id;
+        logger.warn(
+          `[UniFi] unlockDoor: hubId ${hubId} is a reader (${hubDevice.device_type}), ` +
+          `resolving to actual hub via connected_uah_id: ${actualHubId || 'not found'}`
+        );
+        if (actualHubId) {
+          hubId = actualHubId;
+          this.doorToHubMap.set(doorId, actualHubId); // fix the map for future calls
+        } else {
+          // No parent hub found — clear hubId so we fall through to other strategies
+          hubId = undefined;
+        }
+      }
+      logger.debug(`[UniFi] unlockDoor: door=${doorId} hubId=${hubId} port=${port}`);
+    } else {
+      logger.warn(`[UniFi] unlockDoor: no hub found for door ${doorId} — will try direct endpoints only`);
     }
 
     const attempts: Array<{ name: string; fn: () => Promise<any> }> = [];
