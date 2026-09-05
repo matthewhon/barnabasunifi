@@ -60,44 +60,48 @@ async function probeHost(ip: string, timeoutMs = 800): Promise<DiscoveredConsole
     timeout: timeoutMs,
   });
 
-  try {
-    const url = `https://${ip}`;
-    const res = await axios.get(`${url}/api/v1/developer/doors`, {
-      httpsAgent,
-      timeout: timeoutMs,
-      validateStatus: () => true, // Don't throw on 401 or 403
-    });
+  // Try port 12445 (UniFi Access Open API port) first, then port 443
+  const candidateUrls = [`https://${ip}:12445`, `https://${ip}`];
 
-    const elapsed = Date.now() - start;
-    // UniFi Access developer API returns 401 Unauthorized with JSON or specific headers
-    if (res.status === 401 || res.status === 200 || res.status === 403) {
-      const dataStr = typeof res.data === 'object' ? JSON.stringify(res.data) : String(res.data || '');
-      const serverHeader = String(res.headers['server'] || '').toLowerCase();
-      const isUnifi =
-        dataStr.includes('code') ||
-        dataStr.includes('UNAUTHORIZED') ||
-        dataStr.includes('access') ||
-        serverHeader.includes('nginx') ||
-        res.headers['x-accel-version'] !== undefined;
+  for (const url of candidateUrls) {
+    try {
+      const res = await axios.get(`${url}/api/v1/developer/doors`, {
+        httpsAgent,
+        timeout: timeoutMs,
+        validateStatus: () => true, // Don't throw on 401 or 403
+      });
 
-      return {
-        ip,
-        url,
-        isConfirmedUnifi: isUnifi,
-        statusText: `Responded (HTTP ${res.status}) in ${elapsed}ms`,
-        responseTimeMs: elapsed,
-      };
-    }
-  } catch (err: any) {
-    // Check if it failed with TLS cert error or HTTP connection
-    if (err.code === 'ECONNRESET' || err.response?.status === 401) {
-      return {
-        ip,
-        url: `https://${ip}`,
-        isConfirmedUnifi: true,
-        statusText: `Active HTTPS host`,
-        responseTimeMs: Date.now() - start,
-      };
+      const elapsed = Date.now() - start;
+      // UniFi Access developer API returns 401 Unauthorized with JSON or specific headers
+      if (res.status === 401 || res.status === 200 || res.status === 403) {
+        const dataStr = typeof res.data === 'object' ? JSON.stringify(res.data) : String(res.data || '');
+        const serverHeader = String(res.headers['server'] || '').toLowerCase();
+        const isUnifi =
+          dataStr.includes('code') ||
+          dataStr.includes('UNAUTHORIZED') ||
+          dataStr.includes('access') ||
+          serverHeader.includes('nginx') ||
+          res.headers['x-accel-version'] !== undefined;
+
+        return {
+          ip,
+          url,
+          isConfirmedUnifi: isUnifi,
+          statusText: `Responded (HTTP ${res.status}) in ${elapsed}ms`,
+          responseTimeMs: elapsed,
+        };
+      }
+    } catch (err: any) {
+      // Check if it failed with TLS cert error or HTTP connection
+      if (err.code === 'ECONNRESET' || err.response?.status === 401) {
+        return {
+          ip,
+          url,
+          isConfirmedUnifi: true,
+          statusText: `Active HTTPS host`,
+          responseTimeMs: Date.now() - start,
+        };
+      }
     }
   }
 

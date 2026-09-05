@@ -127,7 +127,7 @@ export function getConfigurationStatus(): ConfigStatus {
     try {
       new URL(unifiHost);
     } catch {
-      missing.push('UNIFI_HOST (must be valid URL e.g. https://192.168.1.1)');
+      missing.push('UNIFI_HOST (must be valid URL e.g. https://192.168.1.1:12445 or https://192.168.1.1)');
     }
   }
 

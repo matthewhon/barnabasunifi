@@ -103,6 +103,7 @@ export interface UnifiVisitor {
   door_labels?: string[];
   status?: VisitorStatus;
   purpose?: string;
+  visit_reason?: 'Interview' | 'Business' | 'Cooperation' | 'Others' | string;
   sync_status?: 'synced' | 'pending' | 'error';
   sync_error?: string;
   raw_data?: Record<string, unknown>;
@@ -222,10 +223,16 @@ export function serializeUnifiVisitor(visitor: Partial<UnifiVisitor>): any {
   if (visitor.last_name !== undefined) base.last_name = visitor.last_name;
   if (visitor.mobile_phone !== undefined) base.mobile_phone = visitor.mobile_phone;
   if (visitor.email !== undefined) base.email = visitor.email;
-  if (visitor.purpose !== undefined) {
-    base.purpose = visitor.purpose;
-    base.visit_reason = visitor.purpose || 'Other';
-  }
+  // UniFi API visit_reason enum: 'Interview' | 'Business' | 'Cooperation' | 'Others'
+  const rawReason = String(visitor.visit_reason || visitor.purpose || '').trim().toLowerCase();
+  let normalizedReason = 'Others';
+  if (rawReason === 'interview') normalizedReason = 'Interview';
+  else if (rawReason === 'business') normalizedReason = 'Business';
+  else if (rawReason === 'cooperation') normalizedReason = 'Cooperation';
+  else normalizedReason = 'Others';
+
+  base.visit_reason = normalizedReason;
+  base.purpose = visitor.purpose || normalizedReason;
 
   if (visitor.door_ids && visitor.door_ids.length > 0) {
     base.doors = visitor.door_ids;
@@ -248,6 +255,11 @@ export function serializeUnifiVisitor(visitor: Partial<UnifiVisitor>): any {
     base.end_time_millis = ms;
   }
 
+  // Ensure last_name is present as it is required by UniFi Access API
+  if (!base.last_name) {
+    base.last_name = visitor.last_name || '.';
+  }
+
   if (visitor.pin_code) {
     base.pin_code = String(visitor.pin_code);
     base.pin = String(visitor.pin_code);
@@ -259,9 +271,9 @@ export function serializeUnifiVisitor(visitor: Partial<UnifiVisitor>): any {
 export function normalizeAccessLogEntry(raw: any, orgId = ''): AccessLogEntry {
   const id = String(raw.id || raw._id || raw.event_id || `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
 
-  // Parse timestamp
+  // Parse timestamp (supports Developer API @timestamp string and epoch numbers)
   let timestampIso = new Date().toISOString();
-  const rawTs = raw.timestamp || raw.event_time || raw.created_at || raw.published;
+  const rawTs = raw['@timestamp'] || raw.timestamp || raw.event_time || raw.created_at || raw.published;
   if (rawTs) {
     if (typeof rawTs === 'number') {
       timestampIso = new Date(rawTs > 10000000000 ? rawTs : rawTs * 1000).toISOString();
@@ -271,11 +283,14 @@ export function normalizeAccessLogEntry(raw: any, orgId = ''): AccessLogEntry {
     }
   }
 
-  const source = raw.source || {};
+  const source = raw._source || raw.source || raw;
   const event = source.event || raw.event || {};
   const actor = source.actor || raw.actor || raw.user || {};
   const auth = source.authentication || raw.authentication || {};
-  const target = source.target || raw.target || raw.door || {};
+  const rawTarget = source.target || raw.target || raw.door || {};
+  const target = Array.isArray(rawTarget)
+    ? (rawTarget.find((t: any) => t?.type === 'door') || rawTarget[0] || {})
+    : rawTarget;
 
   // Event Type
   const rawEventType = String(event.type || raw.event_type || raw.type || '').toLowerCase();
@@ -491,6 +506,18 @@ export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
   };
 }
 
+function formatTimeHHMMSS(t: string, defaultSec = '00'): string {
+  if (!t) return `00:00:${defaultSec}`;
+  const parts = t.split(':');
+  if (parts.length === 2) {
+    return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}:${defaultSec}`;
+  }
+  if (parts.length >= 3) {
+    return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}:${parts[2].padStart(2, '0')}`;
+  }
+  return t;
+}
+
 export function serializeUnifiSchedule(schedule: Partial<UnifiSchedule>): any {
   const base: Record<string, any> = schedule.raw_data ? { ...schedule.raw_data } : {};
 
@@ -507,7 +534,12 @@ export function serializeUnifiSchedule(schedule: Partial<UnifiSchedule>): any {
     }));
     const weekScheduleObj: Record<string, any[]> = {};
     for (const d of schedule.weekly_schedule) {
-      weekScheduleObj[d.day] = d.active ? d.slots : [];
+      weekScheduleObj[d.day] = d.active
+        ? d.slots.map((s) => ({
+            start_time: formatTimeHHMMSS(s.start_time, '00'),
+            end_time: formatTimeHHMMSS(s.end_time, '59'),
+          }))
+        : [];
     }
     base.week_schedule = weekScheduleObj;
   }
@@ -884,29 +916,18 @@ export class UnifiAccessClient {
    * Checks v1 Developer API first, falls back to UniFi OS Access v2 API.
    */
   async getDoors(): Promise<UnifiDoor[]> {
-    try {
-      const response = await this.http.get<UnifiApiResponse<UnifiDoor[]>>(
-        '/api/v1/developer/doors'
-      );
-      if (Array.isArray(response.data?.data)) {
-        // Asynchronously populate door-to-hub mapping in background
-        this.populateDoorToHubMap().catch(() => {});
-        return response.data.data;
+    const candidateEndpoints = this.getDeveloperEndpoints('doors');
+    for (const ep of candidateEndpoints) {
+      try {
+        const response = await this.http.get<UnifiApiResponse<UnifiDoor[]>>(ep);
+        if (Array.isArray(response.data?.data)) {
+          // Asynchronously populate door-to-hub mapping in background
+          this.populateDoorToHubMap().catch(() => {});
+          return response.data.data;
+        }
+      } catch {
+        // Fall through
       }
-    } catch {
-      // Fall through
-    }
-
-    try {
-      const response = await this.http.get<UnifiApiResponse<UnifiDoor[]>>(
-        '/proxy/access/integration/v1/developer/doors'
-      );
-      if (Array.isArray(response.data?.data)) {
-        this.populateDoorToHubMap().catch(() => {});
-        return response.data.data;
-      }
-    } catch {
-      // Fall through to v2 API
     }
 
     // UniFi Access v2 API
@@ -1636,31 +1657,18 @@ export class UnifiAccessClient {
    */
   async createSchedule(schedule: Partial<UnifiSchedule>): Promise<UnifiSchedule> {
     const payload = serializeUnifiSchedule(schedule);
+    const endpoints = this.getScheduleEndpoints();
 
-    try {
-      const res = await this.http.post<UnifiApiResponse<any>>(
-        '/api/v1/developer/schedules',
-        payload
-      );
-      if (res.data?.data) {
-        logger.info(`UniFi schedule created via Developer API: ${res.data.data.id || schedule.name}`);
-        return normalizeUnifiSchedule(res.data.data);
+    for (const ep of endpoints) {
+      try {
+        const res = await this.http.post<UnifiApiResponse<any>>(ep, payload);
+        if (res.data?.data) {
+          logger.info(`UniFi schedule created via Developer API (${ep}): ${res.data.data.id || schedule.name}`);
+          return normalizeUnifiSchedule(res.data.data);
+        }
+      } catch {
+        // Fall through to next candidate endpoint
       }
-    } catch {
-      // Fall through
-    }
-
-    try {
-      const res = await this.http.post<UnifiApiResponse<any>>(
-        '/proxy/access/integration/v1/developer/schedules',
-        payload
-      );
-      if (res.data?.data) {
-        logger.info(`UniFi schedule created via Integration API: ${res.data.data.id || schedule.name}`);
-        return normalizeUnifiSchedule(res.data.data);
-      }
-    } catch {
-      // Fall through
     }
 
     const res = await this.http.post<{ code: number; data: any }>(
@@ -1676,33 +1684,19 @@ export class UnifiAccessClient {
    */
   async updateSchedule(scheduleId: string, updates: Partial<UnifiSchedule>): Promise<UnifiSchedule> {
     const payload = serializeUnifiSchedule(updates);
+    const endpoints = this.getScheduleEndpoints(encodeURIComponent(scheduleId));
 
-    try {
-      const res = await this.http.put<UnifiApiResponse<any>>(
-        `/api/v1/developer/schedules/${encodeURIComponent(scheduleId)}`,
-        payload
-      );
-      if (res.data?.data) {
-        logger.info(`UniFi schedule ${scheduleId} updated via Developer API.`);
-        return normalizeUnifiSchedule(res.data.data);
+    for (const ep of endpoints) {
+      try {
+        const res = await this.http.put<UnifiApiResponse<any>>(ep, payload);
+        if (res.data?.data) {
+          logger.info(`UniFi schedule ${scheduleId} updated via Developer API (${ep}).`);
+          return normalizeUnifiSchedule(res.data.data);
+        }
+        return normalizeUnifiSchedule({ id: scheduleId, ...payload });
+      } catch {
+        // Fall through
       }
-      return normalizeUnifiSchedule({ id: scheduleId, ...payload });
-    } catch {
-      // Fall through
-    }
-
-    try {
-      const res = await this.http.put<UnifiApiResponse<any>>(
-        `/proxy/access/integration/v1/developer/schedules/${encodeURIComponent(scheduleId)}`,
-        payload
-      );
-      if (res.data?.data) {
-        logger.info(`UniFi schedule ${scheduleId} updated via Integration API.`);
-        return normalizeUnifiSchedule(res.data.data);
-      }
-      return normalizeUnifiSchedule({ id: scheduleId, ...payload });
-    } catch {
-      // Fall through
     }
 
     const res = await this.http.put<{ code: number; data: any }>(
@@ -1717,24 +1711,16 @@ export class UnifiAccessClient {
    * Delete a schedule from UniFi Access.
    */
   async deleteSchedule(scheduleId: string): Promise<void> {
-    try {
-      await this.http.delete(
-        `/api/v1/developer/schedules/${encodeURIComponent(scheduleId)}`
-      );
-      logger.info(`UniFi schedule ${scheduleId} deleted via Developer API.`);
-      return;
-    } catch {
-      // Fall through
-    }
+    const endpoints = this.getScheduleEndpoints(encodeURIComponent(scheduleId));
 
-    try {
-      await this.http.delete(
-        `/proxy/access/integration/v1/developer/schedules/${encodeURIComponent(scheduleId)}`
-      );
-      logger.info(`UniFi schedule ${scheduleId} deleted via Integration API.`);
-      return;
-    } catch {
-      // Fall through
+    for (const ep of endpoints) {
+      try {
+        await this.http.delete(ep);
+        logger.info(`UniFi schedule ${scheduleId} deleted via Developer API (${ep}).`);
+        return;
+      } catch {
+        // Fall through
+      }
     }
 
     await this.http.delete(
@@ -1775,7 +1761,10 @@ export class UnifiAccessClient {
   }
 
   private getScheduleEndpoints(subpath = ''): string[] {
-    return this.getDeveloperEndpoints('schedules', subpath);
+    return [
+      ...this.getDeveloperEndpoints('access_policies/schedules', subpath),
+      ...this.getDeveloperEndpoints('schedules', subpath),
+    ];
   }
 
   private getAccessPolicyEndpoints(subpath = ''): string[] {
@@ -1873,7 +1862,15 @@ export class UnifiAccessClient {
         const rawData = res.data?.data || res.data;
         if (rawData) {
           logger.info(`[UniFi] Visitor ${rawData.id || visitor.first_name} created successfully via ${endpoint}`);
-          return normalizeUnifiVisitor(rawData);
+          const normalized = normalizeUnifiVisitor(rawData);
+          // If PIN code is specified, assign via PUT /visitors/:id/pin_codes (official Developer API)
+          if (visitor.pin_code && normalized.id) {
+            await this.assignVisitorPin(normalized.id, visitor.pin_code).catch((err) => {
+              logger.warn(`[UniFi] Could not assign PIN to visitor ${normalized.id}: ${err.message}`);
+            });
+            normalized.pin_code = visitor.pin_code;
+          }
+          return normalized;
         }
       } catch (err: any) {
         lastErr = err;
@@ -1904,7 +1901,12 @@ export class UnifiAccessClient {
         const rawData = res.data?.data || res.data;
         if (rawData) {
           logger.info(`[UniFi] Visitor ${visitorId} updated successfully via ${endpoint}`);
-          return normalizeUnifiVisitor(rawData);
+          const normalized = normalizeUnifiVisitor(rawData);
+          if (updates.pin_code) {
+            await this.assignVisitorPin(visitorId, updates.pin_code).catch(() => {});
+            normalized.pin_code = updates.pin_code;
+          }
+          return normalized;
         }
       } catch (err: any) {
         lastErr = err;
@@ -1942,6 +1944,40 @@ export class UnifiAccessClient {
         lastErr?.response?.data?.msg || lastErr?.response?.data?.message || lastErr?.message || lastErr
       }`
     );
+  }
+
+  /**
+   * Assign a PIN code to a visitor (UniFi Access Developer API Sec 4.9).
+   */
+  async assignVisitorPin(visitorId: string, pinCode: string): Promise<void> {
+    const endpoints = this.getDeveloperEndpoints('visitors', `${encodeURIComponent(visitorId)}/pin_codes`);
+    let lastErr: any = null;
+
+    for (const endpoint of endpoints) {
+      try {
+        await this.http.put(endpoint, { pin_code: String(pinCode) });
+        logger.info(`[UniFi] PIN code assigned to visitor ${visitorId} via ${endpoint}`);
+        return;
+      } catch (err: any) {
+        lastErr = err;
+      }
+    }
+    logger.warn(`[UniFi] assignVisitorPin failed across endpoints: ${lastErr?.message}`);
+  }
+
+  /**
+   * Unassign a PIN code from a visitor (UniFi Access Developer API Sec 4.10).
+   */
+  async unassignVisitorPin(visitorId: string): Promise<void> {
+    const endpoints = this.getDeveloperEndpoints('visitors', `${encodeURIComponent(visitorId)}/pin_codes`);
+
+    for (const endpoint of endpoints) {
+      try {
+        await this.http.delete(endpoint);
+        logger.info(`[UniFi] PIN code unassigned from visitor ${visitorId}`);
+        return;
+      } catch {}
+    }
   }
 
   /**
@@ -1984,16 +2020,26 @@ export class UnifiAccessClient {
               },
             });
           } else {
-            res = await this.http.post(endpoint, {
-              topic: options?.topic || 'door_openings',
-              page_num: page,
-              page_size: pageSize,
-              ...(options?.since ? { since: options.since } : {}),
-              ...(options?.until ? { until: options.until } : {}),
-            });
+            res = await this.http.post(
+              endpoint,
+              {
+                topic: options?.topic || 'door_openings',
+                ...(options?.since ? { since: options.since } : {}),
+                ...(options?.until ? { until: options.until } : {}),
+              },
+              {
+                params: {
+                  page_num: page,
+                  page_size: pageSize,
+                },
+              }
+            );
           }
 
-          const rawList = Array.isArray(res.data?.data)
+          // Developer API returns data.hits, v2 returns data or data.list/activities
+          const rawList = Array.isArray(res.data?.data?.hits)
+            ? res.data.data.hits
+            : Array.isArray(res.data?.data)
             ? res.data.data
             : Array.isArray(res.data?.data?.list)
             ? res.data.data.list
