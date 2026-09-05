@@ -1076,66 +1076,75 @@ export class UnifiAccessClient {
     let lastError: Error | null = null;
 
     let hubId = this.doorToHubMap.get(doorId);
+    let port = this.doorToPortMap.get(doorId) || 'd1';
     if (!hubId) {
       await this.populateDoorToHubMap().catch(() => {});
       hubId = this.doorToHubMap.get(doorId);
+      port = this.doorToPortMap.get(doorId) || 'd1';
     }
 
     const attempts: Array<{ name: string; fn: () => Promise<any> }> = [];
     const durationSeconds = durationMin > 0 ? durationMin * 60 : 5;
 
-    // 1. UniFi OS Access v2 native dashboard locations unlock (door-level)
-    attempts.push({
-      name: `PUT /proxy/access/api/v2/dashboard/locations/${doorId}/unlock`,
-      fn: () =>
-        this.http.put(
-          `/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(doorId)}/unlock`,
-          { duration: durationSeconds }
-        ),
-    });
-    attempts.push({
-      name: `PUT /proxy/access/api/v2/dashboard/locations/${doorId}/unlock (empty body)`,
-      fn: () =>
-        this.http.put(
-          `/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(doorId)}/unlock`,
-          {}
-        ),
-    });
-    attempts.push({
-      name: `POST /proxy/access/api/v2/dashboard/locations/${doorId}/unlock`,
-      fn: () =>
-        this.http.post(
-          `/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(doorId)}/unlock`,
-          { duration: durationSeconds }
-        ),
-    });
+    // 1. Primary: Official Developer API door unlock endpoints (dedicated port 12445 + proxy)
+    const devUnlockEndpoints = this.getDeveloperEndpoints('doors', `${encodeURIComponent(doorId)}/unlock`);
+    for (const ep of devUnlockEndpoints) {
+      attempts.push({
+        name: `PUT ${ep} { duration: ${durationSeconds} }`,
+        fn: () => this.http.put(ep, { duration: durationSeconds }),
+      });
+      attempts.push({
+        name: `PUT ${ep} {}`,
+        fn: () => this.http.put(ep, {}),
+      });
+      attempts.push({
+        name: `POST ${ep} { duration: ${durationSeconds} }`,
+        fn: () => this.http.post(ep, { duration: durationSeconds }),
+      });
+      attempts.push({
+        name: `POST ${ep} {}`,
+        fn: () => this.http.post(ep, {}),
+      });
+    }
 
-    // 2. Physical Hub relay_unlock (UniFi OS Access v2 hardware controller)
+    // 1b. Developer API direct door state change
+    const devDoorEndpoints = this.getDeveloperEndpoints('doors', encodeURIComponent(doorId));
+    for (const ep of devDoorEndpoints) {
+      attempts.push({
+        name: `PUT ${ep} { door_lock_relay_status: 'unlock' }`,
+        fn: () => this.http.put(ep, { door_lock_relay_status: 'unlock' }),
+      });
+    }
+
+    // 2. Physical Hub relay_unlock (UniFi OS Access v2 hardware controller & Retrofit Hub)
     if (hubId) {
-      attempts.push({
-        name: `PUT /proxy/access/api/v2/device/${hubId}/relay_unlock`,
-        fn: () =>
-          this.http.put(
-            `/proxy/access/api/v2/device/${encodeURIComponent(hubId!)}/relay_unlock`,
-            {}
-          ),
-      });
-      attempts.push({
-        name: `PUT /proxy/access/api/v2/device/${hubId}/relay_unlock (door_id: ${doorId})`,
-        fn: () =>
-          this.http.put(
-            `/proxy/access/api/v2/device/${encodeURIComponent(hubId!)}/relay_unlock`,
-            { door_id: doorId }
-          ),
-      });
-      attempts.push({
-        name: `POST /proxy/access/api/v2/device/${hubId}/relay_unlock`,
-        fn: () =>
-          this.http.post(
-            `/proxy/access/api/v2/device/${encodeURIComponent(hubId!)}/relay_unlock`,
-            { door_id: doorId }
-          ),
-      });
+      const hubEndpoints = [
+        `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/relay_unlock`,
+        `/proxy/access/api/v2/devices/${encodeURIComponent(hubId)}/relay_unlock`,
+      ];
+      for (const ep of hubEndpoints) {
+        // Multi-port specific payloads (d1 vs d2 on Retrofit Hub 2)
+        attempts.push({
+          name: `PUT ${ep} (port: ${port}, door_id: ${doorId})`,
+          fn: () => this.http.put(ep, { port, door_id: doorId, duration: durationSeconds }),
+        });
+        attempts.push({
+          name: `POST ${ep} (port: ${port}, door_id: ${doorId})`,
+          fn: () => this.http.post(ep, { port, door_id: doorId, duration: durationSeconds }),
+        });
+        attempts.push({
+          name: `PUT ${ep} (door_id: ${doorId})`,
+          fn: () => this.http.put(ep, { door_id: doorId }),
+        });
+        attempts.push({
+          name: `POST ${ep} (door_id: ${doorId})`,
+          fn: () => this.http.post(ep, { door_id: doorId }),
+        });
+        attempts.push({
+          name: `PUT ${ep} {}`,
+          fn: () => this.http.put(ep, {}),
+        });
+      }
     }
 
     // 3. Fallback: try doorId directly as device ID relay_unlock
@@ -1147,42 +1156,32 @@ export class UnifiAccessClient {
           {}
         ),
     });
+    attempts.push({
+      name: `POST /proxy/access/api/v2/device/${doorId}/relay_unlock`,
+      fn: () =>
+        this.http.post(
+          `/proxy/access/api/v2/device/${encodeURIComponent(doorId)}/relay_unlock`,
+          {}
+        ),
+    });
 
-    // 4. Developer API endpoints (if enabled on console)
-    attempts.push(
-      {
-        name: 'PUT /proxy/access/integration/v1/developer/doors/.../unlock',
-        fn: () =>
-          this.http.put(
-            `/proxy/access/integration/v1/developer/doors/${encodeURIComponent(doorId)}/unlock`,
-            {}
-          ),
-      },
-      {
-        name: 'POST /proxy/access/integration/v1/developer/doors/.../unlock',
-        fn: () =>
-          this.http.post(
-            `/proxy/access/integration/v1/developer/doors/${encodeURIComponent(doorId)}/unlock`,
-            {}
-          ),
-      },
-      {
-        name: 'PUT /api/v1/developer/doors/.../unlock',
-        fn: () =>
-          this.http.put(
-            `/api/v1/developer/doors/${encodeURIComponent(doorId)}/unlock`,
-            {}
-          ),
-      },
-      {
-        name: 'POST /api/v1/developer/doors/.../unlock',
-        fn: () =>
-          this.http.post(
-            `/api/v1/developer/doors/${encodeURIComponent(doorId)}/unlock`,
-            {}
-          ),
-      }
-    );
+    // 4. UniFi OS Access v2 dashboard locations unlock (door-level)
+    const locationEndpoints = [
+      `/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(doorId)}/unlock`,
+      `/proxy/access/api/v2/locations/${encodeURIComponent(doorId)}/unlock`,
+      `/proxy/access/api/v2/doors/${encodeURIComponent(doorId)}/unlock`,
+      `/proxy/access/api/v2/door/${encodeURIComponent(doorId)}/unlock`,
+    ];
+    for (const ep of locationEndpoints) {
+      attempts.push({
+        name: `PUT ${ep}`,
+        fn: () => this.http.put(ep, { duration: durationSeconds }),
+      });
+      attempts.push({
+        name: `POST ${ep}`,
+        fn: () => this.http.post(ep, { duration: durationSeconds }),
+      });
+    }
 
     for (const att of attempts) {
       try {
@@ -1205,15 +1204,17 @@ export class UnifiAccessClient {
 
       let holdRuleApplied = false;
       const holdEndpoints: string[] = [
+        ...this.getDeveloperEndpoints('doors', `${encodeURIComponent(doorId)}/lock_rule`),
         `/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(doorId)}/lock_rule`,
+        `/proxy/access/api/v2/locations/${encodeURIComponent(doorId)}/lock_rule`,
+        `/proxy/access/api/v2/doors/${encodeURIComponent(doorId)}/lock_rule`,
       ];
       if (hubId) {
         holdEndpoints.push(`/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/lock_rule`);
+        holdEndpoints.push(`/proxy/access/api/v2/devices/${encodeURIComponent(hubId)}/lock_rule`);
       }
       holdEndpoints.push(
-        `/proxy/access/api/v2/device/${encodeURIComponent(doorId)}/lock_rule`,
-        `/proxy/access/integration/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
-        `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`
+        `/proxy/access/api/v2/device/${encodeURIComponent(doorId)}/lock_rule`
       );
 
       // Also try location unlock with full duration
@@ -1270,12 +1271,48 @@ export class UnifiAccessClient {
     let lastError: Error | null = null;
 
     let hubId = this.doorToHubMap.get(doorId);
+    let port = this.doorToPortMap.get(doorId) || 'd1';
     if (!hubId) {
       await this.populateDoorToHubMap().catch(() => {});
       hubId = this.doorToHubMap.get(doorId);
+      port = this.doorToPortMap.get(doorId) || 'd1';
     }
 
-    // 1. Try native dashboard location lock first
+    // 1. Try developer lock endpoints (ports 12445 and 443)
+    const devLockEndpoints = this.getDeveloperEndpoints('doors', `${encodeURIComponent(doorId)}/lock`);
+    for (const ep of devLockEndpoints) {
+      try {
+        await this.http.put(ep, {});
+        locked = true;
+        logger.info(`[UniFi] Door ${doorId} locked via ${ep}`);
+        return;
+      } catch (err: any) {
+        lastError = err;
+      }
+      try {
+        await this.http.post(ep, {});
+        locked = true;
+        logger.info(`[UniFi] Door ${doorId} locked via ${ep}`);
+        return;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    // 1b. Direct door state change to lock
+    const devDoorEndpoints = this.getDeveloperEndpoints('doors', encodeURIComponent(doorId));
+    for (const ep of devDoorEndpoints) {
+      try {
+        await this.http.put(ep, { door_lock_relay_status: 'lock' });
+        locked = true;
+        logger.info(`[UniFi] Door ${doorId} locked via state update on ${ep}`);
+        return;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    // 2. Try native dashboard location lock
     try {
       await this.http.put(
         `/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(doorId)}/lock`,
@@ -1295,15 +1332,21 @@ export class UnifiAccessClient {
       { type: 'keep_lock' },
     ];
 
-    const lockEndpoints: string[] = [];
+    const lockEndpoints: string[] = [
+      ...this.getDeveloperEndpoints('doors', `${encodeURIComponent(doorId)}/lock_rule`),
+    ];
     if (hubId) {
-      lockEndpoints.push(`/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/lock_rule`);
+      lockEndpoints.push(
+        `/proxy/access/api/v2/device/${encodeURIComponent(hubId)}/lock_rule`,
+        `/proxy/access/api/v2/devices/${encodeURIComponent(hubId)}/lock_rule`
+      );
     }
     lockEndpoints.push(
       `/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(doorId)}/lock_rule`,
+      `/proxy/access/api/v2/locations/${encodeURIComponent(doorId)}/lock_rule`,
       `/proxy/access/api/v2/device/${encodeURIComponent(doorId)}/lock_rule`,
-      `/proxy/access/integration/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`,
-      `/api/v1/developer/doors/${encodeURIComponent(doorId)}/lock_rule`
+      `/proxy/access/api/v2/devices/${encodeURIComponent(doorId)}/lock_rule`,
+      `/proxy/access/api/v2/doors/${encodeURIComponent(doorId)}/lock_rule`
     );
 
     for (const endpoint of lockEndpoints) {
@@ -1715,8 +1758,9 @@ export class UnifiAccessClient {
     const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
     try {
       const u = new URL(this.host);
-      // 1. Dedicated Developer API port (12445) on controller LAN
-      endpoints.push(`${u.protocol}//${u.hostname}:12445/api/v1/developer/${resource}${cleanSub}`);
+      // 1. Dedicated Developer API port (12445) on controller LAN (both https and http)
+      endpoints.push(`https://${u.hostname}:12445/api/v1/developer/${resource}${cleanSub}`);
+      endpoints.push(`http://${u.hostname}:12445/api/v1/developer/${resource}${cleanSub}`);
     } catch {}
 
     // 2. Port 443 proxy endpoints
@@ -1910,6 +1954,7 @@ export class UnifiAccessClient {
     until?: number;
     pageSize?: number;
     topic?: string;
+    maxPages?: number;
   }): Promise<AccessLogEntry[]> {
     const endpoints = [
       ...this.getDeveloperEndpoints('system/logs'),
@@ -1917,44 +1962,75 @@ export class UnifiAccessClient {
       '/proxy/access/api/v2/events',
     ];
 
-    const body: Record<string, any> = {
-      topic: options?.topic || 'door_openings',
-      page_num: 1,
-      page_size: options?.pageSize || 50,
-    };
-    if (options?.since) body.since = options.since;
-    if (options?.until) body.until = options.until;
+    const pageSize = options?.pageSize || 100;
+    const maxPages = options?.maxPages || 10;
+    const allEntries: AccessLogEntry[] = [];
+    const seenIds = new Set<string>();
 
     for (const endpoint of endpoints) {
       try {
-        let res: any;
-        if (endpoint.includes('/v2/')) {
-          res = await this.http.get(endpoint, {
-            params: {
-              page: 1,
-              page_size: options?.pageSize || 50,
-              since: options?.since,
-            },
-          });
-        } else {
-          res = await this.http.post(endpoint, body);
+        let page = 1;
+        let consecutiveEmpty = 0;
+
+        while (page <= maxPages) {
+          let res: any;
+          if (endpoint.includes('/v2/')) {
+            res = await this.http.get(endpoint, {
+              params: {
+                page,
+                page_size: pageSize,
+                ...(options?.since ? { since: options.since } : {}),
+                ...(options?.until ? { until: options.until } : {}),
+              },
+            });
+          } else {
+            res = await this.http.post(endpoint, {
+              topic: options?.topic || 'door_openings',
+              page_num: page,
+              page_size: pageSize,
+              ...(options?.since ? { since: options.since } : {}),
+              ...(options?.until ? { until: options.until } : {}),
+            });
+          }
+
+          const rawList = Array.isArray(res.data?.data)
+            ? res.data.data
+            : Array.isArray(res.data?.data?.list)
+            ? res.data.data.list
+            : Array.isArray(res.data?.data?.activities)
+            ? res.data.data.activities
+            : Array.isArray(res.data?.list)
+            ? res.data.list
+            : Array.isArray(res.data)
+            ? res.data
+            : null;
+
+          if (!rawList || rawList.length === 0) {
+            consecutiveEmpty++;
+            if (consecutiveEmpty >= 1) break;
+          } else {
+            consecutiveEmpty = 0;
+            let addedThisPage = 0;
+            for (const item of rawList) {
+              const normalized = normalizeAccessLogEntry(item);
+              if (!seenIds.has(normalized.id)) {
+                seenIds.add(normalized.id);
+                allEntries.push(normalized);
+                addedThisPage++;
+              }
+            }
+
+            if (rawList.length < pageSize || addedThisPage === 0) {
+              // Reached oldest available record
+              break;
+            }
+          }
+          page++;
         }
 
-        const rawList = Array.isArray(res.data?.data)
-          ? res.data.data
-          : Array.isArray(res.data?.data?.list)
-          ? res.data.data.list
-          : Array.isArray(res.data?.data?.activities)
-          ? res.data.data.activities
-          : Array.isArray(res.data?.list)
-          ? res.data.list
-          : Array.isArray(res.data)
-          ? res.data
-          : null;
-
-        if (rawList !== null && rawList.length > 0) {
-          logger.info(`[UniFi] Fetched ${rawList.length} access log(s) via ${endpoint}`);
-          return rawList.map((item: any) => normalizeAccessLogEntry(item));
+        if (allEntries.length > 0) {
+          logger.info(`[UniFi] Fetched ${allEntries.length} access log(s) across ${page - 1} page(s) via ${endpoint}`);
+          return allEntries;
         }
       } catch (err: any) {
         logger.debug(`[UniFi] getAccessLogs tried ${endpoint} -> ${err.response?.status || err.message}`);

@@ -394,7 +394,13 @@ export function startCommandListener(
         );
         resultMessage = `Visitor ${command.visitor_id} revoked successfully.`;
       } else if (command.action === 'sync_access_logs') {
-        const synced = await syncAccessLogs(orgId, unifiClient);
+        const backfill = Boolean((command as any).backfill);
+        const days = typeof (command as any).days === 'number' ? (command as any).days : 90;
+        const synced = await syncAccessLogs(orgId, unifiClient, {
+          forceFull: backfill,
+          lookbackDays: days,
+          maxPages: backfill ? 50 : 15,
+        });
         resultMessage = `Synced ${synced.length} access log(s) from UniFi Access.`;
       } else if (command.action === 'apply_update' || command.action === 'upgrade_agent') {
         const updateState = await checkForUpdate();

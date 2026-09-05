@@ -14,18 +14,26 @@ import * as admin from 'firebase-admin';
 
 let _lastSyncedEpochSeconds = 0;
 
+export interface AccessLogSyncOptions {
+  lookbackDays?: number;
+  maxPages?: number;
+  forceFull?: boolean;
+}
+
 /**
  * Fetch new access logs from UniFi Access and upsert into Firestore.
+ * Supports deep historical lookback and multi-page pagination.
  */
 export async function syncAccessLogs(
   orgId: string,
-  unifiClient: UnifiAccessClient
+  unifiClient: UnifiAccessClient,
+  options?: AccessLogSyncOptions
 ): Promise<AccessLogEntry[]> {
   const db = getDb();
   let entries: AccessLogEntry[] = [];
 
   // 1. Look up last synced timestamp if not cached in memory
-  if (_lastSyncedEpochSeconds === 0) {
+  if (_lastSyncedEpochSeconds === 0 && !options?.forceFull) {
     try {
       const stateSnap = await db
         .doc(`organizations/${orgId}/settings/access_log_sync`)
@@ -36,17 +44,24 @@ export async function syncAccessLogs(
     } catch {}
   }
 
-  // Lookback with a 120s buffer for clock drift / delayed reporting, or default to last 24h on first run
   const nowEpoch = Math.floor(Date.now() / 1000);
-  const since = _lastSyncedEpochSeconds > 0
-    ? Math.max(0, _lastSyncedEpochSeconds - 120)
-    : nowEpoch - 24 * 60 * 60;
+  const isFullOrInitial = options?.forceFull || _lastSyncedEpochSeconds === 0;
+  const defaultDays = options?.lookbackDays || 90;
+  const since = isFullOrInitial
+    ? nowEpoch - defaultDays * 24 * 60 * 60
+    : Math.max(0, _lastSyncedEpochSeconds - 180);
+  const maxPages = isFullOrInitial ? (options?.maxPages || 50) : (options?.maxPages || 5);
+
+  logger.info(
+    `[AccessLogSync] Fetching access logs from UniFi (since: ${new Date(since * 1000).toISOString()}, maxPages: ${maxPages}, mode: ${isFullOrInitial ? 'deep_history' : 'incremental'})…`
+  );
 
   try {
     entries = await unifiClient.getAccessLogs({
       since,
       pageSize: 100,
       topic: 'door_openings',
+      maxPages,
     });
   } catch (err) {
     logger.error(`[AccessLogSync] Failed to fetch access logs from UniFi: ${String(err)}`);
@@ -58,8 +73,9 @@ export async function syncAccessLogs(
     return [];
   }
 
-  // 2. Commit logs to Firestore in batches (max 500 operations per batch)
-  const batch = db.batch();
+  logger.info(`[AccessLogSync] Processing ${entries.length} log entry(s) for Firestore permanent archive…`);
+
+  // 2. Commit logs to Firestore in safe chunks (max 400 operations per batch)
   const now = admin.firestore.Timestamp.now();
   let latestEventEpoch = _lastSyncedEpochSeconds;
 
@@ -69,40 +85,53 @@ export async function syncAccessLogs(
     { timestamp: string; userName: string; accessMethod: string; accessMethodLabel: string }
   >();
 
-  for (const entry of entries) {
-    if (!entry.id) continue;
-    const docRef = db.doc(`organizations/${orgId}/access_logs/${entry.id}`);
-    const record = {
-      ...entry,
-      org_id: orgId,
-      synced_at: now,
-    };
-    batch.set(docRef, record, { merge: true });
+  const CHUNK_SIZE = 400;
+  for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
+    const chunk = entries.slice(i, i + CHUNK_SIZE);
+    const chunkBatch = db.batch();
 
-    // Track latest timestamp seen
-    const eventEpoch = Math.floor(new Date(entry.timestamp).getTime() / 1000);
-    if (!isNaN(eventEpoch) && eventEpoch > latestEventEpoch) {
-      latestEventEpoch = eventEpoch;
+    for (const entry of chunk) {
+      if (!entry.id) continue;
+      const docRef = db.doc(`organizations/${orgId}/access_logs/${entry.id}`);
+      const record = {
+        ...entry,
+        org_id: orgId,
+        synced_at: now,
+      };
+      chunkBatch.set(docRef, record, { merge: true });
+
+      // Track latest timestamp seen
+      const eventEpoch = Math.floor(new Date(entry.timestamp).getTime() / 1000);
+      if (!isNaN(eventEpoch) && eventEpoch > latestEventEpoch) {
+        latestEventEpoch = eventEpoch;
+      }
+
+      // Door last accessed metadata
+      if (entry.door_id && entry.user_name && entry.event_result === 'success') {
+        const existing = doorLatestAccess.get(entry.door_id);
+        if (!existing || new Date(entry.timestamp).getTime() > new Date(existing.timestamp).getTime()) {
+          doorLatestAccess.set(entry.door_id, {
+            timestamp: entry.timestamp,
+            userName: entry.user_name,
+            accessMethod: entry.access_method,
+            accessMethodLabel: entry.access_method_label,
+          });
+        }
+      }
     }
 
-    // Door last accessed metadata
-    if (entry.door_id && entry.user_name && entry.event_result === 'success') {
-      const existing = doorLatestAccess.get(entry.door_id);
-      if (!existing || new Date(entry.timestamp).getTime() > new Date(existing.timestamp).getTime()) {
-        doorLatestAccess.set(entry.door_id, {
-          timestamp: entry.timestamp,
-          userName: entry.user_name,
-          accessMethod: entry.access_method,
-          accessMethodLabel: entry.access_method_label,
-        });
-      }
+    try {
+      await chunkBatch.commit();
+    } catch (err) {
+      logger.error(`[AccessLogSync] Chunk write failed: ${String(err)}`);
     }
   }
 
-  // 3. Update doors with last accessed metadata
+  // 3. Update doors with last accessed metadata and update sync state
+  const metaBatch = db.batch();
   for (const [doorId, info] of doorLatestAccess.entries()) {
     const doorRef = db.doc(`organizations/${orgId}/doors/${doorId}`);
-    batch.set(
+    metaBatch.set(
       doorRef,
       {
         last_accessed_at: info.timestamp,
@@ -117,7 +146,7 @@ export async function syncAccessLogs(
   // 4. Update sync state
   _lastSyncedEpochSeconds = Math.max(_lastSyncedEpochSeconds, latestEventEpoch);
   const syncStateRef = db.doc(`organizations/${orgId}/settings/access_log_sync`);
-  batch.set(
+  metaBatch.set(
     syncStateRef,
     {
       last_synced_epoch: _lastSyncedEpochSeconds,
@@ -128,13 +157,28 @@ export async function syncAccessLogs(
   );
 
   try {
-    await batch.commit();
-    logger.info(`[AccessLogSync] Synced ${entries.length} access log(s) for org: ${orgId}`);
+    await metaBatch.commit();
+    logger.info(`[AccessLogSync] Successfully committed ${entries.length} access log(s) to Firestore for org: ${orgId}`);
   } catch (err) {
-    logger.error(`[AccessLogSync] Batch write failed: ${String(err)}`);
+    logger.error(`[AccessLogSync] Metadata write failed: ${String(err)}`);
   }
 
   return entries;
+}
+
+/**
+ * Force a deep backfill of all historical access logs from UniFi into Firestore.
+ */
+export async function backfillAccessLogs(
+  orgId: string,
+  unifiClient: UnifiAccessClient,
+  lookbackDays = 90
+): Promise<AccessLogEntry[]> {
+  return syncAccessLogs(orgId, unifiClient, {
+    forceFull: true,
+    lookbackDays,
+    maxPages: 50,
+  });
 }
 
 /**

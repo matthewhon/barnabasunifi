@@ -275,18 +275,24 @@ export default function AccessActivityPage() {
   }, [orgId]);
 
   // Sync Trigger
-  const handleSyncNow = async () => {
+  const handleSyncNow = async (backfillInput?: boolean | React.MouseEvent) => {
     if (!orgId || syncing) return;
+    const backfill = typeof backfillInput === 'boolean' ? backfillInput : false;
     setSyncing(true);
     try {
       const fn = httpsCallable(functions, 'syncUnifiAccessLogs');
-      const res: any = await fn({ orgId });
+      const res: any = await fn({ orgId, backfill, days: backfill ? 90 : 30 });
       const mode = res.data?.mode;
       const count = res.data?.count;
       if (mode === 'remote') {
-        showFeedback(`Synced ${count ?? 0} activity log(s) from UniFi Access.`, true);
+        showFeedback(`Synced ${count ?? 0} activity log(s) from UniFi Access into permanent Firebase archive.`, true);
       } else {
-        showFeedback('Sync command dispatched to local agent.', true);
+        showFeedback(
+          backfill
+            ? 'Full 90-day archive command dispatched to agent. Pulling all available UniFi history into Firebase…'
+            : 'Sync command dispatched to local agent.',
+          true
+        );
       }
     } catch (err: any) {
       showFeedback(err.message || 'Failed to sync activity logs.', false);
@@ -470,15 +476,25 @@ export default function AccessActivityPage() {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           <button
             className="btn btn-secondary btn-sm"
-            onClick={handleSyncNow}
+            onClick={() => handleSyncNow(false)}
             disabled={syncing}
             title="Poll UniFi Access API for fresh logs"
           >
             <RefreshIcon spin={syncing} />
-            {syncing ? 'Syncing…' : 'Sync Now'}
+            {syncing ? 'Syncing…' : 'Sync Recent'}
+          </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => handleSyncNow(true)}
+            disabled={syncing}
+            title="Deep pull: Fetch up to 90 days of all available historical activity logs from UniFi Access into permanent Firebase storage"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+          >
+            <span>📦</span>
+            <span>Archive History (90d)</span>
           </button>
           <button
             className="btn btn-secondary btn-sm"

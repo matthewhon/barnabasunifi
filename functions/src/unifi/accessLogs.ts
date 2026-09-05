@@ -183,9 +183,9 @@ async function verifyOrgPermission(
  * syncUnifiAccessLogs
  * Triggers access logs synchronization from UniFi Access.
  */
-export const syncUnifiAccessLogs = onCall<{ orgId: string }>(
+export const syncUnifiAccessLogs = onCall<{ orgId: string; backfill?: boolean; days?: number }>(
   async (request) => {
-    const { orgId } = request.data ?? {};
+    const { orgId, backfill, days } = request.data ?? {};
     if (!orgId) throw new HttpsError('invalid-argument', 'orgId is required.');
 
     await verifyOrgPermission(request.auth, orgId, ['org_admin', 'manager', 'viewer']);
@@ -215,11 +215,14 @@ export const syncUnifiAccessLogs = onCall<{ orgId: string }>(
       });
 
       let rawLogs: any[] = [];
+      const lookbackSec = (days || 90) * 24 * 60 * 60;
+      const sinceEpoch = Math.floor(Date.now() / 1000) - lookbackSec;
 
       try {
         const res = await client.post('/api/v1/developer/system/logs', {
           topic: 'door_openings',
           page_size: 100,
+          since: sinceEpoch,
         });
         rawLogs = Array.isArray(res.data?.data) ? res.data.data : [];
       } catch {
@@ -227,11 +230,14 @@ export const syncUnifiAccessLogs = onCall<{ orgId: string }>(
           const res = await client.post('/proxy/access/integration/v1/developer/system/logs', {
             topic: 'door_openings',
             page_size: 100,
+            since: sinceEpoch,
           });
           rawLogs = Array.isArray(res.data?.data) ? res.data.data : [];
         } catch {
           try {
-            const res = await client.get('/proxy/access/api/v2/activities');
+            const res = await client.get('/proxy/access/api/v2/activities', {
+              params: { page_size: 100, since: sinceEpoch },
+            });
             rawLogs = Array.isArray(res.data?.data) ? res.data.data : [];
           } catch (err) {
             console.warn('[SyncAccessLogs] Failed to fetch logs from remote UniFi host:', err);
@@ -241,24 +247,28 @@ export const syncUnifiAccessLogs = onCall<{ orgId: string }>(
 
       const normalizedLogs = rawLogs.map((item) => normalizeAccessLogEntry(item, orgId));
 
-      const batch = db.batch();
-      for (const log of normalizedLogs) {
-        const docRef = db.doc(`organizations/${orgId}/access_logs/${log.id}`);
-        batch.set(docRef, {
-          ...log,
-          created_at: FieldValue.serverTimestamp(),
-        }, { merge: true });
-
-        if (log.door_id) {
-          const doorRef = db.doc(`organizations/${orgId}/doors/${log.door_id}`);
-          batch.set(doorRef, {
-            last_accessed_at: log.timestamp,
-            last_accessed_by: log.user_name || null,
-            last_access_method: log.access_method_label,
+      const CHUNK_SIZE = 400;
+      for (let i = 0; i < normalizedLogs.length; i += CHUNK_SIZE) {
+        const chunk = normalizedLogs.slice(i, i + CHUNK_SIZE);
+        const batch = db.batch();
+        for (const log of chunk) {
+          const docRef = db.doc(`organizations/${orgId}/access_logs/${log.id}`);
+          batch.set(docRef, {
+            ...log,
+            created_at: FieldValue.serverTimestamp(),
           }, { merge: true });
+
+          if (log.door_id) {
+            const doorRef = db.doc(`organizations/${orgId}/doors/${log.door_id}`);
+            batch.set(doorRef, {
+              last_accessed_at: log.timestamp,
+              last_accessed_by: log.user_name || null,
+              last_access_method: log.access_method_label,
+            }, { merge: true });
+          }
         }
+        await batch.commit();
       }
-      await batch.commit();
 
       return {
         success: true,
@@ -272,6 +282,8 @@ export const syncUnifiAccessLogs = onCall<{ orgId: string }>(
     const nowIso = new Date().toISOString();
     const commandRef = await db.collection(`organizations/${orgId}/door_commands`).add({
       action: 'sync_access_logs',
+      backfill: Boolean(backfill),
+      days: typeof days === 'number' ? days : 90,
       status: 'queued',
       execute_at: nowIso,
       triggered_by: 'manual',
