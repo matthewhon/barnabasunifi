@@ -16,8 +16,12 @@ services:
     volumes:
       - ./service-account.json:/app/service-account.json
       - ./.env:/app/.env
+      - agent_dist:/app/dist
     logging:
       driver: json-file
       options:
         max-size: '10m'
         max-files: '3'
+
+volumes:
+  agent_dist:
