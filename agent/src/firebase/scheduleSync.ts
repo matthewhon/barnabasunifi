@@ -51,6 +51,21 @@ export async function syncSchedules(
     };
 
     batch.set(scheduleRef, record, { merge: true });
+
+    // Link assigned doors directly in Firestore doors collection
+    if (schedule.door_ids && Array.isArray(schedule.door_ids)) {
+      for (const dId of schedule.door_ids) {
+        const doorRef = db.doc(`organizations/${orgId}/doors/${dId}`);
+        batch.set(
+          doorRef,
+          {
+            schedule_id: schedule.id,
+            schedule_name: schedule.name,
+          },
+          { merge: true }
+        );
+      }
+    }
   }
 
   try {

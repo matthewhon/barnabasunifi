@@ -158,6 +158,7 @@ export default function SchedulePage() {
   const isOrgAdmin = role === 'org_admin' || isSuperAdmin;
 
   const [viewMode, setViewMode] = useState<ViewMode>('unifi');
+  const [unifiSubTab, setUnifiSubTab] = useState<'doors' | 'schedules'>('doors');
 
   // UniFi Schedules State
   const [unifiSchedules, setUnifiSchedules] = useState<UnifiSchedule[]>([]);
@@ -349,13 +350,182 @@ export default function SchedulePage() {
       {/* ─── UNIFI SCHEDULES VIEW ─────────────────────────────────────────── */}
       {viewMode === 'unifi' && (
         <div>
+          {/* Sub-view switcher: By Door vs All Schedules */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.375rem', background: 'var(--color-bg-surface)', padding: '0.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+              <button
+                className={`btn btn-sm ${unifiSubTab === 'doors' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.8125rem' }}
+                onClick={() => setUnifiSubTab('doors')}
+              >
+                🚪 By Door ({doors.length})
+              </button>
+              <button
+                className={`btn btn-sm ${unifiSubTab === 'schedules' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.8125rem' }}
+                onClick={() => setUnifiSubTab('schedules')}
+              >
+                🗓️ All Schedules ({unifiSchedules.length})
+              </button>
+            </div>
+
+            <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+              {unifiSubTab === 'doors'
+                ? 'Showing configured unlock schedule for each physical door'
+                : 'Showing global unlock rules and access policy schedules'}
+            </div>
+          </div>
+
           {unifiLoading ? (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(20rem, 1fr))', gap: '1rem' }}>
               {[1, 2, 3, 4].map((i) => (
                 <div key={i} className="skeleton" style={{ height: '11rem', borderRadius: 'var(--radius-lg)' }} />
               ))}
             </div>
+          ) : unifiSubTab === 'doors' ? (
+            /* ─── BY DOOR VIEW ─── */
+            doors.length === 0 ? (
+              <div className="card" style={{ textAlign: 'center', padding: '3rem 1.5rem' }}>
+                <p style={{ color: 'var(--color-text-muted)' }}>No doors registered yet. Connect your agent to scan for doors.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(22rem, 1fr))', gap: '1.25rem' }}>
+                {doors.map((door) => {
+                  const doorSched = unifiSchedules.find(
+                    (s) =>
+                      s.id === door.schedule_id ||
+                      (door.schedule_name && s.name.toLowerCase() === door.schedule_name.toLowerCase()) ||
+                      s.door_ids?.includes(door.id)
+                  );
+
+                  return (
+                    <div
+                      key={door.id}
+                      className="card"
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        gap: '1rem',
+                        borderLeft: doorSched ? '4px solid var(--color-accent)' : '4px solid var(--color-border)',
+                      }}
+                    >
+                      <div>
+                        {/* Door Header */}
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span style={{ fontSize: '1.125rem' }}>🚪</span>
+                              <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                                {door.label || door.id}
+                              </h3>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.375rem', marginTop: '0.375rem', flexWrap: 'wrap' }}>
+                              <span className={`badge ${door.current_state === 'unlocked' ? 'badge-success' : 'badge-neutral'}`} style={{ fontSize: '0.6875rem' }}>
+                                {door.current_state === 'unlocked' ? '🔓 Unlocked' : '🔒 Locked'}
+                              </span>
+                              {door.door_position_status && (
+                                <span className={`badge ${door.door_position_status === 'open' ? 'badge-warning' : 'badge-neutral'}`} style={{ fontSize: '0.6875rem' }}>
+                                  {door.door_position_status === 'open' ? 'Open' : 'Closed'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {isOrgAdmin && (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              style={{ padding: '0.375rem 0.5rem', fontSize: '0.75rem', gap: '0.25rem' }}
+                              onClick={() => {
+                                if (doorSched) {
+                                  setEditingSchedule(doorSched);
+                                } else {
+                                  setEditingSchedule({
+                                    id: `door-sched-${door.id}`,
+                                    org_id: orgId || '',
+                                    unifi_schedule_id: '',
+                                    name: `${door.label || door.id} Unlock Schedule`,
+                                    type: 'unlock',
+                                    weekly_schedule: [],
+                                    door_ids: [door.id],
+                                    door_labels: [door.label || door.id],
+                                  });
+                                }
+                                setModalOpen(true);
+                              }}
+                            >
+                              <EditIcon />
+                              {doorSched ? 'Edit' : 'Set Hours'}
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Schedule details */}
+                        {doorSched ? (
+                          <>
+                            <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-accent)', marginTop: '0.75rem' }}>
+                              🗓️ {doorSched.name}
+                            </div>
+
+                            {/* Active Days Chips */}
+                            <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.5rem', marginBottom: '0.5rem' }}>
+                              {WEEK_DAYS.map(({ key, letter }) => {
+                                const dayConfig = doorSched.weekly_schedule?.find((d) => d.day === key);
+                                const active = dayConfig?.active && (dayConfig?.slots?.length ?? 0) > 0;
+                                return (
+                                  <div
+                                    key={key}
+                                    style={{
+                                      width: '1.75rem',
+                                      height: '1.75rem',
+                                      borderRadius: 'var(--radius-sm)',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      fontSize: '0.75rem',
+                                      fontWeight: 700,
+                                      background: active ? 'rgba(36, 101, 245, 0.15)' : 'var(--color-bg-base)',
+                                      color: active ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                                      border: `1px solid ${active ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                                    }}
+                                    title={`${key.toUpperCase()}: ${active ? 'Active' : 'Closed'}`}
+                                  >
+                                    {letter}
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.4, margin: '0.25rem 0 0' }}>
+                              {formatScheduleSummary(doorSched)}
+                            </p>
+                          </>
+                        ) : (
+                          <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--color-border)' }}>
+                            <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>
+                              No unlock schedule active
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
+                              Door remains locked 24/7 (opens only via card, PIN, mobile tap, or PCO window).
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Footer */}
+                      <div style={{ paddingTop: '0.5rem', borderTop: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                        <span>ID: {door.id.slice(0, 8)}…</span>
+                        {doorSched?.last_synced && (
+                          <span>Synced {format(new Date(doorSched.last_synced), 'MMM d, h:mm a')}</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
           ) : unifiSchedules.length === 0 ? (
+            /* ─── EMPTY STATE ─── */
             <div className="card" style={{ textAlign: 'center', padding: '3.5rem 1.5rem' }}>
               <h3 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: '0.5rem' }}>
                 No UniFi Access Schedules Found
@@ -387,6 +557,7 @@ export default function SchedulePage() {
               </div>
             </div>
           ) : (
+            /* ─── ALL SCHEDULES GRID ─── */
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(22rem, 1fr))', gap: '1.25rem' }}>
               {unifiSchedules.map((sched) => {
                 const isUnlock = sched.type === 'unlock';
@@ -470,9 +641,20 @@ export default function SchedulePage() {
                       </div>
 
                       {/* Summary text */}
-                      <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.4 }}>
+                      <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.4, margin: '0 0 0.5rem' }}>
                         {formatScheduleSummary(sched)}
                       </p>
+
+                      {/* Assigned Door Tags */}
+                      {sched.door_labels && sched.door_labels.length > 0 && (
+                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                          {sched.door_labels.map((dl, idx) => (
+                            <span key={idx} className="badge badge-neutral" style={{ fontSize: '0.6875rem', gap: '0.25rem' }}>
+                              🚪 {dl}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     {/* Footer row: Doors and Sync time */}

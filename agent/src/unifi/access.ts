@@ -1420,30 +1420,67 @@ export class UnifiAccessClient {
       } catch {}
     }
 
-    // 4. Fetch door-specific unlock schedules from /doors API
+    // 4. Fetch door-specific unlock schedules for each individual door
     try {
-      const doorsRes = await this.http.get<{ data?: any[] }>('/proxy/access/api/v2/doors');
-      const doorsData = doorsRes.data?.data || [];
-      for (const dr of doorsData) {
-        const doorId = String(dr.id || dr.unique_id || '');
+      const allDoors = await this.getDoors();
+      logger.info(`[UniFi] Inspecting ${allDoors.length} door(s) for door-level unlock schedules…`);
+
+      for (const dr of allDoors) {
+        const doorId = String(dr.id || '');
         if (!doorId) continue;
         const doorName = String(dr.name || dr.full_name || 'Door');
 
-        // Check for direct schedule link ID on the door
-        const linkedSchedId = String(
-          dr.unlock_schedule_id || dr.schedule_id || dr.keep_open_schedule_id || dr.door_unlock_rule?.schedule_id || ''
-        );
-        if (linkedSchedId) {
-          const entry = scheduleToDoors.get(linkedSchedId) || { doorIds: [], doorLabels: [] };
-          if (!entry.doorIds.includes(doorId)) {
-            entry.doorIds.push(doorId);
-            entry.doorLabels.push(doorName);
+        let doorDetail: any = dr;
+        try {
+          const detailRes = await this.getDoorDetails(doorId);
+          if (detailRes && typeof detailRes === 'object') {
+            doorDetail = { ...doorDetail, ...detailRes };
           }
-          scheduleToDoors.set(linkedSchedId, entry);
+        } catch {}
+
+        // 4a. Check for linked schedule ID on the door
+        const linkedSchedId = String(
+          doorDetail.unlock_schedule_id ||
+          doorDetail.schedule_id ||
+          doorDetail.keep_open_schedule_id ||
+          doorDetail.door_unlock_rule?.schedule_id ||
+          doorDetail.door_unlock_rule?.unlock_schedule_id ||
+          doorDetail.unlock_schedule?.id ||
+          doorDetail.schedule?.id ||
+          ''
+        );
+
+        if (linkedSchedId) {
+          let sched = schedulesMap.get(linkedSchedId);
+          if (!sched) {
+            try {
+              sched = await this.getSchedule(linkedSchedId);
+              if (sched) {
+                schedulesMap.set(sched.id, sched);
+              }
+            } catch (err) {
+              logger.debug(`[UniFi] Could not fetch schedule ${linkedSchedId} for ${doorName}: ${err}`);
+            }
+          }
+
+          if (sched) {
+            const entry = scheduleToDoors.get(sched.id) || { doorIds: [], doorLabels: [] };
+            if (!entry.doorIds.includes(doorId)) {
+              entry.doorIds.push(doorId);
+              entry.doorLabels.push(doorName);
+            }
+            scheduleToDoors.set(sched.id, entry);
+          }
         }
 
-        // Check for embedded unlock schedule object directly on the door
-        const embedded = dr.unlock_schedule || dr.schedule || dr.keep_open_schedule || dr.door_unlock_rule;
+        // 4b. Check for embedded unlock schedule object directly on the door
+        const embedded =
+          doorDetail.door_unlock_rule ||
+          doorDetail.unlock_schedule ||
+          doorDetail.schedule ||
+          doorDetail.keep_open_schedule ||
+          doorDetail.work_time_rule;
+
         if (embedded && typeof embedded === 'object') {
           const schedId = String(embedded.id || embedded.unique_id || `door-sched-${doorId}`);
           const schedName = String(embedded.name || `${doorName} Unlock Schedule`);
@@ -1454,37 +1491,38 @@ export class UnifiAccessClient {
             type: 'unlock',
             doors: [{ id: doorId, name: doorName }],
           });
-          if (!schedulesMap.has(schedId)) {
+
+          // Check if this rule has active hours or days
+          const hasActiveSlots = normalized.weekly_schedule?.some((d) => d.active && d.slots.length > 0);
+          if (hasActiveSlots || !schedulesMap.has(schedId)) {
             schedulesMap.set(schedId, normalized);
+            const entry = scheduleToDoors.get(schedId) || { doorIds: [], doorLabels: [] };
+            if (!entry.doorIds.includes(doorId)) {
+              entry.doorIds.push(doorId);
+              entry.doorLabels.push(doorName);
+            }
+            scheduleToDoors.set(schedId, entry);
           }
-          const entry = scheduleToDoors.get(schedId) || { doorIds: [], doorLabels: [] };
-          if (!entry.doorIds.includes(doorId)) {
-            entry.doorIds.push(doorId);
-            entry.doorLabels.push(doorName);
-          }
-          scheduleToDoors.set(schedId, entry);
         }
 
-        // Check for pass_schedules or weekly_schedule directly on the door
-        const passList = dr.pass_schedules || dr.schedules;
+        // 4c. Check for pass_schedules or weekly_schedule directly on the door root
+        const passList = doorDetail.pass_schedules || doorDetail.weekly_schedule || doorDetail.week_schedule;
         if (Array.isArray(passList) && passList.length > 0) {
           const schedId = `door-sched-${doorId}`;
-          const schedName = `${doorName} Schedule`;
-          if (!schedulesMap.has(schedId)) {
-            const normalized = normalizeUnifiSchedule({
-              id: schedId,
-              name: schedName,
-              type: 'unlock',
-              weekly_schedule: passList,
-              doors: [{ id: doorId, name: doorName }],
-            });
-            schedulesMap.set(schedId, normalized);
-            scheduleToDoors.set(schedId, { doorIds: [doorId], doorLabels: [doorName] });
-          }
+          const schedName = `${doorName} Unlock Schedule`;
+          const normalized = normalizeUnifiSchedule({
+            id: schedId,
+            name: schedName,
+            type: 'unlock',
+            weekly_schedule: passList,
+            doors: [{ id: doorId, name: doorName }],
+          });
+          schedulesMap.set(schedId, normalized);
+          scheduleToDoors.set(schedId, { doorIds: [doorId], doorLabels: [doorName] });
         }
       }
     } catch (err) {
-      logger.debug(`[UniFi] Could not inspect /proxy/access/api/v2/doors for schedules: ${err}`);
+      logger.warn(`[UniFi] Could not inspect doors for schedules: ${err}`);
     }
 
     // 5. Connect doors to schedules
@@ -1503,8 +1541,31 @@ export class UnifiAccessClient {
     }
 
     const allSchedules = Array.from(schedulesMap.values());
-    logger.info(`[UniFi] Resolved ${allSchedules.length} schedule(s) with door assignments`);
+    logger.info(`[UniFi] Resolved ${allSchedules.length} schedule(s) across doors`);
     return allSchedules;
+  }
+
+  /**
+   * Fetch detailed door configuration from developer and proxy endpoints.
+   */
+  async getDoorDetails(doorId: string): Promise<any> {
+    const endpoints = [
+      ...this.getDeveloperEndpoints('doors', encodeURIComponent(doorId)),
+      `/proxy/access/api/v2/door/${encodeURIComponent(doorId)}`,
+      `/proxy/access/api/v2/doors/${encodeURIComponent(doorId)}`,
+      `/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(doorId)}`,
+    ];
+
+    for (const endpoint of endpoints) {
+      try {
+        const res = await this.http.get<any>(endpoint);
+        const data = res.data?.data || res.data;
+        if (data && typeof data === 'object') {
+          return data;
+        }
+      } catch {}
+    }
+    return null;
   }
 
   /**

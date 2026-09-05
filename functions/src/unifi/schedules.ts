@@ -236,10 +236,64 @@ export const syncUnifiSchedules = onCall<{ orgId: string }>(
       }
 
       const normalizedSchedules = rawSchedules.map((item) => normalizeUnifiSchedule(item, orgId));
+      const schedulesMap = new Map<string, UnifiSchedule>();
+      for (const s of normalizedSchedules) {
+        if (s.id) schedulesMap.set(s.id, s);
+      }
+
+      // Fetch doors to discover door-level unlock rules
+      let rawDoors: any[] = [];
+      try {
+        const res = await client.get('/api/v1/developer/doors');
+        rawDoors = Array.isArray(res.data?.data) ? res.data.data : [];
+      } catch {
+        try {
+          const res = await client.get('/proxy/access/integration/v1/developer/doors');
+          rawDoors = Array.isArray(res.data?.data) ? res.data.data : [];
+        } catch {
+          try {
+            const res = await client.get('/proxy/access/api/v2/doors');
+            rawDoors = Array.isArray(res.data?.data) ? res.data.data : [];
+          } catch {}
+        }
+      }
+
+      for (const dr of rawDoors) {
+        const doorId = String(dr.id || dr.unique_id || '');
+        if (!doorId) continue;
+        const doorName = String(dr.name || dr.full_name || 'Door');
+
+        // Check linked schedule
+        const linkedId = String(dr.unlock_schedule_id || dr.schedule_id || dr.keep_open_schedule_id || dr.door_unlock_rule?.schedule_id || '');
+        if (linkedId && schedulesMap.has(linkedId)) {
+          const sched = schedulesMap.get(linkedId)!;
+          if (!sched.door_ids) sched.door_ids = [];
+          if (!sched.door_labels) sched.door_labels = [];
+          if (!sched.door_ids.includes(doorId)) sched.door_ids.push(doorId);
+          if (!sched.door_labels.includes(doorName)) sched.door_labels.push(doorName);
+        }
+
+        // Check embedded rule
+        const embedded = dr.door_unlock_rule || dr.unlock_schedule || dr.schedule || dr.keep_open_schedule;
+        if (embedded && typeof embedded === 'object') {
+          const schedId = String(embedded.id || embedded.unique_id || `door-sched-${doorId}`);
+          const schedName = String(embedded.name || `${doorName} Unlock Schedule`);
+          const normalized = normalizeUnifiSchedule({
+            ...embedded,
+            id: schedId,
+            name: schedName,
+            type: 'unlock',
+            doors: [{ id: doorId, name: doorName }],
+          }, orgId);
+          schedulesMap.set(schedId, normalized);
+        }
+      }
+
+      const allSchedules = Array.from(schedulesMap.values());
       const batch = db.batch();
       const now = FieldValue.serverTimestamp();
 
-      for (const schedule of normalizedSchedules) {
+      for (const schedule of allSchedules) {
         if (!schedule.id) continue;
         const ref = db.doc(`organizations/${orgId}/unifi_schedules/${schedule.id}`);
         batch.set(ref, {
@@ -250,6 +304,16 @@ export const syncUnifiSchedules = onCall<{ orgId: string }>(
           sync_error: null,
           updated_at: now,
         }, { merge: true });
+
+        if (schedule.door_ids && Array.isArray(schedule.door_ids)) {
+          for (const dId of schedule.door_ids) {
+            const doorRef = db.doc(`organizations/${orgId}/doors/${dId}`);
+            batch.set(doorRef, {
+              schedule_id: schedule.id,
+              schedule_name: schedule.name,
+            }, { merge: true });
+          }
+        }
       }
 
       await batch.commit();
