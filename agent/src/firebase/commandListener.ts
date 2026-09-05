@@ -10,7 +10,7 @@
 
 import * as admin from 'firebase-admin';
 import { getDb } from '../firebase';
-import { UnifiAccessClient } from '../unifi/access';
+import { UnifiAccessClient, UnifiVisitor } from '../unifi/access';
 import { logger } from '../logger';
 
 import { syncDoors } from './doorSync';
@@ -52,6 +52,8 @@ export interface DoorCommand {
   schedule_id?: string;
   schedule_data?: Record<string, unknown>;
   visitor_id?: string;
+  unifi_visitor_id?: string;
+  firestore_visitor_id?: string;
   visitor_data?: Record<string, unknown>;
   status: CommandStatus;
   execute_at: FirebaseFirestore.Timestamp | string | Date;
@@ -238,6 +240,8 @@ export function startCommandListener(
         schedule_id: rawData.schedule_id as string | undefined,
         schedule_data: rawData.schedule_data as Record<string, unknown> | undefined,
         visitor_id: rawData.visitor_id as string | undefined,
+        unifi_visitor_id: rawData.unifi_visitor_id as string | undefined,
+        firestore_visitor_id: rawData.firestore_visitor_id as string | undefined,
         visitor_data: rawData.visitor_data as Record<string, unknown> | undefined,
         status: 'executing',
         execute_at: rawData.execute_at,
@@ -322,15 +326,37 @@ export function startCommandListener(
       } else if (command.action === 'sync_visitors') {
         const synced = await syncVisitors(orgId, unifiClient);
         resultMessage = `Synced ${synced.length} visitor(s) from UniFi Access.`;
-      } else if (command.action === 'create_visitor') {
-        const created = await unifiClient.createVisitor(command.visitor_data || {});
-        const targetVisitorId = command.visitor_id || created.id;
+      } else if (command.action === 'create_visitor' || command.action === 'update_visitor') {
+        const rawUnifiId = (command.visitor_data?.unifi_visitor_id as string) || (command.unifi_visitor_id as string);
+        const unifiVisitorId = (rawUnifiId && rawUnifiId !== command.visitor_id) ? rawUnifiId : undefined;
+        let resultVisitor: UnifiVisitor;
+
+        if (command.action === 'update_visitor' && unifiVisitorId) {
+          try {
+            resultVisitor = await unifiClient.updateVisitor(unifiVisitorId, command.visitor_data || {});
+            resultMessage = `Visitor ${command.visitor_id} updated successfully in UniFi.`;
+          } catch (updateErr: any) {
+            const errStr = String(updateErr);
+            if (errStr.includes('160001') || errStr.includes('not found') || updateErr?.response?.status === 404) {
+              logger.warn(`[CommandListener] Visitor ${unifiVisitorId} not found in UniFi. Creating new visitor…`);
+              resultVisitor = await unifiClient.createVisitor(command.visitor_data || {});
+              resultMessage = `Visitor created in UniFi (ID: ${resultVisitor.id}).`;
+            } else {
+              throw updateErr;
+            }
+          }
+        } else {
+          resultVisitor = await unifiClient.createVisitor(command.visitor_data || {});
+          resultMessage = `Visitor ${resultVisitor.full_name || resultVisitor.first_name} created successfully in UniFi.`;
+        }
+
+        const targetVisitorId = command.visitor_id || resultVisitor.id;
         await db.doc(`organizations/${orgId}/visitors/${targetVisitorId}`).set(
           {
-            ...created,
+            ...resultVisitor,
             id: targetVisitorId,
             org_id: orgId,
-            unifi_visitor_id: created.id,
+            unifi_visitor_id: resultVisitor.unifi_visitor_id || resultVisitor.id,
             last_synced: nowTimestamp(),
             sync_status: 'synced',
             sync_error: null,
@@ -338,29 +364,16 @@ export function startCommandListener(
           },
           { merge: true }
         );
-        resultMessage = `Visitor ${created.full_name || created.first_name || targetVisitorId} created successfully.`;
-      } else if (command.action === 'update_visitor') {
-        if (!command.visitor_id) throw new Error('Missing visitor_id for update_visitor');
-        const unifiVisitorId = (command.visitor_data?.unifi_visitor_id as string) || command.visitor_id;
-        const updated = await unifiClient.updateVisitor(unifiVisitorId, command.visitor_data || {});
-        await db.doc(`organizations/${orgId}/visitors/${command.visitor_id}`).set(
-          {
-            ...updated,
-            id: command.visitor_id,
-            unifi_visitor_id: unifiVisitorId,
-            org_id: orgId,
-            last_synced: nowTimestamp(),
-            sync_status: 'synced',
-            sync_error: null,
-            updated_at: nowTimestamp(),
-          },
-          { merge: true }
-        );
-        resultMessage = `Visitor ${command.visitor_id} updated successfully.`;
       } else if (command.action === 'delete_visitor') {
         if (!command.visitor_id) throw new Error('Missing visitor_id for delete_visitor');
-        const unifiVisitorId = (command.visitor_data?.unifi_visitor_id as string) || command.visitor_id;
-        await unifiClient.deleteVisitor(unifiVisitorId);
+        const unifiVisitorId = (command.visitor_data?.unifi_visitor_id as string) || (command.unifi_visitor_id as string);
+        if (unifiVisitorId && unifiVisitorId !== command.visitor_id) {
+          try {
+            await unifiClient.deleteVisitor(unifiVisitorId);
+          } catch (delErr: any) {
+            logger.warn(`[CommandListener] UniFi deleteVisitor notice: ${delErr.message}`);
+          }
+        }
         await db.doc(`organizations/${orgId}/visitors/${command.visitor_id}`).set(
           {
             status: 'revoked',

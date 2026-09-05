@@ -9,7 +9,7 @@ import { UnifiVisitor, VisitorStatus } from '../types';
 // ---------------------------------------------------------------------------
 
 export function normalizeUnifiVisitor(raw: any, orgId = ''): UnifiVisitor {
-  const id = String(raw.id || raw.unique_id || raw._id || '');
+  const id = String(raw.id || raw.unique_id || raw.visitor_id || raw.user_id || raw._id || '');
   const firstName = String(raw.first_name || raw.firstName || (raw.name ? String(raw.name).split(' ')[0] : 'Visitor'));
   const lastName = String(raw.last_name || raw.lastName || (raw.name ? String(raw.name).split(' ').slice(1).join(' ') : ''));
   const fullName = String(raw.full_name || raw.name || `${firstName} ${lastName}`.trim());
@@ -36,13 +36,16 @@ export function normalizeUnifiVisitor(raw: any, orgId = ''): UnifiVisitor {
 
   const doorIds: string[] = [];
   const doorLabels: string[] = [];
-  if (Array.isArray(raw.doors || raw.door_ids || raw.device_ids)) {
-    for (const d of raw.doors || raw.door_ids || raw.device_ids) {
+  const rawDoors = raw.doors || raw.door_ids || raw.device_ids || raw.resources;
+  if (Array.isArray(rawDoors)) {
+    for (const d of rawDoors) {
       if (typeof d === 'string') {
         doorIds.push(d);
       } else if (d && typeof d === 'object') {
-        if (d.id || d.unique_id) doorIds.push(String(d.id || d.unique_id));
-        if (d.name || d.label) doorLabels.push(String(d.name || d.label));
+        const dId = d.id || d.unique_id || d.door_id;
+        const dLabel = d.name || d.label;
+        if (dId) doorIds.push(String(dId));
+        if (dLabel) doorLabels.push(String(dLabel));
       }
     }
   }
@@ -74,7 +77,7 @@ export function normalizeUnifiVisitor(raw: any, orgId = ''): UnifiVisitor {
     door_ids: doorIds,
     door_labels: doorLabels,
     status,
-    purpose: raw.purpose || raw.note || raw.remarks || '',
+    purpose: raw.purpose || raw.note || raw.remarks || raw.visit_reason || '',
     raw_data: raw,
     last_synced: new Date().toISOString(),
     sync_status: 'synced',
@@ -88,11 +91,18 @@ export function serializeUnifiVisitor(visitor: Partial<UnifiVisitor>): any {
   if (visitor.last_name !== undefined) base.last_name = visitor.last_name;
   if (visitor.mobile_phone !== undefined) base.mobile_phone = visitor.mobile_phone;
   if (visitor.email !== undefined) base.email = visitor.email;
-  if (visitor.purpose !== undefined) base.purpose = visitor.purpose;
+  if (visitor.purpose !== undefined) {
+    base.purpose = visitor.purpose;
+    base.visit_reason = visitor.purpose || 'Other';
+  }
 
-  if (visitor.door_ids) {
+  if (visitor.door_ids && visitor.door_ids.length > 0) {
     base.doors = visitor.door_ids;
     base.door_ids = visitor.door_ids;
+    base.resources = visitor.door_ids.map((id) => ({
+      id,
+      type: 'door',
+    }));
   }
 
   if (visitor.start_time) {
@@ -377,6 +387,15 @@ export const saveUnifiVisitor = onCall<{ orgId: string; visitor: Partial<UnifiVi
     const targetVisitorId = visitor.id || db.collection(`organizations/${orgId}/visitors`).doc().id;
     const nowIso = new Date().toISOString();
 
+    // Check if visitor already has an established UniFi ID
+    let unifiVisitorId = visitor.unifi_visitor_id;
+    if (!unifiVisitorId && visitor.id) {
+      const existingSnap = await db.doc(`organizations/${orgId}/visitors/${visitor.id}`).get();
+      if (existingSnap.exists) {
+        unifiVisitorId = existingSnap.data()?.unifi_visitor_id;
+      }
+    }
+
     const pendingVisitor: Partial<UnifiVisitor> = {
       ...visitor,
       id: targetVisitorId,
@@ -386,12 +405,25 @@ export const saveUnifiVisitor = onCall<{ orgId: string; visitor: Partial<UnifiVi
       updated_at: nowIso,
     };
 
+    if (unifiVisitorId) {
+      pendingVisitor.unifi_visitor_id = unifiVisitorId;
+    }
+
     await db.doc(`organizations/${orgId}/visitors/${targetVisitorId}`).set(pendingVisitor, { merge: true });
 
+    // Only dispatch update_visitor if we actually have a UniFi visitor ID; otherwise create
+    const action = unifiVisitorId ? 'update_visitor' : 'create_visitor';
+
     const commandRef = await db.collection(`organizations/${orgId}/door_commands`).add({
-      action: visitor.id ? 'update_visitor' : 'create_visitor',
+      action,
       visitor_id: targetVisitorId,
-      visitor_data: visitor,
+      firestore_visitor_id: targetVisitorId,
+      unifi_visitor_id: unifiVisitorId || null,
+      visitor_data: {
+        ...visitor,
+        id: targetVisitorId,
+        unifi_visitor_id: unifiVisitorId,
+      },
       status: 'queued',
       execute_at: nowIso,
       triggered_by: 'manual',

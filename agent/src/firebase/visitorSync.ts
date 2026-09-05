@@ -33,18 +33,42 @@ export async function syncVisitors(
     return [];
   }
 
+  // Preload existing visitors for this org to merge with pending documents
+  const existingSnap = await db.collection(`organizations/${orgId}/visitors`).get().catch(() => null);
+  const existingDocs = existingSnap?.docs || [];
+
   const batch = db.batch();
   const now = admin.firestore.Timestamp.now();
 
   for (const visitor of visitors) {
-    if (!visitor.id) continue;
-    const visitorRef = db.doc(`organizations/${orgId}/visitors/${visitor.id}`);
+    const unifiId = visitor.unifi_visitor_id || visitor.id;
+    if (!unifiId && !visitor.first_name) continue;
+
+    // Check if there is already a Firestore document with this unifi_visitor_id or matching pending record
+    let targetDocId = unifiId;
+    const existingMatch = existingDocs.find((d) => {
+      const data = d.data();
+      return (
+        data.unifi_visitor_id === unifiId ||
+        d.id === unifiId ||
+        (data.sync_status === 'pending' &&
+          data.first_name?.toLowerCase() === visitor.first_name?.toLowerCase() &&
+          (data.last_name || '').toLowerCase() === (visitor.last_name || '').toLowerCase())
+      );
+    });
+
+    if (existingMatch) {
+      targetDocId = existingMatch.id;
+    }
+
+    if (!targetDocId) continue;
+    const visitorRef = db.doc(`organizations/${orgId}/visitors/${targetDocId}`);
 
     // Create payload, omitting undefined/null pin_code to avoid clearing existing PIN stored in Firestore
     const record: Record<string, any> = {
-      id: visitor.id,
+      id: targetDocId,
       org_id: orgId,
-      unifi_visitor_id: visitor.unifi_visitor_id || visitor.id,
+      unifi_visitor_id: unifiId || targetDocId,
       first_name: visitor.first_name,
       last_name: visitor.last_name || '',
       full_name: visitor.full_name || `${visitor.first_name} ${visitor.last_name || ''}`.trim(),

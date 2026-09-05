@@ -142,12 +142,32 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
           </span>
         )}
 
-        {assignedSchedules.map((s) => (
+        {assignedSchedules.length > 0 ? (
+          assignedSchedules.map((s) => (
+            <Link
+              key={s.id}
+              href="/schedule"
+              style={{ textDecoration: 'none' }}
+              title={`Assigned to UniFi schedule: ${s.name}`}
+            >
+              <span
+                className="badge badge-neutral"
+                style={{
+                  fontSize: '0.6875rem',
+                  gap: '0.25rem',
+                  border: '1px solid var(--color-border)',
+                  cursor: 'pointer',
+                }}
+              >
+                🗓️ {s.name}
+              </span>
+            </Link>
+          ))
+        ) : (door.schedule_name || door.unlock_schedule_name) ? (
           <Link
-            key={s.id}
             href="/schedule"
             style={{ textDecoration: 'none' }}
-            title={`Assigned to UniFi schedule: ${s.name}`}
+            title={`Assigned door schedule: ${door.schedule_name || door.unlock_schedule_name}`}
           >
             <span
               className="badge badge-neutral"
@@ -158,10 +178,10 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
                 cursor: 'pointer',
               }}
             >
-              🗓️ {s.name}
+              🗓️ {door.schedule_name || door.unlock_schedule_name}
             </span>
           </Link>
-        ))}
+        ) : null}
       </div>
 
       {/* Actions */}

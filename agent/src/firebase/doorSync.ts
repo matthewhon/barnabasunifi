@@ -26,6 +26,8 @@ export interface DoorSyncRecord {
   device_state: string | null;
   is_held_unlocked?: boolean;
   hold_unlock_expires_at?: FirebaseFirestore.Timestamp | null;
+  schedule_id?: string | null;
+  schedule_name?: string | null;
   last_synced: FirebaseFirestore.Timestamp;
   org_id: string;
 }
@@ -95,6 +97,8 @@ export async function syncDoors(
       hold_unlock_expires_at: typeof door.hold_unlock_end_time === 'number'
         ? admin.firestore.Timestamp.fromMillis(door.hold_unlock_end_time * 1000)
         : null,
+      schedule_id: (door.unlock_schedule_id || door.schedule_id) as string | null ?? null,
+      schedule_name: (door.schedule_name as string) ?? null,
       last_synced: now,
       org_id: orgId,
     };
