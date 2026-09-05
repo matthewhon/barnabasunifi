@@ -126,6 +126,7 @@ export interface ScheduleWindow {
 export type CommandAction =
   | 'unlock'
   | 'lock'
+  | 'sync_doors'
   | 'sync_schedules'
   | 'update_schedule'
   | 'create_schedule'
@@ -133,7 +134,9 @@ export type CommandAction =
   | 'sync_visitors'
   | 'create_visitor'
   | 'update_visitor'
-  | 'delete_visitor';
+  | 'delete_visitor'
+  | 'sync_access_logs'
+  | 'apply_update';
 
 export type CommandStatus = 'queued' | 'executing' | 'done' | 'failed' | 'cancelled';
 

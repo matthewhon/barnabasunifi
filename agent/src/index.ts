@@ -378,12 +378,21 @@ async function startBridgeWorker(): Promise<void> {
     }
   );
 
+  bridgeState.onSyncDoors = async () => {
+    logger.info('[Bridge] Executing on-demand door discovery sync…');
+    const doors = await syncDoors(config.orgId, unifiClient);
+    bridgeState.doorCount = doors.length;
+    bridgeState.lastSync = new Date();
+    return doors.length;
+  };
+
   bridgeState.status = 'running';
   bridgeState.errorMessage = undefined;
   logger.info('✓ Agent bridge running — listening for door commands.');
 
   cleanupPreviousWorker = () => {
     logger.info('[Bridge] Stopping previous bridge worker…');
+    bridgeState.onSyncDoors = undefined;
     stopSettingsListener();
     stopCommandListener();
     stopAccessLogSync();

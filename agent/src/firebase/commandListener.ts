@@ -26,6 +26,7 @@ import { checkForUpdate, applyPendingUpdate } from './updateChecker';
 export type CommandAction =
   | 'unlock'
   | 'lock'
+  | 'sync_doors'
   | 'sync_schedules'
   | 'update_schedule'
   | 'create_schedule'
@@ -107,6 +108,8 @@ async function writeAuditLog(
       action = isManual ? 'manual_unlock' : 'unlock';
     } else if (command.action === 'lock') {
       action = isManual ? 'manual_lock' : 'lock';
+    } else if (command.action === 'sync_doors') {
+      action = 'doors_synced';
     } else if (command.action === 'sync_schedules') {
       action = 'schedule_synced';
     } else if (command.action === 'update_schedule') {
@@ -287,6 +290,9 @@ export function startCommandListener(
         await unifiClient.lockDoor(command.unifi_door_id);
         resultMessage = 'Door locked successfully.';
         syncDoors(orgId, unifiClient).catch(() => {});
+      } else if (command.action === 'sync_doors') {
+        const synced = await syncDoors(orgId, unifiClient);
+        resultMessage = `Discovered and synced ${synced.length} door(s) from UniFi Access.`;
       } else if (command.action === 'sync_schedules') {
         const synced = await syncSchedules(orgId, unifiClient);
         resultMessage = `Synced ${synced.length} schedule(s) from UniFi Access.`;

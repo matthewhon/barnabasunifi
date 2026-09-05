@@ -3,6 +3,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import Link from 'next/link';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '@/lib/firebase';
 import {
   subscribeToDoors,
   subscribeToAgents,
@@ -43,6 +45,28 @@ function ServerIcon({ size = 16 }: { size?: number }) {
       <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
       <line x1="6" y1="6" x2="6.01" y2="6" />
       <line x1="6" y1="18" x2="6.01" y2="18" />
+    </svg>
+  );
+}
+
+function RefreshIcon({ spinning = false }: { spinning?: boolean }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{
+        animation: spinning ? 'spin 1s linear infinite' : 'none',
+      }}
+    >
+      <polyline points="23 4 23 10 17 10" />
+      <polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
     </svg>
   );
 }
@@ -577,12 +601,33 @@ export default function DoorsPage() {
     }
   }, [orgId, lockDoor, user]);
 
+  const [syncingDoors, setSyncingDoors] = useState(false);
+
+  const handleSyncDoors = useCallback(async () => {
+    if (!orgId) return;
+    setSyncingDoors(true);
+    setFeedback(null);
+    try {
+      const fn = httpsCallable(functions, 'syncUnifiDoors');
+      const res = (await fn({ orgId })) as { data: { success: boolean; mode: string; count?: number } };
+      if (res.data?.mode === 'remote') {
+        showFeedback(`Successfully discovered and synced ${res.data.count ?? 0} door(s) from UniFi Access.`, 'success');
+      } else {
+        showFeedback('Door discovery sync command sent to local agent. Updating doors…', 'success');
+      }
+    } catch (err: any) {
+      showFeedback(err.message || 'Failed to sync doors from UniFi Access.', 'error');
+    } finally {
+      setSyncingDoors(false);
+    }
+  }, [orgId]);
+
   const onlineAgents = agents.filter((a) => a.status === 'online').length;
 
   return (
     <div>
       {/* Page Header */}
-      <div className="page-header">
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <h1 className="page-title">Doors</h1>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
@@ -592,6 +637,22 @@ export default function DoorsPage() {
             </span>
           </div>
         </div>
+
+        <button
+          className="btn btn-secondary"
+          onClick={handleSyncDoors}
+          disabled={syncingDoors}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            fontSize: '0.875rem',
+          }}
+          title="Force a discovery scan with UniFi Access to detect newly added or updated doors"
+        >
+          <RefreshIcon spinning={syncingDoors} />
+          <span>{syncingDoors ? 'Scanning UniFi…' : 'Scan for New Doors'}</span>
+        </button>
       </div>
 
       {/* Feedback */}
@@ -612,11 +673,20 @@ export default function DoorsPage() {
           ))}
         </div>
       ) : doors.length === 0 ? (
-        <div className="card empty-state">
+        <div className="card empty-state" style={{ textAlign: 'center', padding: '3rem 1.5rem' }}>
           <p className="empty-state-title">No doors found</p>
-          <p style={{ fontSize: '0.875rem' }}>
-            The local UniFi agent will populate doors automatically once it comes online.
+          <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', marginBottom: '1.25rem' }}>
+            The local UniFi agent populates doors automatically once it connects. You can also trigger an immediate scan to discover doors from UniFi Access.
           </p>
+          <button
+            className="btn btn-primary"
+            onClick={handleSyncDoors}
+            disabled={syncingDoors}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+          >
+            <RefreshIcon spinning={syncingDoors} />
+            <span>{syncingDoors ? 'Scanning UniFi Access…' : 'Scan for Doors Now'}</span>
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-3">

@@ -65,7 +65,7 @@ function normalizeDoorState(
 export async function syncDoors(
   orgId: string,
   unifiClient: UnifiAccessClient
-): Promise<void> {
+): Promise<UnifiDoor[]> {
   const db = getDb();
   let doors: UnifiDoor[];
 
@@ -73,12 +73,12 @@ export async function syncDoors(
     doors = await unifiClient.getDoors();
   } catch (err) {
     logger.error(`[DoorSync] Failed to fetch doors from UniFi: ${String(err)}`);
-    return;
+    return [];
   }
 
   if (doors.length === 0) {
     logger.warn('[DoorSync] No doors returned from UniFi Access — nothing to sync.');
-    return;
+    return [];
   }
 
   const batch = db.batch();
@@ -113,6 +113,8 @@ export async function syncDoors(
   } catch (err) {
     logger.error(`[DoorSync] Batch write failed: ${String(err)}`);
   }
+
+  return doors;
 }
 
 /**

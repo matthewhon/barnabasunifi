@@ -23,6 +23,7 @@ export interface AgentBridgeState {
   lastSync: Date | null;
   errorMessage?: string;
   onRestartRequest?: () => Promise<void>;
+  onSyncDoors?: () => Promise<number>;
 }
 
 export function startWebServer(
@@ -291,6 +292,21 @@ export function startWebServer(
         logger.error(`[WebUI] Apply update failed: ${err.message}`);
       });
     }, 100);
+  });
+
+  // POST /api/sync-doors — force door discovery sync
+  app.post('/api/sync-doors', async (_req, res) => {
+    logger.info('[WebUI] Manual door sync requested.');
+    if (!state.onSyncDoors) {
+      res.status(503).json({ ok: false, error: 'Door sync handler not initialized or agent offline.' });
+      return;
+    }
+    try {
+      const count = await state.onSyncDoors();
+      res.json({ ok: true, count, message: `Discovered and synced ${count} door(s).` });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
   });
 
   // POST /api/save-config
