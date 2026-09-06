@@ -122,18 +122,24 @@ export const syncUnifiDoors = onCall<{ orgId: string }>(
         if (!doorId) continue;
 
         const doorRef = db.doc(`organizations/${orgId}/doors/${doorId}`);
-        const record = {
+        const record: Record<string, any> = {
           unifi_door_id: doorId,
           label: door.full_name ?? door.name ?? doorId,
           current_state: normalizeDoorState(door.door_lock_relay_status),
           door_position_status: door.door_position_status ?? null,
           device_state: door.device_state ?? null,
           is_held_unlocked: Boolean(door.is_held_unlocked),
-          schedule_id: (door.unlock_schedule_id || door.schedule_id) as string | null ?? null,
-          schedule_name: (door.schedule_name as string) ?? null,
           last_synced: now,
           org_id: orgId,
         };
+
+        const schedId = door.unlock_schedule_id || door.schedule_id;
+        if (schedId) {
+          record.schedule_id = String(schedId);
+        }
+        if (door.schedule_name) {
+          record.schedule_name = String(door.schedule_name);
+        }
 
         batch.set(doorRef, record, { merge: true });
       }

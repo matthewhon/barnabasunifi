@@ -1173,34 +1173,51 @@ export class UnifiAccessClient {
       }
     }
 
-    // Pass 3: Enrich doors with schedules/rules from v2 doors API
+    // Pass 3: Enrich doors with schedules/rules from v2 doors, locations, and door_unlock_rules API
     try {
-      const doorsRes = await this.http.get<{ data?: Array<any> }>('/proxy/access/api/v2/doors');
-      const doorsData = doorsRes.data?.data || [];
-      for (const dr of doorsData) {
-        const doorId = String(dr.id || dr.unique_id || '');
-        if (!doorId) continue;
-        const existing = doorMap.get(doorId);
-        const schedId = dr.unlock_schedule_id || dr.schedule_id || dr.door_unlock_rule?.schedule_id;
-        const schedName = dr.unlock_schedule?.name || dr.schedule?.name || dr.door_unlock_rule?.name;
-        if (existing) {
-          if (schedId) existing.schedule_id = String(schedId);
-          if (schedName) existing.schedule_name = String(schedName);
-          if (dr.door_unlock_rule) existing.door_unlock_rule = dr.door_unlock_rule;
-        } else {
-          doorMap.set(doorId, {
-            id: doorId,
-            name: dr.name || dr.full_name || doorId,
-            door_lock_relay_status: (dr.door_lock_relay_status === 'unlock' ? 'unlock' : 'lock'),
-            door_position_status: dr.door_position_status ?? undefined,
-            type: dr.type || 'door',
-            full_name: dr.full_name || dr.name,
-            device_state: dr.device_state || 'connected',
-            schedule_id: schedId ? String(schedId) : undefined,
-            schedule_name: schedName ? String(schedName) : undefined,
-            door_unlock_rule: dr.door_unlock_rule,
-          });
-        }
+      const endpoints = [
+        '/proxy/access/api/v2/doors',
+        '/proxy/access/api/v2/locations',
+        '/proxy/access/api/v2/door_unlock_rules',
+        '/proxy/access/api/v2/settings/door_unlock_rules',
+      ];
+      for (const ep of endpoints) {
+        try {
+          const res = await this.http.get<{ data?: any }>(ep);
+          const list = Array.isArray(res.data?.data)
+            ? res.data.data
+            : Array.isArray(res.data?.data?.list)
+            ? res.data.data.list
+            : Array.isArray(res.data)
+            ? res.data
+            : [];
+          for (const dr of list) {
+            if (!dr || typeof dr !== 'object') continue;
+            const doorId = String(dr.id || dr.unique_id || dr.door_id || dr.location_id || '');
+            if (!doorId) continue;
+            const existing = doorMap.get(doorId);
+            const schedId = dr.unlock_schedule_id || dr.schedule_id || dr.door_unlock_rule?.schedule_id || dr.door_unlock_rule?.id || dr.keep_open_schedule_id;
+            const schedName = dr.unlock_schedule?.name || dr.schedule?.name || dr.door_unlock_rule?.name || dr.door_unlock_rule?.schedule_name || dr.keep_open_schedule?.name;
+            if (existing) {
+              if (schedId && !existing.schedule_id) existing.schedule_id = String(schedId);
+              if (schedName && !existing.schedule_name) existing.schedule_name = String(schedName);
+              if (dr.door_unlock_rule && !existing.door_unlock_rule) existing.door_unlock_rule = dr.door_unlock_rule;
+            } else if (dr.type === 'door' || ep.includes('doors') || ep.includes('locations')) {
+              doorMap.set(doorId, {
+                id: doorId,
+                name: dr.name || dr.full_name || doorId,
+                door_lock_relay_status: (dr.door_lock_relay_status === 'unlock' ? 'unlock' : 'lock'),
+                door_position_status: dr.door_position_status ?? undefined,
+                type: dr.type || 'door',
+                full_name: dr.full_name || dr.name,
+                device_state: dr.device_state || 'connected',
+                schedule_id: schedId ? String(schedId) : undefined,
+                schedule_name: schedName ? String(schedName) : undefined,
+                door_unlock_rule: dr.door_unlock_rule,
+              });
+            }
+          }
+        } catch {}
       }
     } catch {}
 

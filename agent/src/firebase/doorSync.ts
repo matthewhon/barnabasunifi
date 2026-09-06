@@ -87,7 +87,7 @@ export async function syncDoors(
   for (const door of doors) {
     const doorRef = db.doc(`organizations/${orgId}/doors/${door.id}`);
 
-    const record: DoorSyncRecord = {
+    const record: Record<string, any> = {
       unifi_door_id: door.id,
       label: door.full_name ?? door.name ?? door.id,
       current_state: normalizeDoorState(door.door_lock_relay_status),
@@ -97,13 +97,19 @@ export async function syncDoors(
       hold_unlock_expires_at: typeof door.hold_unlock_end_time === 'number'
         ? admin.firestore.Timestamp.fromMillis(door.hold_unlock_end_time * 1000)
         : null,
-      schedule_id: (door.unlock_schedule_id || door.schedule_id) as string | null ?? null,
-      schedule_name: (door.schedule_name as string) ?? null,
       last_synced: now,
       org_id: orgId,
     };
 
-    // set with merge:true so we don't overwrite fields managed by the web app
+    const schedId = door.unlock_schedule_id || door.schedule_id;
+    if (schedId) {
+      record.schedule_id = String(schedId);
+    }
+    if (door.schedule_name) {
+      record.schedule_name = String(door.schedule_name);
+    }
+
+    // set with merge:true so we don't overwrite fields managed by the web app or schedule sync
     batch.set(doorRef, record, { merge: true });
   }
 
