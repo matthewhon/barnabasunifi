@@ -219,13 +219,12 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
           };
 
           // Filter by enabled time_types if specified on mapping
-          if (
-            enabledTimeTypes &&
-            enabledTimeTypes.length > 0 &&
-            attrs.time_type &&
-            !enabledTimeTypes.includes(attrs.time_type)
-          ) {
-            continue;
+          if (enabledTimeTypes && enabledTimeTypes.length > 0) {
+            const rawType = (attrs.time_type || 'service').toLowerCase();
+            const allowed = enabledTimeTypes.map((t) => t.toLowerCase());
+            if (!allowed.includes(rawType)) {
+              continue;
+            }
           }
 
           if (!attrs.starts_at || !attrs.ends_at) continue;

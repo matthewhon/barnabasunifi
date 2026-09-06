@@ -333,35 +333,49 @@ function ActiveMappingCard({
               Upcoming Pulled Times ({upcomingTimes.length})
             </span>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
-              {upcomingTimes.map((t) => {
-                const style = timeTypeBadgeStyle(t.time_type);
-                const timeLabel = formatIsoTimeRange(t.starts_at, t.ends_at);
-                return (
-                  <span
-                    key={t.id}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.375rem',
-                      padding: '0.25rem 0.5rem',
-                      borderRadius: 'var(--radius-sm)',
-                      background: style.bg,
-                      color: style.color,
-                      border: `1px solid ${style.border}`,
-                      fontSize: '0.75rem',
-                      fontWeight: 500,
-                    }}
-                  >
-                    <ClockIcon />
-                    <span>{timeLabel}</span>
-                    {t.time_type && (
+              {upcomingTimes
+                .slice()
+                .sort((a, b) => {
+                  const aEnabled = !mapping.time_types || mapping.time_types.length === 0 ||
+                    mapping.time_types.map((tt) => tt.toLowerCase()).includes((a.time_type || 'service').toLowerCase());
+                  const bEnabled = !mapping.time_types || mapping.time_types.length === 0 ||
+                    mapping.time_types.map((tt) => tt.toLowerCase()).includes((b.time_type || 'service').toLowerCase());
+                  if (aEnabled && !bEnabled) return -1;
+                  if (!aEnabled && bEnabled) return 1;
+                  return new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime();
+                })
+                .map((t) => {
+                  const isEnabled = !mapping.time_types || mapping.time_types.length === 0 ||
+                    mapping.time_types.map((tt) => tt.toLowerCase()).includes((t.time_type || 'service').toLowerCase());
+                  const style = isEnabled ? timeTypeBadgeStyle(t.time_type) : { bg: 'var(--color-bg-surface)', color: 'var(--color-text-muted)', border: 'var(--color-border)' };
+                  const timeLabel = formatIsoTimeRange(t.starts_at, t.ends_at);
+
+                  return (
+                    <span
+                      key={t.id}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.375rem',
+                        padding: '0.25rem 0.5rem',
+                        borderRadius: 'var(--radius-sm)',
+                        background: style.bg,
+                        color: style.color,
+                        border: `1px ${isEnabled ? 'solid' : 'dashed'} ${style.border}`,
+                        fontSize: '0.75rem',
+                        fontWeight: isEnabled ? 600 : 400,
+                        opacity: isEnabled ? 1 : 0.65,
+                      }}
+                      title={isEnabled ? 'Active trigger time for this mapping' : `Excluded from unlocking (mapping only triggers on: ${(mapping.time_types || []).join(', ')})`}
+                    >
+                      <ClockIcon />
+                      <span>{timeLabel}</span>
                       <span style={{ opacity: 0.85, textTransform: 'capitalize', fontSize: '0.6875rem' }}>
-                        ({t.name ? `${t.name} - ${t.time_type}` : t.time_type})
+                        ({t.name ? `${t.name} · ` : ''}{t.time_type || 'service'}{!isEnabled ? ' — Excluded' : ' — Active'})
                       </span>
-                    )}
-                  </span>
-                );
-              })}
+                    </span>
+                  );
+                })}
             </div>
           </div>
         ) : (
