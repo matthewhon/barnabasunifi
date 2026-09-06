@@ -255,7 +255,7 @@ export function startCommandListener(
         status: 'executing',
         execute_at: rawData.execute_at,
         duration_min: rawData.duration_min as number | undefined,
-        schedule_window_id: rawData.schedule_window_id as string | undefined,
+        schedule_window_id: (rawData.schedule_window_id || rawData.window_id) as string | undefined,
         triggered_by: rawData.triggered_by as 'scheduler' | 'manual' | undefined,
         actor_uid: rawData.actor_uid as string | undefined,
         created_by: rawData.created_by as string | undefined,

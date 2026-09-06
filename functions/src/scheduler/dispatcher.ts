@@ -1,4 +1,5 @@
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 
 // ---------------------------------------------------------------------------
@@ -95,5 +96,57 @@ export const dispatchDoorCommands = onDocumentCreated(
         initial_status: isImmediate ? 'queued' : 'pending',
         logged_at: FieldValue.serverTimestamp(),
       });
+  }
+);
+
+/**
+ * Scheduled Cloud Function: processPendingDoorCommands
+ *
+ * Runs every 1 minute. Finds any door_commands in Firestore with status 'pending'
+ * whose execute_at timestamp has arrived (or is within the next 30 seconds),
+ * and transitions them to 'queued' so the agent can execute them immediately.
+ */
+export const processPendingDoorCommands = onSchedule(
+  {
+    schedule: 'every 1 minutes',
+    timeoutSeconds: 60,
+    memory: '256MiB',
+  },
+  async (_event) => {
+    const db = getFirestore();
+    // Look ahead 30s so commands execute right on time
+    const threshold = Timestamp.fromMillis(Date.now() + 30 * 1000);
+
+    try {
+      const pendingSnap = await db
+        .collectionGroup('door_commands')
+        .where('status', '==', 'pending')
+        .where('execute_at', '<=', threshold)
+        .limit(500)
+        .get();
+
+      if (pendingSnap.empty) {
+        return;
+      }
+
+      console.log(
+        `processPendingDoorCommands: Found ${pendingSnap.docs.length} pending command(s) due for execution.`
+      );
+
+      const batch = db.batch();
+      for (const doc of pendingSnap.docs) {
+        batch.update(doc.ref, {
+          status: 'queued',
+          queued_at: FieldValue.serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
+      console.log(
+        `processPendingDoorCommands: Successfully transitioned ${pendingSnap.docs.length} command(s) from pending -> queued.`
+      );
+    } catch (err) {
+      console.error('processPendingDoorCommands: Failed to process pending commands:', err);
+    }
   }
 );

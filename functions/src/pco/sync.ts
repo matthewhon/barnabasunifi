@@ -136,7 +136,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       .limit(1)
       .get();
 
-    const windowData = {
+    const windowData: Record<string, unknown> = {
       idempotency_key: idempotencyKey,
       starts_at: Timestamp.fromDate(startsAt),
       ends_at: Timestamp.fromDate(endsAt),
@@ -152,6 +152,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
     if (existingSnap.empty) {
       const newWindowRef = await windowsRef.add({
         ...windowData,
+        status: metadata.status || 'pending',
         created_at: FieldValue.serverTimestamp(),
       });
       windowId = newWindowRef.id;
@@ -159,40 +160,78 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
     } else {
       const existingDoc = existingSnap.docs[0];
       windowId = existingDoc.id;
-      await existingDoc.ref.update(windowData);
+      const existingData = existingDoc.data();
+      // Preserve existing status (e.g. 'unlocked', 'locked') if already progressed
+      const preservedStatus = existingData?.status || metadata.status || 'pending';
+      const { status: _ignoredStatus, ...restWindowData } = windowData;
+      await existingDoc.ref.update({
+        ...restWindowData,
+        status: preservedStatus,
+      });
       windowsUpdated++;
     }
 
     // Create door_commands for windows within the next 24 hours ONLY if doors are mapped
     const doorIds = (metadata.door_ids as string[]) ?? [];
+    const doorLabels = (metadata.door_labels as string[]) ?? [];
     if (doorIds.length > 0 && unlockAt.getTime() - now < twentyFourHoursMs) {
-      await createDoorCommandIfAbsent(commandsRef, windowId, 'unlock', unlockAt);
-      await createDoorCommandIfAbsent(commandsRef, windowId, 'lock', lockAt);
+      const durationMin = Math.max(1, Math.round((lockAt.getTime() - unlockAt.getTime()) / (60 * 1000)));
+      for (let i = 0; i < doorIds.length; i++) {
+        const doorId = doorIds[i];
+        const doorLabel = doorLabels[i] || doorId;
+        await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'unlock', unlockAt, durationMin);
+        await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'lock', lockAt);
+      }
     }
   }
 
-  // Helper: create a door command only if one doesn't already exist for this window+action
+  // Helper: create a door command only if one doesn't already exist for this window+door+action
   async function createDoorCommandIfAbsent(
     ref: FirebaseFirestore.CollectionReference,
     windowId: string,
+    doorId: string,
+    doorLabel: string,
     action: 'unlock' | 'lock',
-    executeAt: Date
+    executeAt: Date,
+    durationMin?: number
   ): Promise<void> {
     const existingSnap = await ref
-      .where('window_id', '==', windowId)
+      .where('schedule_window_id', '==', windowId)
+      .where('door_id', '==', doorId)
       .where('action', '==', action)
       .limit(1)
       .get();
 
     if (!existingSnap.empty) return;
 
-    await ref.add({
+    // Also check backwards-compatible 'window_id' query
+    const legacySnap = await ref
+      .where('window_id', '==', windowId)
+      .where('door_id', '==', doorId)
+      .where('action', '==', action)
+      .limit(1)
+      .get();
+
+    if (!legacySnap.empty) return;
+
+    const commandPayload: Record<string, unknown> = {
+      schedule_window_id: windowId,
       window_id: windowId,
+      door_id: doorId,
+      unifi_door_id: doorId,
+      door_label: doorLabel,
       action,
       execute_at: Timestamp.fromDate(executeAt),
       status: 'pending',
+      triggered_by: 'scheduler',
       created_at: FieldValue.serverTimestamp(),
-    });
+    };
+
+    if (durationMin !== undefined) {
+      commandPayload.duration_min = durationMin;
+    }
+
+    await ref.add(commandPayload);
   }
 
   // 4. Process all Service Types from PCO

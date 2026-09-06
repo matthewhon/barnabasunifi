@@ -9,6 +9,14 @@
       ]
     },
     {
+      "collectionGroup": "door_commands",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "execute_at", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "schedule_windows",
       "queryScope": "COLLECTION",
       "fields": [
