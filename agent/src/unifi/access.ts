@@ -410,9 +410,83 @@ export const DAYS_OF_WEEK: DayOfWeek[] = [
   'sunday',
 ];
 
+const DAY_ALIASES: Record<string, DayOfWeek> = {
+  monday: 'monday',
+  mon: 'monday',
+  mo: 'monday',
+  '1': 'monday',
+  tuesday: 'tuesday',
+  tue: 'tuesday',
+  tu: 'tuesday',
+  '2': 'tuesday',
+  wednesday: 'wednesday',
+  wed: 'wednesday',
+  we: 'wednesday',
+  '3': 'wednesday',
+  thursday: 'thursday',
+  thu: 'thursday',
+  th: 'thursday',
+  '4': 'thursday',
+  friday: 'friday',
+  fri: 'friday',
+  fr: 'friday',
+  '5': 'friday',
+  saturday: 'saturday',
+  sat: 'saturday',
+  sa: 'saturday',
+  '6': 'saturday',
+  sunday: 'sunday',
+  sun: 'sunday',
+  su: 'sunday',
+  '7': 'sunday',
+  '0': 'sunday',
+};
+
+export function parseDayOfWeek(raw: any): DayOfWeek | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const str = String(raw).toLowerCase().trim();
+  return DAY_ALIASES[str];
+}
+
+export function parseTimeHHMM(rawTime: any, defaultVal = '08:00'): string {
+  if (rawTime === undefined || rawTime === null || rawTime === '') return defaultVal;
+
+  // Numeric seconds from midnight e.g. 28800 -> "08:00"
+  if (typeof rawTime === 'number') {
+    const totalMinutes = Math.floor(rawTime / 60);
+    const hours = Math.floor(totalMinutes / 60) % 24;
+    const mins = totalMinutes % 60;
+    return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+  }
+
+  const str = String(rawTime).trim();
+  if (!str) return defaultVal;
+
+  // String purely numeric seconds e.g. "28800"
+  if (/^\d{4,6}$/.test(str)) {
+    const num = parseInt(str, 10);
+    const totalMinutes = Math.floor(num / 60);
+    const hours = Math.floor(totalMinutes / 60) % 24;
+    const mins = totalMinutes % 60;
+    return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+  }
+
+  // Extract HH:MM from "HH:MM:SS" or "H:M"
+  const parts = str.split(':');
+  if (parts.length >= 2) {
+    const h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    if (!isNaN(h) && !isNaN(m)) {
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+  }
+
+  return defaultVal;
+}
+
 export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
-  const id = String(raw.id || raw.unique_id || raw._id || '');
-  const name = String(raw.name || raw.schedule_name || raw.alias || 'Schedule');
+  const id = String(raw.id || raw.unique_id || raw._id || raw.schedule_id || '');
+  const name = String(raw.name || raw.schedule_name || raw.alias || raw.title || 'Schedule');
   const type = raw.type || (raw.is_unlock ? 'unlock' : 'access');
   const isDefault = Boolean(raw.is_default || raw.default);
   const holidayGroupId = raw.holiday_group_id || raw.holiday_id;
@@ -423,68 +497,106 @@ export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
     slots: [],
   }));
 
-  const rawWeekly = raw.weekly_schedule || raw.week_schedule || raw.schedule || raw.schedules;
+  const rawWeekly =
+    raw.weekly_schedule ||
+    raw.week_schedule ||
+    raw.schedule ||
+    raw.schedules ||
+    raw.work_time_rule ||
+    raw.door_unlock_rule ||
+    raw.rules;
+
   if (Array.isArray(rawWeekly)) {
     for (const item of rawWeekly) {
-      let targetDay: DayOfWeek | undefined;
-      if (typeof item.day === 'string') {
-        const d = item.day.toLowerCase() as DayOfWeek;
-        if (DAYS_OF_WEEK.includes(d)) targetDay = d;
-      } else if (typeof item.day_of_week === 'number') {
-        const idx = item.day_of_week === 0 ? 6 : item.day_of_week - 1;
-        targetDay = DAYS_OF_WEEK[idx] || DAYS_OF_WEEK[item.day_of_week];
-      }
+      const targetDay =
+        parseDayOfWeek(item.day) ||
+        parseDayOfWeek(item.day_of_week) ||
+        (typeof item.day_of_week === 'number' ? DAYS_OF_WEEK[item.day_of_week === 0 ? 6 : item.day_of_week - 1] : undefined);
 
       if (targetDay) {
         const dayEntry = weeklySchedule.find((w) => w.day === targetDay);
         if (dayEntry) {
-          if (Array.isArray(item.slots) && item.slots.length > 0) {
+          const rawSlots =
+            item.slots ||
+            item.time_slots ||
+            item.intervals ||
+            item.periods ||
+            item.ranges ||
+            item.times;
+
+          if (Array.isArray(rawSlots) && rawSlots.length > 0) {
             dayEntry.active = item.active !== false;
-            dayEntry.slots = item.slots.map((s: any) => ({
-              start_time: String(s.start_time || s.start || '08:00'),
-              end_time: String(s.end_time || s.end || '17:00'),
-            }));
-          } else if (item.start_time || item.start) {
-            dayEntry.active = true;
+            for (const s of rawSlots) {
+              const start = parseTimeHHMM(s.start_time || s.start || s.from || s.start_at, '08:00');
+              const end = parseTimeHHMM(s.end_time || s.end || s.to || s.end_at, '17:00');
+              dayEntry.slots.push({ start_time: start, end_time: end });
+            }
+          } else if (item.start_time || item.start || item.from) {
+            dayEntry.active = item.active !== false;
             dayEntry.slots.push({
-              start_time: String(item.start_time || item.start || '08:00'),
-              end_time: String(item.end_time || item.end || '17:00'),
+              start_time: parseTimeHHMM(item.start_time || item.start || item.from, '08:00'),
+              end_time: parseTimeHHMM(item.end_time || item.end || item.to, '17:00'),
             });
           }
         }
       }
     }
   } else if (rawWeekly && typeof rawWeekly === 'object') {
-    for (const day of DAYS_OF_WEEK) {
-      const dayData = rawWeekly[day] || rawWeekly[day.slice(0, 3)];
-      const dayEntry = weeklySchedule.find((w) => w.day === day);
+    for (const [dayKey, dayData] of Object.entries(rawWeekly)) {
+      const targetDay = parseDayOfWeek(dayKey);
+      if (!targetDay) continue;
+
+      const dayEntry = weeklySchedule.find((w) => w.day === targetDay);
       if (dayEntry && dayData) {
         if (Array.isArray(dayData) && dayData.length > 0) {
           dayEntry.active = true;
-          dayEntry.slots = dayData.map((s: any) => ({
-            start_time: String(s.start_time || s.start || '08:00'),
-            end_time: String(s.end_time || s.end || '17:00'),
-          }));
-        } else if (typeof dayData === 'object' && (dayData.start_time || dayData.start)) {
-          dayEntry.active = true;
-          dayEntry.slots = [{
-            start_time: String(dayData.start_time || dayData.start || '08:00'),
-            end_time: String(dayData.end_time || dayData.end || '17:00'),
-          }];
+          for (const s of dayData) {
+            if (s && typeof s === 'object') {
+              const start = parseTimeHHMM(s.start_time || s.start || s.from, '08:00');
+              const end = parseTimeHHMM(s.end_time || s.end || s.to, '17:00');
+              dayEntry.slots.push({ start_time: start, end_time: end });
+            }
+          }
+        } else if (typeof dayData === 'object' && ((dayData as any).start_time || (dayData as any).start || (dayData as any).slots)) {
+          const dObj = dayData as any;
+          dayEntry.active = dObj.active !== false;
+          if (Array.isArray(dObj.slots) && dObj.slots.length > 0) {
+            for (const s of dObj.slots) {
+              dayEntry.slots.push({
+                start_time: parseTimeHHMM(s.start_time || s.start, '08:00'),
+                end_time: parseTimeHHMM(s.end_time || s.end, '17:00'),
+              });
+            }
+          } else {
+            dayEntry.slots.push({
+              start_time: parseTimeHHMM(dObj.start_time || dObj.start, '08:00'),
+              end_time: parseTimeHHMM(dObj.end_time || dObj.end, '17:00'),
+            });
+          }
         }
       }
     }
   }
 
+  // Deduplicate and ensure active days with 0 slots get marked inactive
+  for (const day of weeklySchedule) {
+    if (day.slots.length === 0) {
+      day.active = false;
+    }
+  }
+
   const doorIds: string[] = [];
   const doorLabels: string[] = [];
-  if (Array.isArray(raw.doors || raw.door_ids || raw.device_ids)) {
-    for (const d of raw.doors || raw.door_ids || raw.device_ids) {
+  const rawDoors = raw.doors || raw.door_ids || raw.device_ids || raw.resources;
+  if (Array.isArray(rawDoors)) {
+    for (const d of rawDoors) {
       if (typeof d === 'string') {
         doorIds.push(d);
       } else if (d && typeof d === 'object') {
-        if (d.id || d.unique_id) doorIds.push(String(d.id || d.unique_id));
-        if (d.name || d.label) doorLabels.push(String(d.name || d.label));
+        const dId = d.id || d.unique_id || d.door_id;
+        const dName = d.name || d.label || d.door_name;
+        if (dId) doorIds.push(String(dId));
+        if (dName) doorLabels.push(String(dName));
       }
     }
   }
@@ -526,26 +638,39 @@ export function serializeUnifiSchedule(schedule: Partial<UnifiSchedule>): any {
   if (schedule.holiday_group_id !== undefined) base.holiday_group_id = schedule.holiday_group_id;
 
   if (schedule.weekly_schedule) {
-    base.weekly_schedule = schedule.weekly_schedule.map((dayObj, idx) => ({
-      day: dayObj.day,
-      day_of_week: idx + 1,
-      active: dayObj.active,
-      slots: dayObj.active ? dayObj.slots : [],
-    }));
+    base.weekly_schedule = schedule.weekly_schedule.map((dayObj, idx) => {
+      const activeSlots = dayObj.active
+        ? dayObj.slots.map((s) => ({
+            start_time: parseTimeHHMM(s.start_time, '08:00'),
+            end_time: parseTimeHHMM(s.end_time, '17:00'),
+          }))
+        : [];
+      return {
+        day: dayObj.day,
+        day_of_week: idx + 1,
+        active: dayObj.active && activeSlots.length > 0,
+        slots: activeSlots,
+        time_slots: activeSlots,
+      };
+    });
+
     const weekScheduleObj: Record<string, any[]> = {};
     for (const d of schedule.weekly_schedule) {
-      weekScheduleObj[d.day] = d.active
+      const formattedSlots = d.active
         ? d.slots.map((s) => ({
             start_time: formatTimeHHMMSS(s.start_time, '00'),
             end_time: formatTimeHHMMSS(s.end_time, '59'),
           }))
         : [];
+      weekScheduleObj[d.day] = formattedSlots;
+      weekScheduleObj[d.day.slice(0, 3)] = formattedSlots;
     }
     base.week_schedule = weekScheduleObj;
   }
 
   if (schedule.door_ids) {
     base.door_ids = schedule.door_ids;
+    base.doors = schedule.door_ids;
   }
 
   return base;
@@ -1443,7 +1568,7 @@ export class UnifiAccessClient {
 
   /**
    * Fetch all schedules from UniFi Access.
-   * Discovers global schedules, access policy door assignments, and
+   * Discovers global schedules, access policy door assignments, door unlock rules, and
    * individual door-level unlock schedules.
    */
   async getSchedules(): Promise<UnifiSchedule[]> {
@@ -1464,17 +1589,22 @@ export class UnifiAccessClient {
           ? res.data
           : null;
         if (rawList && rawList.length > 0) {
+          let added = 0;
           for (const item of rawList) {
             const sched = normalizeUnifiSchedule(item);
-            if (sched.id) schedulesMap.set(sched.id, sched);
+            if (sched.id) {
+              schedulesMap.set(sched.id, sched);
+              added++;
+            }
           }
-          logger.info(`[UniFi] Fetched ${rawList.length} schedule(s) via ${endpoint}`);
-          break;
+          if (added > 0) {
+            logger.info(`[UniFi] Fetched ${added} schedule(s) via ${endpoint}`);
+          }
         }
       } catch {}
     }
 
-    // 2. Also try v2 API schedules if Developer API yielded nothing or to merge
+    // 2. Query v2 API schedules to merge
     try {
       const res = await this.http.get<{ code?: number; data?: any[] }>('/proxy/access/api/v2/schedules');
       const v2List = Array.isArray(res.data?.data) ? res.data.data : [];
@@ -1485,6 +1615,37 @@ export class UnifiAccessClient {
         }
       }
     } catch {}
+
+    // 2b. Query dedicated v2 door unlock rules & location schedules
+    const doorRuleEndpoints = [
+      '/proxy/access/api/v2/door_unlock_rules',
+      '/proxy/access/api/v2/settings/door_unlock_rules',
+      '/proxy/access/api/v2/locations',
+      '/proxy/access/api/v2/dashboard/locations',
+    ];
+    for (const ep of doorRuleEndpoints) {
+      try {
+        const res = await this.http.get<any>(ep);
+        const list = Array.isArray(res.data?.data)
+          ? res.data.data
+          : Array.isArray(res.data?.data?.list)
+          ? res.data.data.list
+          : Array.isArray(res.data)
+          ? res.data
+          : [];
+        for (const item of list) {
+          if (!item) continue;
+          const schedId = String(item.id || item.unique_id || item.schedule_id || '');
+          if (schedId && !schedulesMap.has(schedId)) {
+            const sched = normalizeUnifiSchedule({
+              ...item,
+              type: 'unlock',
+            });
+            if (sched.id) schedulesMap.set(sched.id, sched);
+          }
+        }
+      } catch {}
+    }
 
     // 3. Fetch Access Policies to map schedules to door assignments
     const scheduleToDoors = new Map<string, { doorIds: string[]; doorLabels: string[] }>();
@@ -1515,7 +1676,6 @@ export class UnifiAccessClient {
             }
             scheduleToDoors.set(schedId, entry);
           }
-          break;
         }
       } catch {}
     }
@@ -1579,7 +1739,8 @@ export class UnifiAccessClient {
           doorDetail.unlock_schedule ||
           doorDetail.schedule ||
           doorDetail.keep_open_schedule ||
-          doorDetail.work_time_rule;
+          doorDetail.work_time_rule ||
+          doorDetail.schedule_rule;
 
         if (embedded && typeof embedded === 'object') {
           const schedId = String(embedded.id || embedded.unique_id || `door-sched-${doorId}`);
@@ -1695,24 +1856,45 @@ export class UnifiAccessClient {
     const payload = serializeUnifiSchedule(schedule);
     const endpoints = this.getScheduleEndpoints();
 
+    let created: UnifiSchedule | null = null;
     for (const ep of endpoints) {
       try {
         const res = await this.http.post<UnifiApiResponse<any>>(ep, payload);
         if (res.data?.data) {
           logger.info(`UniFi schedule created via Developer API (${ep}): ${res.data.data.id || schedule.name}`);
-          return normalizeUnifiSchedule(res.data.data);
+          created = normalizeUnifiSchedule(res.data.data);
+          break;
         }
-      } catch {
-        // Fall through to next candidate endpoint
+      } catch {}
+    }
+
+    if (!created) {
+      const res = await this.http.post<{ code: number; data: any }>(
+        '/proxy/access/api/v2/schedules',
+        payload
+      );
+      logger.info(`UniFi schedule created via v2 API: ${res.data?.data?.id || schedule.name}`);
+      created = normalizeUnifiSchedule(res.data?.data ?? payload);
+    }
+
+    // If door_ids assigned, bind unlock schedule to doors
+    if (created.id && schedule.door_ids && Array.isArray(schedule.door_ids)) {
+      for (const dId of schedule.door_ids) {
+        try {
+          await this.http.put(`/proxy/access/api/v2/doors/${encodeURIComponent(dId)}`, {
+            unlock_schedule_id: created.id,
+          });
+        } catch {
+          try {
+            await this.http.put(`/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(dId)}/unlock_rule`, {
+              schedule_id: created.id,
+            });
+          } catch {}
+        }
       }
     }
 
-    const res = await this.http.post<{ code: number; data: any }>(
-      '/proxy/access/api/v2/schedules',
-      payload
-    );
-    logger.info(`UniFi schedule created via v2 API: ${res.data?.data?.id || schedule.name}`);
-    return normalizeUnifiSchedule(res.data?.data ?? payload);
+    return created;
   }
 
   /**
@@ -1722,25 +1904,45 @@ export class UnifiAccessClient {
     const payload = serializeUnifiSchedule(updates);
     const endpoints = this.getScheduleEndpoints(encodeURIComponent(scheduleId));
 
+    let updated: UnifiSchedule | null = null;
     for (const ep of endpoints) {
       try {
         const res = await this.http.put<UnifiApiResponse<any>>(ep, payload);
         if (res.data?.data) {
           logger.info(`UniFi schedule ${scheduleId} updated via Developer API (${ep}).`);
-          return normalizeUnifiSchedule(res.data.data);
+          updated = normalizeUnifiSchedule(res.data.data);
+          break;
         }
-        return normalizeUnifiSchedule({ id: scheduleId, ...payload });
-      } catch {
-        // Fall through
+      } catch {}
+    }
+
+    if (!updated) {
+      const res = await this.http.put<{ code: number; data: any }>(
+        `/proxy/access/api/v2/schedule/${encodeURIComponent(scheduleId)}`,
+        payload
+      );
+      logger.info(`UniFi schedule ${scheduleId} updated via v2 API.`);
+      updated = normalizeUnifiSchedule(res.data?.data ?? { id: scheduleId, ...payload });
+    }
+
+    // Apply door assignments to physical doors in UniFi
+    if (updates.door_ids && Array.isArray(updates.door_ids)) {
+      for (const dId of updates.door_ids) {
+        try {
+          await this.http.put(`/proxy/access/api/v2/doors/${encodeURIComponent(dId)}`, {
+            unlock_schedule_id: scheduleId,
+          });
+        } catch {
+          try {
+            await this.http.put(`/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(dId)}/unlock_rule`, {
+              schedule_id: scheduleId,
+            });
+          } catch {}
+        }
       }
     }
 
-    const res = await this.http.put<{ code: number; data: any }>(
-      `/proxy/access/api/v2/schedule/${encodeURIComponent(scheduleId)}`,
-      payload
-    );
-    logger.info(`UniFi schedule ${scheduleId} updated via v2 API.`);
-    return normalizeUnifiSchedule(res.data?.data ?? { id: scheduleId, ...payload });
+    return updated;
   }
 
   /**
@@ -1798,8 +2000,9 @@ export class UnifiAccessClient {
 
   private getScheduleEndpoints(subpath = ''): string[] {
     return [
-      ...this.getDeveloperEndpoints('access_policies/schedules', subpath),
       ...this.getDeveloperEndpoints('schedules', subpath),
+      ...this.getDeveloperEndpoints('access_policies/schedules', subpath),
+      ...this.getDeveloperEndpoints('door_unlock_rules', subpath),
     ];
   }
 

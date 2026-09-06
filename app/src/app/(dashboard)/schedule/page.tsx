@@ -69,42 +69,55 @@ function formatTime12h(time24: string): string {
 function formatScheduleSummary(schedule: UnifiSchedule): string {
   const weekly = schedule.weekly_schedule;
   if (!weekly || weekly.length === 0) return 'No hours configured';
-  const activeDays = weekly.filter((d) => d.active && d.slots.length > 0);
+  const activeDays = weekly.filter((d) => d.active && d.slots && d.slots.length > 0);
   if (activeDays.length === 0) return 'Always locked (no active days)';
+
+  const formatDaySlots = (slots: { start_time: string; end_time: string }[]) =>
+    slots.map((s) => `${formatTime12h(s.start_time)}–${formatTime12h(s.end_time)}`).join(', ');
+
+  const serializeSlotsKey = (slots: { start_time: string; end_time: string }[]) =>
+    slots.map((s) => `${s.start_time}-${s.end_time}`).join('|');
 
   // Check All 7 Days
   if (activeDays.length === 7) {
-    const firstSlot = activeDays[0].slots[0];
-    const allSame = activeDays.every(
-      (d) => d.slots[0]?.start_time === firstSlot?.start_time && d.slots[0]?.end_time === firstSlot?.end_time
-    );
-    if (allSame && firstSlot) {
-      return `Daily: ${formatTime12h(firstSlot.start_time)} – ${formatTime12h(firstSlot.end_time)}`;
+    const firstKey = serializeSlotsKey(activeDays[0].slots);
+    const allSame = activeDays.every((d) => serializeSlotsKey(d.slots) === firstKey);
+    if (allSame) {
+      return `Daily: ${formatDaySlots(activeDays[0].slots)}`;
     }
   }
 
   // Check Mon-Fri
-  const weekdays = activeDays.filter((d) => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'].includes(d.day));
+  const weekdays = activeDays.filter((d) =>
+    ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'].includes(d.day)
+  );
   if (weekdays.length === 5) {
-    const firstSlot = weekdays[0].slots[0];
-    const allSame = weekdays.every(
-      (d) => d.slots[0]?.start_time === firstSlot?.start_time && d.slots[0]?.end_time === firstSlot?.end_time
-    );
-    if (allSame && firstSlot) {
+    const firstKey = serializeSlotsKey(weekdays[0].slots);
+    const allSame = weekdays.every((d) => serializeSlotsKey(d.slots) === firstKey);
+    if (allSame) {
       const weekend = activeDays.filter((d) => ['saturday', 'sunday'].includes(d.day));
       if (weekend.length === 0) {
-        return `Mon–Fri: ${formatTime12h(firstSlot.start_time)} – ${formatTime12h(firstSlot.end_time)}`;
+        return `Mon–Fri: ${formatDaySlots(weekdays[0].slots)}`;
       }
     }
   }
 
   return activeDays
     .map((d) => {
-      const dayName = d.day.slice(0, 3);
-      const slot = d.slots[0];
-      return slot ? `${dayName.toUpperCase()}: ${formatTime12h(slot.start_time)}-${formatTime12h(slot.end_time)}` : dayName;
+      const dayName = d.day.slice(0, 3).toUpperCase();
+      return `${dayName}: ${formatDaySlots(d.slots)}`;
     })
     .join(' · ');
+}
+
+function formatDayTooltip(dayConfig?: { day: DayOfWeek; active: boolean; slots: { start_time: string; end_time: string }[] }): string {
+  if (!dayConfig || !dayConfig.active || !dayConfig.slots || dayConfig.slots.length === 0) {
+    return `${dayConfig?.day?.toUpperCase() || 'DAY'}: Closed / Locked`;
+  }
+  const slotsStr = dayConfig.slots
+    .map((s, idx) => `Window #${idx + 1}: ${formatTime12h(s.start_time)} – ${formatTime12h(s.end_time)}`)
+    .join('\n');
+  return `${dayConfig.day.toUpperCase()} (${dayConfig.slots.length} ${dayConfig.slots.length === 1 ? 'window' : 'windows'}):\n${slotsStr}`;
 }
 
 const WEEK_DAYS: { key: DayOfWeek; letter: string }[] = [
@@ -471,7 +484,7 @@ export default function SchedulePage() {
                             <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.5rem', marginBottom: '0.5rem' }}>
                               {WEEK_DAYS.map(({ key, letter }) => {
                                 const dayConfig = doorSched.weekly_schedule?.find((d) => d.day === key);
-                                const active = dayConfig?.active && (dayConfig?.slots?.length ?? 0) > 0;
+                                const active = Boolean(dayConfig?.active && (dayConfig?.slots?.length ?? 0) > 0);
                                 return (
                                   <div
                                     key={key}
@@ -488,7 +501,7 @@ export default function SchedulePage() {
                                       color: active ? 'var(--color-accent)' : 'var(--color-text-muted)',
                                       border: `1px solid ${active ? 'var(--color-accent)' : 'var(--color-border)'}`,
                                     }}
-                                    title={`${key.toUpperCase()}: ${active ? 'Active' : 'Closed'}`}
+                                    title={formatDayTooltip(dayConfig)}
                                   >
                                     {letter}
                                   </div>
@@ -615,7 +628,7 @@ export default function SchedulePage() {
                       <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.75rem', marginBottom: '0.75rem' }}>
                         {WEEK_DAYS.map(({ key, letter }) => {
                           const dayConfig = sched.weekly_schedule?.find((d) => d.day === key);
-                          const active = dayConfig?.active && (dayConfig?.slots?.length ?? 0) > 0;
+                          const active = Boolean(dayConfig?.active && (dayConfig?.slots?.length ?? 0) > 0);
                           return (
                             <div
                               key={key}
@@ -632,7 +645,7 @@ export default function SchedulePage() {
                                 color: active ? 'var(--color-accent)' : 'var(--color-text-muted)',
                                 border: `1px solid ${active ? 'var(--color-accent)' : 'var(--color-border)'}`,
                               }}
-                              title={`${key.toUpperCase()}: ${active ? 'Active' : 'Closed'}`}
+                              title={formatDayTooltip(dayConfig)}
                             >
                               {letter}
                             </div>

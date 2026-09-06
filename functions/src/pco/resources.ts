@@ -9,10 +9,24 @@ interface GetPcoResourcesRequest {
   type: ResourceType;
 }
 
+interface FormattedPcoTime {
+  id: string;
+  name?: string;
+  starts_at: string;
+  ends_at?: string;
+  time_type?: string;
+}
+
 interface FormattedPcoResource {
   id: string;
   name: string;
   type: string;
+  frequency?: string;
+  schedule?: string;
+  description?: string;
+  upcoming_plan_title?: string;
+  upcoming_plan_date?: string;
+  upcoming_times?: FormattedPcoTime[];
   attributes: Record<string, unknown>;
 }
 
@@ -24,7 +38,8 @@ interface GetPcoResourcesResponse {
 /**
  * Callable Cloud Function: getPcoResources
  *
- * Fetches Planning Center service types or groups for the caller's organization.
+ * Fetches Planning Center service types or groups for the caller's organization,
+ * including configured schedules and upcoming plan/event times.
  */
 export const getPcoResources = onCall<
   GetPcoResourcesRequest,
@@ -77,34 +92,98 @@ export const getPcoResources = onCall<
     const client = new PcoClient(targetOrgId);
     await client.init();
 
-    let rawItems: PcoResource[] = [];
+    if (type === 'services' || type === 'service') {
+      const rawItems: PcoResource[] = await client.getServiceTypes();
 
-    switch (type) {
-      case 'services':
-      case 'service':
-        rawItems = await client.getServiceTypes();
-        break;
-      case 'groups':
-      case 'group':
-        try {
-          rawItems = await client.getGroups();
-        } catch (err) {
-          console.warn('getPcoResources: Groups API warning:', err);
-          rawItems = [];
-        }
-        break;
-      default:
-        throw new HttpsError('invalid-argument', `Unknown resource type: ${type}`);
+      const enrichedItems: FormattedPcoResource[] = await Promise.all(
+        rawItems.map(async (item) => {
+          const frequency = (item.attributes?.frequency ?? '') as string;
+          let upcomingPlanTitle: string | undefined;
+          let upcomingPlanDate: string | undefined;
+          let upcomingTimes: FormattedPcoTime[] = [];
+
+          try {
+            const plans = await client.getPlansForServiceType(item.id, 60);
+            if (plans && plans.length > 0) {
+              const nextPlan = plans[0];
+              upcomingPlanTitle = (nextPlan.attributes?.dates ?? nextPlan.attributes?.title ?? nextPlan.attributes?.series_title) as string | undefined;
+              upcomingPlanDate = (nextPlan.attributes?.sort_date ?? nextPlan.attributes?.dates) as string | undefined;
+
+              const planTimes = await client.getPlanTimes(item.id, nextPlan.id);
+              upcomingTimes = planTimes.map((pt) => {
+                const attrs = pt.attributes as { starts_at?: string; ends_at?: string; time_type?: string; name?: string };
+                return {
+                  id: pt.id,
+                  name: attrs.name,
+                  starts_at: attrs.starts_at || '',
+                  ends_at: attrs.ends_at,
+                  time_type: attrs.time_type,
+                };
+              }).filter((t) => !!t.starts_at);
+            }
+          } catch (err) {
+            console.warn(`Could not load upcoming plan times for service type ${item.id}:`, err);
+          }
+
+          return {
+            id: item.id,
+            name: (item.attributes?.name ?? item.attributes?.title ?? 'Unnamed') as string,
+            type: item.type,
+            frequency: frequency || undefined,
+            upcoming_plan_title: upcomingPlanTitle,
+            upcoming_plan_date: upcomingPlanDate,
+            upcoming_times: upcomingTimes,
+            attributes: item.attributes ?? {},
+          };
+        })
+      );
+
+      return { items: enrichedItems, resources: enrichedItems };
+    } else {
+      let rawItems: PcoResource[] = [];
+      try {
+        rawItems = await client.getGroups();
+      } catch (err) {
+        console.warn('getPcoResources: Groups API warning:', err);
+        rawItems = [];
+      }
+
+      const enrichedItems: FormattedPcoResource[] = await Promise.all(
+        rawItems.map(async (item) => {
+          const schedule = (item.attributes?.schedule ?? '') as string;
+          const description = (item.attributes?.description ?? '') as string;
+          let upcomingTimes: FormattedPcoTime[] = [];
+
+          try {
+            const events = await client.getGroupEvents(item.id, 60);
+            upcomingTimes = (events || []).slice(0, 5).map((ev) => {
+              const attrs = ev.attributes as { starts_at?: string; ends_at?: string; name?: string; title?: string };
+              return {
+                id: ev.id,
+                name: attrs.name ?? attrs.title ?? 'Group Event',
+                starts_at: attrs.starts_at || '',
+                ends_at: attrs.ends_at,
+                time_type: 'event',
+              };
+            }).filter((t) => !!t.starts_at);
+          } catch (err) {
+            console.warn(`Could not load upcoming events for group ${item.id}:`, err);
+          }
+
+          return {
+            id: item.id,
+            name: (item.attributes?.name ?? item.attributes?.title ?? 'Unnamed') as string,
+            type: item.type,
+            schedule: schedule || undefined,
+            description: description || undefined,
+            upcoming_times: upcomingTimes,
+            attributes: item.attributes ?? {},
+          };
+        })
+      );
+
+      return { items: enrichedItems, resources: enrichedItems };
     }
-
-    const items: FormattedPcoResource[] = rawItems.map((item) => ({
-      id: item.id,
-      name: (item.attributes?.name ?? item.attributes?.title ?? 'Unnamed') as string,
-      type: item.type,
-      attributes: item.attributes ?? {},
-    }));
-
-    return { items, resources: items };
   } catch (err: any) {
     console.error(`getPcoResources error for org ${targetOrgId}:`, err);
     if (err instanceof HttpsError) throw err;

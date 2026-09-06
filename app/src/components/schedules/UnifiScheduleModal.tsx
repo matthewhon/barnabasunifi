@@ -7,6 +7,7 @@ import { functions } from '@/lib/firebase';
 import type {
   UnifiSchedule,
   UnifiWeeklyScheduleDay,
+  UnifiScheduleTimeSlot,
   DayOfWeek,
   Door,
 } from '@/lib/types';
@@ -63,14 +64,20 @@ export default function UnifiScheduleModal({
       setSelectedDoorIds(schedule.door_ids || []);
 
       if (schedule.weekly_schedule && schedule.weekly_schedule.length > 0) {
-        // Ensure all 7 days exist
         const merged = DAYS.map(({ key }) => {
           const found = schedule.weekly_schedule.find((d) => d.day === key);
           if (found) {
+            const active = found.active !== false && found.slots && found.slots.length > 0;
+            const slots = found.slots && found.slots.length > 0
+              ? found.slots.map((s) => ({
+                  start_time: s.start_time || '08:00',
+                  end_time: s.end_time || '17:00',
+                }))
+              : [{ start_time: '08:00', end_time: '17:00' }];
             return {
               day: key,
-              active: found.active !== false && found.slots.length > 0,
-              slots: found.slots.length > 0 ? found.slots : [{ start_time: '08:00', end_time: '17:00' }],
+              active,
+              slots,
             };
           }
           return {
@@ -94,18 +101,77 @@ export default function UnifiScheduleModal({
 
   const handleDayToggle = (day: DayOfWeek) => {
     setWeeklySchedule((prev) =>
-      prev.map((d) => (d.day === day ? { ...d, active: !d.active } : d))
+      prev.map((d) => {
+        if (d.day !== day) return d;
+        const nextActive = !d.active;
+        return {
+          ...d,
+          active: nextActive,
+          slots: d.slots.length > 0 ? d.slots : [{ start_time: '08:00', end_time: '17:00' }],
+        };
+      })
     );
   };
 
-  const handleTimeChange = (day: DayOfWeek, field: 'start_time' | 'end_time', value: string) => {
+  const handleSlotTimeChange = (
+    day: DayOfWeek,
+    slotIndex: number,
+    field: 'start_time' | 'end_time',
+    value: string
+  ) => {
     setWeeklySchedule((prev) =>
       prev.map((d) => {
         if (d.day !== day) return d;
-        const currentSlot = d.slots[0] || { start_time: '08:00', end_time: '17:00' };
+        const nextSlots = d.slots.map((s, idx) => {
+          if (idx !== slotIndex) return s;
+          return { ...s, [field]: value };
+        });
+        return { ...d, slots: nextSlots };
+      })
+    );
+  };
+
+  const handleAddSlot = (day: DayOfWeek) => {
+    setWeeklySchedule((prev) =>
+      prev.map((d) => {
+        if (d.day !== day) return d;
+        const lastSlot = d.slots[d.slots.length - 1];
+        let nextStart = '18:00';
+        let nextEnd = '21:00';
+
+        if (lastSlot) {
+          const [lastEndH] = lastSlot.end_time.split(':').map((n) => parseInt(n, 10));
+          if (!isNaN(lastEndH) && lastEndH < 22) {
+            const startH = Math.min(lastEndH + 1, 22);
+            const endH = Math.min(startH + 3, 23);
+            nextStart = `${String(startH).padStart(2, '0')}:00`;
+            nextEnd = `${String(endH).padStart(2, '0')}:00`;
+          }
+        }
+
+        const newSlot: UnifiScheduleTimeSlot = {
+          start_time: nextStart,
+          end_time: nextEnd,
+        };
+
         return {
           ...d,
-          slots: [{ ...currentSlot, [field]: value }],
+          active: true,
+          slots: [...d.slots, newSlot],
+        };
+      })
+    );
+  };
+
+  const handleRemoveSlot = (day: DayOfWeek, slotIndex: number) => {
+    setWeeklySchedule((prev) =>
+      prev.map((d) => {
+        if (d.day !== day) return d;
+        const remaining = d.slots.filter((_, idx) => idx !== slotIndex);
+        return {
+          ...d,
+          active: remaining.length > 0,
+          slots: remaining.length > 0 ? remaining : [{ start_time: '08:00', end_time: '17:00' }],
         };
       })
     );
@@ -113,14 +179,30 @@ export default function UnifiScheduleModal({
 
   const copyMondayToWeekdays = () => {
     const monday = weeklySchedule.find((d) => d.day === 'monday');
-    const slot = monday?.slots[0] || { start_time: '08:00', end_time: '17:00' };
+    const mondaySlots = monday?.slots || [{ start_time: '08:00', end_time: '17:00' }];
     setWeeklySchedule((prev) =>
       prev.map((d) => {
         if (['monday', 'tuesday', 'wednesday', 'thursday', 'friday'].includes(d.day)) {
           return {
             ...d,
             active: monday?.active ?? true,
-            slots: [{ ...slot }],
+            slots: mondaySlots.map((s) => ({ ...s })),
+          };
+        }
+        return d;
+      })
+    );
+  };
+
+  const copyToAllActiveDays = (sourceDay: DayOfWeek) => {
+    const source = weeklySchedule.find((d) => d.day === sourceDay);
+    if (!source || source.slots.length === 0) return;
+    setWeeklySchedule((prev) =>
+      prev.map((d) => {
+        if (d.active) {
+          return {
+            ...d,
+            slots: source.slots.map((s) => ({ ...s })),
           };
         }
         return d;
@@ -138,6 +220,46 @@ export default function UnifiScheduleModal({
     if (!name.trim()) {
       setError('Schedule name is required.');
       return;
+    }
+
+    // Validate times & non-overlapping intervals
+    for (const d of weeklySchedule) {
+      if (!d.active) continue;
+      const dayLabel = DAYS.find((item) => item.key === d.day)?.label || d.day;
+
+      if (!d.slots || d.slots.length === 0) {
+        setError(`Please add at least one time window for ${dayLabel}, or turn off ${dayLabel}.`);
+        return;
+      }
+
+      for (let i = 0; i < d.slots.length; i++) {
+        const slot = d.slots[i];
+        if (!slot.start_time || !slot.end_time) {
+          setError(`Please provide both start and end times for ${dayLabel} (Window #${i + 1}).`);
+          return;
+        }
+
+        if (slot.start_time >= slot.end_time) {
+          setError(
+            `On ${dayLabel}, Window #${i + 1} start time (${slot.start_time}) must be earlier than end time (${slot.end_time}).`
+          );
+          return;
+        }
+      }
+
+      // Check for overlaps among multiple slots
+      for (let i = 0; i < d.slots.length; i++) {
+        for (let j = i + 1; j < d.slots.length; j++) {
+          const slotA = d.slots[i];
+          const slotB = d.slots[j];
+          if (slotA.start_time < slotB.end_time && slotB.start_time < slotA.end_time) {
+            setError(
+              `On ${dayLabel}, Window #${i + 1} (${slotA.start_time}–${slotA.end_time}) and Window #${j + 1} (${slotB.start_time}–${slotB.end_time}) overlap. Time windows must not overlap.`
+            );
+            return;
+          }
+        }
+      }
     }
 
     setSaving(true);
@@ -193,7 +315,7 @@ export default function UnifiScheduleModal({
       isOpen={isOpen}
       onClose={onClose}
       title={isEditing ? `Edit UniFi Schedule: ${schedule?.name}` : 'New UniFi Schedule'}
-      maxWidth="38rem"
+      maxWidth="42rem"
       footer={
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
           {isEditing ? (
@@ -232,7 +354,7 @@ export default function UnifiScheduleModal({
               className="form-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., Normal Business Hours, Weekend Entry"
+              placeholder="e.g., Normal Business Hours, Sunday Services, Youth Night"
               required
             />
           </div>
@@ -252,83 +374,184 @@ export default function UnifiScheduleModal({
           </div>
         </div>
 
-        {/* Weekly Hours */}
+        {/* Weekly Hours & Multi-Time-Slot Editor */}
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <label className="form-label" style={{ fontSize: '0.8125rem', fontWeight: 600, margin: 0 }}>
-              Weekly Hours & Days
-            </label>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div>
+              <label className="form-label" style={{ fontSize: '0.8125rem', fontWeight: 600, margin: 0 }}>
+                Weekly Unlock Windows
+              </label>
+              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'block' }}>
+                Add multiple open/unlock windows per day (e.g., Morning 8am–12pm & Evening 5pm–9pm)
+              </span>
+            </div>
             <button
               type="button"
               className="btn btn-ghost btn-xs"
               onClick={copyMondayToWeekdays}
               style={{ fontSize: '0.75rem', color: 'var(--color-accent)' }}
+              title="Copy Monday's windows to Tuesday through Friday"
             >
               Copy Mon to Weekdays
             </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'var(--color-bg-base)', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.625rem',
+              background: 'var(--color-bg-base)',
+              padding: '0.75rem',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border)',
+            }}
+          >
             {DAYS.map(({ key, label }) => {
               const dayConfig = weeklySchedule.find((d) => d.day === key);
               const isActive = dayConfig?.active ?? false;
-              const slot = dayConfig?.slots[0] || { start_time: '08:00', end_time: '17:00' };
+              const slots = dayConfig?.slots || [{ start_time: '08:00', end_time: '17:00' }];
 
               return (
                 <div
                   key={key}
                   style={{
                     display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.75rem',
-                    padding: '0.375rem 0.5rem',
+                    flexDirection: 'column',
+                    gap: '0.375rem',
+                    padding: '0.5rem 0.625rem',
                     borderRadius: 'var(--radius-sm)',
                     background: isActive ? 'var(--color-bg-surface)' : 'transparent',
                     border: isActive ? '1px solid var(--color-border)' : '1px solid transparent',
                   }}
                 >
-                  <label
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      width: '7.5rem',
-                      cursor: 'pointer',
-                      fontSize: '0.875rem',
-                      fontWeight: isActive ? 600 : 400,
-                      color: isActive ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isActive}
-                      onChange={() => handleDayToggle(key)}
-                    />
-                    {label}
-                  </label>
+                  {/* Day Header Row */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem',
+                        fontWeight: isActive ? 600 : 400,
+                        color: isActive ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
+                        userSelect: 'none',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isActive}
+                        onChange={() => handleDayToggle(key)}
+                      />
+                      <span>{label}</span>
+                      {isActive && (
+                        <span
+                          className="badge badge-neutral"
+                          style={{ fontSize: '0.6875rem', padding: '0.1rem 0.35rem' }}
+                        >
+                          {slots.length} {slots.length === 1 ? 'window' : 'windows'}
+                        </span>
+                      )}
+                    </label>
 
+                    {isActive && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          onClick={() => handleAddSlot(key)}
+                          style={{
+                            fontSize: '0.6875rem',
+                            padding: '0.15rem 0.4rem',
+                            color: 'var(--color-accent)',
+                          }}
+                          title={`Add another open window to ${label}`}
+                        >
+                          + Add Window
+                        </button>
+                        {slots.length > 0 && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            onClick={() => copyToAllActiveDays(key)}
+                            style={{
+                              fontSize: '0.6875rem',
+                              padding: '0.15rem 0.4rem',
+                              color: 'var(--color-text-muted)',
+                            }}
+                            title={`Copy ${label}'s windows to all active days`}
+                          >
+                            Apply to All
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Time Slots List */}
                   {isActive ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1 }}>
-                      <input
-                        type="time"
-                        className="form-input form-input-sm"
-                        style={{ width: '8.5rem', padding: '0.25rem 0.5rem' }}
-                        value={slot.start_time}
-                        onChange={(e) => handleTimeChange(key, 'start_time', e.target.value)}
-                      />
-                      <span style={{ color: 'var(--color-text-muted)', fontSize: '0.8125rem' }}>to</span>
-                      <input
-                        type="time"
-                        className="form-input form-input-sm"
-                        style={{ width: '8.5rem', padding: '0.25rem 0.5rem' }}
-                        value={slot.end_time}
-                        onChange={(e) => handleTimeChange(key, 'end_time', e.target.value)}
-                      />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', marginTop: '0.25rem', paddingLeft: '1.75rem' }}>
+                      {slots.map((slot, sIdx) => (
+                        <div
+                          key={sIdx}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: '0.75rem',
+                              color: 'var(--color-text-muted)',
+                              width: '4.25rem',
+                            }}
+                          >
+                            Window #{sIdx + 1}:
+                          </span>
+
+                          <input
+                            type="time"
+                            className="form-input form-input-sm"
+                            style={{ width: '8.25rem', padding: '0.25rem 0.5rem' }}
+                            value={slot.start_time}
+                            onChange={(e) => handleSlotTimeChange(key, sIdx, 'start_time', e.target.value)}
+                          />
+                          <span style={{ color: 'var(--color-text-muted)', fontSize: '0.8125rem' }}>to</span>
+                          <input
+                            type="time"
+                            className="form-input form-input-sm"
+                            style={{ width: '8.25rem', padding: '0.25rem 0.5rem' }}
+                            value={slot.end_time}
+                            onChange={(e) => handleSlotTimeChange(key, sIdx, 'end_time', e.target.value)}
+                          />
+
+                          {slots.length > 1 && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              onClick={() => handleRemoveSlot(key, sIdx)}
+                              style={{
+                                color: 'var(--color-danger)',
+                                padding: '0.2rem 0.4rem',
+                                fontSize: '0.75rem',
+                              }}
+                              title="Remove this time window"
+                            >
+                              ✕ Remove
+                            </button>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   ) : (
-                    <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
-                      Closed / Locked
-                    </span>
+                    <div style={{ paddingLeft: '1.75rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                        Closed / Locked 24 hours
+                      </span>
+                    </div>
                   )}
                 </div>
               );

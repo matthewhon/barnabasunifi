@@ -9,7 +9,9 @@ import {
   createMapping,
   updateMapping,
   deleteMapping,
-  getDoors,
+  subscribeToDoors,
+  subscribeToScheduleWindows,
+  getOrgSettings,
 } from '@/lib/firestore';
 import type {
   Mapping,
@@ -18,8 +20,12 @@ import type {
   PlanTimeType,
   PcoServiceType,
   PcoGroup,
+  PcoTimeInfo,
+  ScheduleWindow,
+  OrgSettings,
 } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
+import { safeFormat, safeFormatDistanceToNow, parseSafeDate } from '@/lib/date-utils';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -43,11 +49,117 @@ function PlusIcon() {
   );
 }
 
+function ClockIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  );
+}
+
+function DoorIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 21v-16a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16" />
+      <line x1="2" y1="21" x2="22" y2="21" />
+      <circle cx="15.5" cy="11.5" r="1" />
+    </svg>
+  );
+}
+
+function TagIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+      <line x1="7" y1="7" x2="7.01" y2="7" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 4 23 10 17 10" />
+      <polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </svg>
+  );
+}
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
+
+function formatIsoTimeRange(startsAtStr: string, endsAtStr?: string): string {
+  const startDate = parseSafeDate(startsAtStr);
+  if (!startDate) return '—';
+
+  const startFormatted = safeFormat(startDate, 'h:mm a');
+  const dateFormatted = safeFormat(startDate, 'EEE, MMM d');
+
+  if (!endsAtStr) {
+    return `${dateFormatted} · ${startFormatted}`;
+  }
+
+  const endDate = parseSafeDate(endsAtStr);
+  if (!endDate) {
+    return `${dateFormatted} · ${startFormatted}`;
+  }
+
+  const endFormatted = safeFormat(endDate, 'h:mm a');
+  return `${dateFormatted} · ${startFormatted} – ${endFormatted}`;
+}
+
+function formatIsoTimeOnly(isoStr: string): string {
+  const d = parseSafeDate(isoStr);
+  return d ? safeFormat(d, 'h:mm a') : '';
+}
+
+function timeTypeBadgeStyle(timeType?: string): { bg: string; color: string; border: string } {
+  const t = (timeType || '').toLowerCase();
+  if (t === 'service') {
+    return {
+      bg: 'rgba(36, 101, 245, 0.12)',
+      color: 'var(--color-accent, #2465f5)',
+      border: 'rgba(36, 101, 245, 0.25)',
+    };
+  }
+  if (t === 'rehearsal') {
+    return {
+      bg: 'rgba(234, 179, 8, 0.12)',
+      color: '#ca8a04',
+      border: 'rgba(234, 179, 8, 0.25)',
+    };
+  }
+  if (t === 'event') {
+    return {
+      bg: 'rgba(168, 85, 247, 0.12)',
+      color: '#9333ea',
+      border: 'rgba(168, 85, 247, 0.25)',
+    };
+  }
+  return {
+    bg: 'var(--color-bg-elevated)',
+    color: 'var(--color-text-secondary)',
+    border: 'var(--color-border)',
+  };
+}
+
 // ─── Toggle ───────────────────────────────────────────────────────────────────
 
 function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
-    <label className="toggle" style={{ cursor: disabled ? 'not-allowed' : 'pointer' }}>
+    <label className="toggle" style={{ cursor: disabled ? 'not-allowed' : 'pointer', margin: 0 }}>
       <input
         type="checkbox"
         checked={checked}
@@ -61,62 +173,365 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
   );
 }
 
-// ─── Mapping Row ──────────────────────────────────────────────────────────────
+// ─── Active Mapping Card ──────────────────────────────────────────────────────
 
-interface MappingRowProps {
+interface ActiveMappingCardProps {
   mapping: Mapping;
+  pcoResource?: PcoServiceType | PcoGroup;
+  doors: Door[];
+  scheduleWindows: ScheduleWindow[];
+  orgSettings: OrgSettings | null;
   onToggle: (id: string, enabled: boolean) => Promise<void>;
   onDelete: (id: string, label: string) => void;
   toggling: boolean;
 }
 
-function MappingRow({ mapping, onToggle, onDelete, toggling }: MappingRowProps) {
+function ActiveMappingCard({
+  mapping,
+  pcoResource,
+  doors,
+  scheduleWindows,
+  orgSettings,
+  onToggle,
+  onDelete,
+  toggling,
+}: ActiveMappingCardProps) {
+  // Find doors matching this mapping
+  const mappedDoors = mapping.door_ids.map((dId) => {
+    const found = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
+    return {
+      id: dId,
+      label: found?.label ?? dId,
+      state: found?.current_state ?? 'unknown',
+      isHeld: found?.is_held_unlocked ?? false,
+      position: found?.door_position_status,
+    };
+  });
+
+  // Find upcoming schedule windows linked to this mapping / service / group
+  const matchingWindows = scheduleWindows
+    .filter((w) => {
+      if (w.source_type !== mapping.source_type) return false;
+      if (w.source_label && w.source_label.toLowerCase().includes(mapping.pco_resource_label.toLowerCase())) return true;
+      if ((w as any).pco_service_type_id === mapping.pco_resource_id) return true;
+      if ((w as any).service_mapping_id === mapping.id) return true;
+      return false;
+    })
+    .sort((a, b) => new Date(a.unlock_at).getTime() - new Date(b.unlock_at).getTime());
+
+  const nextWindow = matchingWindows[0];
+
+  const unlockBuffer = orgSettings?.unlock_buffer_before_min ?? 15;
+  const lockBuffer = orgSettings?.lock_buffer_after_min ?? 15;
+
+  const frequency = (pcoResource as PcoServiceType)?.frequency;
+  const schedule = (pcoResource as PcoGroup)?.schedule;
+  const upcomingPlanTitle = (pcoResource as PcoServiceType)?.upcoming_plan_title;
+  const upcomingTimes = pcoResource?.upcoming_times ?? [];
+
   return (
     <div
+      className="card"
       style={{
-        padding: '0.875rem 1.25rem',
-        borderBottom: '1px solid var(--color-border)',
+        padding: '1.25rem',
+        marginBottom: '1rem',
+        border: '1px solid var(--color-border)',
+        borderRadius: 'var(--radius-lg)',
+        background: 'var(--color-bg-surface)',
         display: 'flex',
-        alignItems: 'center',
+        flexDirection: 'column',
         gap: '1rem',
-        flexWrap: 'wrap',
+        boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.05))',
       }}
     >
-      <div style={{ flex: '2 1 12rem', minWidth: 0 }}>
-        <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.9375rem' }}>
-          {mapping.pco_resource_label}
+      {/* 1. Header: Name, Types, Toggle & Delete */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '12rem', flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--color-text-primary)' }}>
+              {mapping.pco_resource_label}
+            </span>
+            <span
+              className={`badge ${mapping.source_type === 'service' ? 'badge-info' : 'badge-neutral'}`}
+              style={{ fontSize: '0.6875rem', textTransform: 'capitalize' }}
+            >
+              {mapping.source_type}
+            </span>
+            <span
+              className={`badge ${mapping.enabled ? 'badge-success' : 'badge-neutral'}`}
+              style={{ fontSize: '0.6875rem' }}
+            >
+              {mapping.enabled ? 'Active' : 'Disabled'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--color-text-muted)', flexWrap: 'wrap', marginTop: '0.125rem' }}>
+            <span>Resource ID: <code style={{ fontSize: '0.75rem' }}>{mapping.pco_resource_id}</code></span>
+            <span>•</span>
+            <span>Mapping ID: <code style={{ fontSize: '0.75rem' }}>{mapping.id.slice(0, 8)}…</code></span>
+          </div>
         </div>
-        <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>
-          {mapping.door_labels.length > 0
-            ? mapping.door_labels.join(' · ')
-            : 'No doors selected'}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', fontWeight: 500 }}>
+              {mapping.enabled ? 'Enabled' : 'Disabled'}
+            </span>
+            <Toggle
+              checked={mapping.enabled}
+              onChange={(v) => onToggle(mapping.id, v)}
+              disabled={toggling}
+            />
+          </div>
+
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ color: 'var(--color-danger, #ef4444)', padding: '0.4rem', borderRadius: 'var(--radius-md)' }}
+            onClick={() => onDelete(mapping.id, mapping.pco_resource_label)}
+            title="Delete mapping"
+          >
+            <TrashIcon />
+          </button>
         </div>
       </div>
 
-      {mapping.source_type === 'service' && mapping.time_types && (
-        <div style={{ flex: '1 1 8rem', display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-          {mapping.time_types.map((tt) => (
-            <span key={tt} className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
-              {tt}
+      {/* 2. Timing & Schedule Details */}
+      <div
+        style={{
+          background: 'var(--color-bg-elevated)',
+          border: '1px solid var(--color-border)',
+          borderRadius: 'var(--radius-md)',
+          padding: '0.875rem 1rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.625rem',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+            <CalendarIcon />
+            <span>Planning Center Schedule & Times</span>
+          </div>
+
+          {(frequency || schedule) && (
+            <span className="badge badge-neutral" style={{ fontSize: '0.75rem', fontWeight: 500 }}>
+              {frequency ? `Frequency: ${frequency}` : `Schedule: ${schedule}`}
             </span>
-          ))}
+          )}
+        </div>
+
+        {upcomingPlanTitle && (
+          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontWeight: 600 }}>Next Plan:</span>
+            <span>{upcomingPlanTitle}</span>
+          </div>
+        )}
+
+        {upcomingTimes.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Upcoming Pulled Times ({upcomingTimes.length})
+            </span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+              {upcomingTimes.map((t) => {
+                const style = timeTypeBadgeStyle(t.time_type);
+                const timeLabel = formatIsoTimeRange(t.starts_at, t.ends_at);
+                return (
+                  <span
+                    key={t.id}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.375rem',
+                      padding: '0.25rem 0.5rem',
+                      borderRadius: 'var(--radius-sm)',
+                      background: style.bg,
+                      color: style.color,
+                      border: `1px solid ${style.border}`,
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                    }}
+                  >
+                    <ClockIcon />
+                    <span>{timeLabel}</span>
+                    {t.time_type && (
+                      <span style={{ opacity: 0.85, textTransform: 'capitalize', fontSize: '0.6875rem' }}>
+                        ({t.name ? `${t.name} - ${t.time_type}` : t.time_type})
+                      </span>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+            No upcoming plan or event times currently published in Planning Center.
+          </div>
+        )}
+      </div>
+
+      {/* 3. Mapped UniFi Doors & Live Status */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+            <DoorIcon />
+            <span>Mapped UniFi Doors ({mappedDoors.length})</span>
+          </div>
+        </div>
+
+        {mappedDoors.length === 0 ? (
+          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+            No doors assigned to this mapping.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+            {mappedDoors.map((door) => {
+              const isUnlocked = door.state === 'unlocked' || door.isHeld;
+              const isLocked = door.state === 'locked';
+
+              return (
+                <div
+                  key={door.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    padding: '0.375rem 0.625rem',
+                    background: 'var(--color-bg-elevated)',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: 'var(--radius-md)',
+                    fontSize: '0.8125rem',
+                  }}
+                >
+                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                    {door.label}
+                  </span>
+                  <span
+                    className={`badge ${
+                      isUnlocked ? 'badge-success' : isLocked ? 'badge-danger' : 'badge-neutral'
+                    }`}
+                    style={{ fontSize: '0.6875rem' }}
+                  >
+                    {door.isHeld ? 'Held Open' : door.state}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 4. Trigger Configuration & Buffer Settings */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(14rem, 1fr))', gap: '0.75rem' }}>
+        {/* Time types trigger */}
+        <div
+          style={{
+            padding: '0.625rem 0.75rem',
+            background: 'var(--color-bg-elevated)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-border)',
+          }}
+        >
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600, marginBottom: '0.25rem' }}>
+            Trigger Time Types
+          </div>
+          {mapping.source_type === 'service' ? (
+            <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+              {mapping.time_types && mapping.time_types.length > 0 ? (
+                mapping.time_types.map((tt) => (
+                  <span key={tt} className="badge badge-info" style={{ fontSize: '0.6875rem', textTransform: 'capitalize' }}>
+                    {tt}
+                  </span>
+                ))
+              ) : (
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>None selected</span>
+              )}
+            </div>
+          ) : (
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-primary)', fontWeight: 500 }}>
+              All Group Events
+            </span>
+          )}
+        </div>
+
+        {/* Buffers applied */}
+        <div
+          style={{
+            padding: '0.625rem 0.75rem',
+            background: 'var(--color-bg-elevated)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-border)',
+          }}
+        >
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600, marginBottom: '0.25rem' }}>
+            Automatic Buffers
+          </div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-primary)' }}>
+            Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{unlockBuffer} min</strong> before · Locks <strong style={{ color: 'var(--color-accent)' }}>+{lockBuffer} min</strong> after
+          </div>
+        </div>
+      </div>
+
+      {/* 5. Live Next Scheduled Window */}
+      {nextWindow && (
+        <div
+          style={{
+            padding: '0.625rem 0.75rem',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(36, 101, 245, 0.05)',
+            border: '1px solid rgba(36, 101, 245, 0.2)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '0.5rem',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+            <span style={{ fontSize: '0.6875rem', fontWeight: 700, color: 'var(--color-accent)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Next Scheduled Door Window
+            </span>
+            <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-primary)', fontWeight: 600 }}>
+              {nextWindow.source_label || mapping.pco_resource_label}
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+              Unlock: {formatIsoTimeOnly(nextWindow.unlock_at)} → Lock: {formatIsoTimeOnly(nextWindow.lock_at)}
+            </span>
+          </div>
+
+          <span
+            className={`badge ${
+              nextWindow.status === 'unlocked' ? 'badge-success' :
+              nextWindow.status === 'pending' ? 'badge-info' : 'badge-neutral'
+            }`}
+            style={{ fontSize: '0.6875rem', textTransform: 'capitalize' }}
+          >
+            {nextWindow.status}
+          </span>
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
-        <Toggle
-          checked={mapping.enabled}
-          onChange={(v) => onToggle(mapping.id, v)}
-          disabled={toggling}
-        />
-        <button
-          className="btn btn-ghost btn-sm"
-          style={{ color: 'var(--color-danger)', padding: '0.375rem' }}
-          onClick={() => onDelete(mapping.id, mapping.pco_resource_label)}
-          title="Delete mapping"
-        >
-          <TrashIcon />
-        </button>
+      {/* 6. Footer: Timestamps */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '0.6875rem',
+          color: 'var(--color-text-muted)',
+          borderTop: '1px solid var(--color-border)',
+          paddingTop: '0.625rem',
+          flexWrap: 'wrap',
+          gap: '0.5rem',
+        }}
+      >
+        <span>
+          Created: {mapping.created_at ? safeFormat(mapping.created_at, 'MMM d, yyyy · h:mm a') : '—'}
+        </span>
+        <span>
+          Updated: {mapping.updated_at ? safeFormatDistanceToNow(mapping.updated_at) : '—'}
+        </span>
       </div>
     </div>
   );
@@ -131,6 +546,7 @@ interface AddMappingModalProps {
   pcoResources: Array<PcoServiceType | PcoGroup>;
   doors: Door[];
   pcoError?: string | null;
+  orgSettings: OrgSettings | null;
   onSave: (data: {
     pco_resource_id: string;
     pco_resource_label: string;
@@ -149,6 +565,7 @@ function AddMappingModal({
   pcoResources,
   doors,
   pcoError,
+  orgSettings,
   onSave,
   saving,
 }: AddMappingModalProps) {
@@ -185,18 +602,19 @@ function AddMappingModal({
     );
   }
 
+  const selectedResource = pcoResources.find((r) => r.id === selectedResourceId);
+
   async function handleSave() {
     setError(null);
     if (!selectedResourceId) { setError('Please select a PCO resource.'); return; }
     if (selectedDoorIds.length === 0) { setError('Please select at least one door.'); return; }
     if (sourceType === 'service' && timeTypes.length === 0) { setError('Please select at least one time type.'); return; }
 
-    const resource = pcoResources.find((r) => r.id === selectedResourceId);
     const selectedDoors = doors.filter((d) => selectedDoorIds.includes(d.id));
 
     await onSave({
       pco_resource_id: selectedResourceId,
-      pco_resource_label: resource?.name ?? selectedResourceId,
+      pco_resource_label: selectedResource?.name ?? selectedResourceId,
       door_ids: selectedDoorIds,
       door_labels: selectedDoors.map((d) => d.label),
       time_types: sourceType === 'service' ? timeTypes : [],
@@ -211,8 +629,8 @@ function AddMappingModal({
     const labels: Record<number, string> = {
       1: 'Select PCO Resource',
       2: 'Select Doors',
-      3: sourceType === 'service' ? 'Time Types' : 'Enable',
-      4: 'Enable',
+      3: sourceType === 'service' ? 'Trigger Time Types' : 'Review & Enable',
+      4: 'Review & Enable',
     };
     return labels[s] ?? `Step ${s}`;
   };
@@ -251,7 +669,7 @@ function AddMappingModal({
       }
     >
       {/* Step indicator */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', alignItems: 'center' }}>
         {Array.from({ length: totalSteps }, (_, i) => i + 1).map((s) => (
           <React.Fragment key={s}>
             <div
@@ -306,31 +724,102 @@ function AddMappingModal({
         </div>
       )}
 
-      {/* Step 1: PCO resource */}
+      {/* Step 1: PCO resource selection */}
       {step === 1 && (
-        <div className="form-group">
-          <label className="form-label">
-            {sourceType === 'service' ? 'Service Type' : 'Group'}
-          </label>
-          {pcoError ? (
-            <p style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.875rem' }}>
-              Failed to load {sourceType === 'service' ? 'service types' : 'groups'}: {pcoError}
-            </p>
-          ) : pcoResources.length === 0 ? (
-            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-              No {sourceType === 'service' ? 'service types' : 'groups'} found. Ensure PCO is connected in Settings.
-            </p>
-          ) : (
-            <select
-              className="form-select"
-              value={selectedResourceId}
-              onChange={(e) => setSelectedResourceId(e.target.value)}
+        <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div>
+            <label className="form-label" style={{ marginBottom: '0.5rem', display: 'block' }}>
+              Choose {sourceType === 'service' ? 'Service Type' : 'Group'}
+            </label>
+            {pcoError ? (
+              <p style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.875rem' }}>
+                Failed to load {sourceType === 'service' ? 'service types' : 'groups'}: {pcoError}
+              </p>
+            ) : pcoResources.length === 0 ? (
+              <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
+                No {sourceType === 'service' ? 'service types' : 'groups'} found. Ensure PCO is connected in Settings.
+              </p>
+            ) : (
+              <select
+                className="form-select"
+                value={selectedResourceId}
+                onChange={(e) => setSelectedResourceId(e.target.value)}
+              >
+                <option value="">Select a {sourceType === 'service' ? 'service type' : 'group'}…</option>
+                {pcoResources.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} {(r as PcoServiceType).frequency ? `(${(r as PcoServiceType).frequency})` : (r as PcoGroup).schedule ? `(${(r as PcoGroup).schedule})` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Selected Resource Preview with Times */}
+          {selectedResource && (
+            <div
+              style={{
+                padding: '0.875rem',
+                background: 'var(--color-bg-elevated)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+              }}
             >
-              <option value="">Select a {sourceType === 'service' ? 'service type' : 'group'}…</option>
-              {pcoResources.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
-            </select>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{selectedResource.name}</span>
+                {(selectedResource as PcoServiceType).frequency && (
+                  <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
+                    {(selectedResource as PcoServiceType).frequency}
+                  </span>
+                )}
+                {(selectedResource as PcoGroup).schedule && (
+                  <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
+                    {(selectedResource as PcoGroup).schedule}
+                  </span>
+                )}
+              </div>
+
+              {(selectedResource as PcoServiceType).upcoming_plan_title && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
+                  <strong>Upcoming Plan:</strong> {(selectedResource as PcoServiceType).upcoming_plan_title}
+                </div>
+              )}
+
+              {selectedResource.upcoming_times && selectedResource.upcoming_times.length > 0 ? (
+                <div>
+                  <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontWeight: 600, display: 'block', marginBottom: '0.25rem' }}>
+                    Pulled Service / Event Times:
+                  </span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                    {selectedResource.upcoming_times.map((t) => {
+                      const style = timeTypeBadgeStyle(t.time_type);
+                      return (
+                        <span
+                          key={t.id}
+                          style={{
+                            fontSize: '0.6875rem',
+                            padding: '0.2rem 0.4rem',
+                            borderRadius: 'var(--radius-sm)',
+                            background: style.bg,
+                            color: style.color,
+                            border: `1px solid ${style.border}`,
+                          }}
+                        >
+                          {formatIsoTimeRange(t.starts_at, t.ends_at)} ({t.time_type || 'time'})
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                  No upcoming times scheduled yet in Planning Center.
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -339,7 +828,7 @@ function AddMappingModal({
       {step === 2 && (
         <div>
           <label className="form-label" style={{ marginBottom: '0.75rem', display: 'block' }}>
-            Select Doors ({selectedDoorIds.length} selected)
+            Select UniFi Doors ({selectedDoorIds.length} selected)
           </label>
           {doors.length === 0 ? (
             <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
@@ -425,17 +914,52 @@ function AddMappingModal({
         </div>
       )}
 
-      {/* Final step: Enable toggle */}
+      {/* Final step: Review & Enable toggle */}
       {((step === 4 && sourceType === 'service') || (step === 3 && sourceType === 'group')) && (
-        <div>
-          <label className="form-label" style={{ marginBottom: '1rem', display: 'block' }}>
-            Mapping Status
-          </label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <Toggle checked={enabled} onChange={setEnabled} />
-            <span style={{ fontSize: '0.9375rem', color: 'var(--color-text-primary)' }}>
-              {enabled ? 'Enabled — this mapping will trigger door unlocks' : 'Disabled — no door actions will be taken'}
-            </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div
+            style={{
+              padding: '0.875rem',
+              background: 'var(--color-bg-elevated)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.5rem',
+              fontSize: '0.8125rem',
+            }}
+          >
+            <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>Mapping Summary</div>
+            <div>
+              <span style={{ color: 'var(--color-text-muted)' }}>Resource:</span>{' '}
+              <strong>{selectedResource?.name}</strong> ({sourceType})
+            </div>
+            <div>
+              <span style={{ color: 'var(--color-text-muted)' }}>Doors ({selectedDoorIds.length}):</span>{' '}
+              {doors.filter((d) => selectedDoorIds.includes(d.id)).map((d) => d.label).join(', ')}
+            </div>
+            {sourceType === 'service' && (
+              <div>
+                <span style={{ color: 'var(--color-text-muted)' }}>Time Types:</span>{' '}
+                {timeTypes.join(', ')}
+              </div>
+            )}
+            <div>
+              <span style={{ color: 'var(--color-text-muted)' }}>Auto Buffers:</span>{' '}
+              -{orgSettings?.unlock_buffer_before_min ?? 15} min before / +{orgSettings?.lock_buffer_after_min ?? 15} min after
+            </div>
+          </div>
+
+          <div>
+            <label className="form-label" style={{ marginBottom: '0.75rem', display: 'block' }}>
+              Mapping Status
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <Toggle checked={enabled} onChange={setEnabled} />
+              <span style={{ fontSize: '0.9375rem', color: 'var(--color-text-primary)' }}>
+                {enabled ? 'Enabled — this mapping will automatically schedule door unlock commands' : 'Disabled — no door actions will be scheduled'}
+              </span>
+            </div>
           </div>
         </div>
       )}
@@ -451,6 +975,8 @@ export default function MappingsPage() {
   const [tab, setTab] = useState<MappingSourceType>('service');
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [doors, setDoors] = useState<Door[]>([]);
+  const [scheduleWindows, setScheduleWindows] = useState<ScheduleWindow[]>([]);
+  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
   const [pcoResources, setPcoResources] = useState<Array<PcoServiceType | PcoGroup>>([]);
   const [pcoLoading, setPcoLoading] = useState(false);
   const [pcoError, setPcoError] = useState<string | null>(null);
@@ -472,14 +998,28 @@ export default function MappingsPage() {
     setTimeout(() => setFeedback(null), 4000);
   }
 
-  // Load mappings and doors
+  // Load initial mappings and org settings
   useEffect(() => {
     if (!orgId) return;
-    Promise.all([getMappings(orgId), getDoors(orgId)]).then(([m, d]) => {
+    Promise.all([getMappings(orgId), getOrgSettings(orgId)]).then(([m, s]) => {
       setMappings(m);
-      setDoors(d);
+      setOrgSettings(s);
       setMappingsLoading(false);
     });
+  }, [orgId]);
+
+  // Subscribe to live doors
+  useEffect(() => {
+    if (!orgId) return;
+    const unsub = subscribeToDoors(orgId, (d) => setDoors(d));
+    return () => unsub();
+  }, [orgId]);
+
+  // Subscribe to live schedule windows
+  useEffect(() => {
+    if (!orgId) return;
+    const unsub = subscribeToScheduleWindows(orgId, (w) => setScheduleWindows(w));
+    return () => unsub();
   }, [orgId]);
 
   // Load PCO resources when tab changes or orgId changes
@@ -616,16 +1156,28 @@ export default function MappingsPage() {
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '1.5rem', alignItems: 'start' }}>
-        {/* Left panel: PCO resources */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.9fr', gap: '1.5rem', alignItems: 'start' }}>
+        {/* Left panel: PCO resources & Pulled Times */}
         <div className="card" style={{ padding: '1.25rem' }}>
-          <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: '0.875rem', fontSize: '0.875rem' }}>
-            {tab === 'service' ? 'PCO Service Types' : 'PCO Groups'}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.875rem' }}>
+            <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+              {tab === 'service' ? 'PCO Service Types & Times' : 'PCO Groups & Schedules'}
+            </span>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+              onClick={fetchPcoResources}
+              disabled={pcoLoading}
+              title="Refresh resources from Planning Center"
+            >
+              <RefreshIcon />
+            </button>
           </div>
+
           {pcoLoading ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="skeleton" style={{ height: '2.25rem', borderRadius: 'var(--radius-md)' }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="skeleton" style={{ height: '5rem', borderRadius: 'var(--radius-md)' }} />
               ))}
             </div>
           ) : pcoError ? (
@@ -651,35 +1203,95 @@ export default function MappingsPage() {
               </p>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-              {pcoResources.map((r) => (
-                <div
-                  key={r.id}
-                  style={{
-                    padding: '0.5rem 0.75rem',
-                    borderRadius: 'var(--radius-md)',
-                    background: 'var(--color-bg-elevated)',
-                    border: '1px solid var(--color-border)',
-                    fontSize: '0.875rem',
-                    color: 'var(--color-text-primary)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <span style={{ fontWeight: 500 }}>{r.name}</span>
-                  {mappings.some((m) => m.pco_resource_id === r.id) && (
-                    <span className="badge badge-success" style={{ fontSize: '0.6875rem' }}>
-                      Mapped
-                    </span>
-                  )}
-                </div>
-              ))}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {pcoResources.map((r) => {
+                const isMapped = mappings.some((m) => m.pco_resource_id === r.id);
+                const upcomingTimes = r.upcoming_times ?? [];
+                const freq = (r as PcoServiceType).frequency;
+                const sched = (r as PcoGroup).schedule;
+                const planTitle = (r as PcoServiceType).upcoming_plan_title;
+
+                return (
+                  <div
+                    key={r.id}
+                    style={{
+                      padding: '0.75rem',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'var(--color-bg-elevated)',
+                      border: '1px solid var(--color-border)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                      <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
+                        {r.name}
+                      </span>
+                      {isMapped ? (
+                        <span className="badge badge-success" style={{ fontSize: '0.6875rem' }}>
+                          Mapped
+                        </span>
+                      ) : (
+                        <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
+                          Unmapped
+                        </span>
+                      )}
+                    </div>
+
+                    {(freq || sched) && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                        <ClockIcon />
+                        <span>{freq ? `Frequency: ${freq}` : `Schedule: ${sched}`}</span>
+                      </div>
+                    )}
+
+                    {planTitle && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                        Plan: {planTitle}
+                      </div>
+                    )}
+
+                    {upcomingTimes.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: '0.125rem' }}>
+                        <span style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>
+                          Times:
+                        </span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                          {upcomingTimes.map((t) => {
+                            const style = timeTypeBadgeStyle(t.time_type);
+                            return (
+                              <span
+                                key={t.id}
+                                style={{
+                                  fontSize: '0.6875rem',
+                                  padding: '0.15rem 0.4rem',
+                                  borderRadius: 'var(--radius-sm)',
+                                  background: style.bg,
+                                  color: style.color,
+                                  border: `1px solid ${style.border}`,
+                                  fontWeight: 500,
+                                }}
+                              >
+                                {formatIsoTimeRange(t.starts_at, t.ends_at)} {t.time_type ? `(${t.time_type})` : ''}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                        No upcoming times scheduled
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* Right panel: existing mappings */}
+        {/* Right panel: Active Mappings with Full Details */}
         <div>
           <div
             style={{
@@ -689,15 +1301,19 @@ export default function MappingsPage() {
               fontSize: '0.875rem',
               display: 'flex',
               justifyContent: 'space-between',
+              alignItems: 'center',
             }}
           >
             <span>Active Mappings ({filteredMappings.length})</span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 'normal' }}>
+              Buffers: -{orgSettings?.unlock_buffer_before_min ?? 15}m / +{orgSettings?.lock_buffer_after_min ?? 15}m
+            </span>
           </div>
 
           {mappingsLoading ? (
-            <div className="card" style={{ padding: '1rem' }}>
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="skeleton" style={{ height: '3.5rem', marginBottom: '0.5rem', borderRadius: 'var(--radius-md)' }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {[1, 2].map((i) => (
+                <div key={i} className="card skeleton" style={{ height: '10rem', borderRadius: 'var(--radius-lg)' }} />
               ))}
             </div>
           ) : filteredMappings.length === 0 ? (
@@ -706,20 +1322,28 @@ export default function MappingsPage() {
                 No {tab === 'service' ? 'service' : 'group'} mappings yet
               </p>
               <p style={{ fontSize: '0.875rem' }}>
-                Click &quot;Add Mapping&quot; to link a PCO resource to UniFi doors.
+                Click &quot;Add Mapping&quot; to link a Planning Center {tab === 'service' ? 'service type' : 'group'} with UniFi doors.
               </p>
             </div>
           ) : (
-            <div className="card" style={{ padding: '0' }}>
-              {filteredMappings.map((m) => (
-                <MappingRow
-                  key={m.id}
-                  mapping={m}
-                  onToggle={handleToggle}
-                  onDelete={openDeleteModal}
-                  toggling={toggling === m.id}
-                />
-              ))}
+            <div>
+              {filteredMappings.map((m) => {
+                const matchedResource = pcoResources.find((r) => r.id === m.pco_resource_id);
+
+                return (
+                  <ActiveMappingCard
+                    key={m.id}
+                    mapping={m}
+                    pcoResource={matchedResource}
+                    doors={doors}
+                    scheduleWindows={scheduleWindows}
+                    orgSettings={orgSettings}
+                    onToggle={handleToggle}
+                    onDelete={openDeleteModal}
+                    toggling={toggling === m.id}
+                  />
+                );
+              })}
             </div>
           )}
         </div>
@@ -733,6 +1357,7 @@ export default function MappingsPage() {
         pcoResources={pcoResources}
         doors={doors}
         pcoError={pcoError}
+        orgSettings={orgSettings}
         onSave={handleSaveMapping}
         saving={saving}
       />
@@ -758,13 +1383,13 @@ export default function MappingsPage() {
           <strong style={{ color: 'var(--color-text-primary)' }}>{deletingLabel}</strong>?
         </p>
         <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginTop: '0.75rem' }}>
-          This will not affect existing schedule windows, but no new windows will be created for this resource.
+          This will not delete existing schedule windows, but no new automated windows or door commands will be created for this resource.
         </p>
       </Modal>
 
       <style>{`
-        @media (max-width: 768px) {
-          div[style*="grid-template-columns: 1fr 1.5fr"] {
+        @media (max-width: 900px) {
+          div[style*="grid-template-columns: 1.1fr 1.9fr"] {
             grid-template-columns: 1fr !important;
           }
         }

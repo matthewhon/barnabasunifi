@@ -193,10 +193,23 @@ export interface Agent {
 
 // ─── PCO API ──────────────────────────────────────────────────────────────────
 
+export interface PcoTimeInfo {
+  id: string;
+  name?: string;
+  starts_at: string;
+  ends_at?: string;
+  time_type?: PlanTimeType | string;
+  formatted?: string;
+}
+
 export interface PcoServiceType {
   id: string;
   name: string;
   frequency?: string;
+  upcoming_plan_title?: string;
+  upcoming_plan_date?: string;
+  upcoming_times?: PcoTimeInfo[];
+  attributes?: Record<string, unknown>;
 }
 
 export interface PcoPlanTime {
@@ -214,6 +227,9 @@ export interface PcoGroup {
   name: string;
   group_type_id?: string;
   description?: string;
+  schedule?: string;
+  upcoming_times?: PcoTimeInfo[];
+  attributes?: Record<string, unknown>;
 }
 
 export interface PcoGroupEvent {
