@@ -328,7 +328,8 @@ async function startBridgeWorker(): Promise<void> {
       logger.debug(
         `[Main] Command callback — id: ${cmd.id} action: ${cmd.action} door: ${cmd.door_id}`
       );
-    }
+    },
+    bridgeState.onRestartRequest
   );
 
   // 15. Subscribe to real-time cloud settings updates (token rotation, host changes)

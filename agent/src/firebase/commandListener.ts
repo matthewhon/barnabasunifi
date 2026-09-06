@@ -37,7 +37,8 @@ export type CommandAction =
   | 'delete_visitor'
   | 'sync_access_logs'
   | 'apply_update'
-  | 'upgrade_agent';
+  | 'upgrade_agent'
+  | 'restart_agent';
 
 export type CommandStatus =
   | 'queued'
@@ -198,7 +199,8 @@ export function startCommandListener(
   orgId: string,
   agentId: string,
   unifiClient: UnifiAccessClient,
-  onCommand?: CommandCallback
+  onCommand?: CommandCallback,
+  onRestart?: () => Promise<void>
 ): () => void {
   const db = getDb();
   const commandsRef = db.collection(`organizations/${orgId}/door_commands`);
@@ -411,6 +413,17 @@ export function startCommandListener(
           resultMessage = `Agent update to v${updateState.latestVersion} initiated. Restarting...`;
         } else {
           resultMessage = `Agent is already up to date (v${updateState.currentVersion}).`;
+        }
+      } else if (command.action === 'restart_agent') {
+        resultMessage = 'Agent restart requested remotely. Rebooting container…';
+        if (onRestart) {
+          setTimeout(() => {
+            onRestart().catch((err) => {
+              logger.error(`[CommandListener] Remote restart failed: ${String(err)}`);
+            });
+          }, 500);
+        } else {
+          setTimeout(() => process.exit(0), 500);
         }
       } else {
         throw new Error(`Unknown action: ${String((command as any).action)}`);

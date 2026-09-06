@@ -322,6 +322,53 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    /* Modal / Overlay */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.75rem;
+      max-width: 440px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .modal h3 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      color: var(--text-primary);
+    }
+
+    .modal p {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      margin-bottom: 1.5rem;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+    }
   </style>
 </head>
 <body>
@@ -340,6 +387,9 @@
           <span class="badge-dot"></span>
           <span id="statusText">Checking...</span>
         </div>
+        <button id="btnHeaderRestart" class="btn btn-secondary btn-sm" onclick="confirmRestartAgent()" title="Restart Docker Agent Container">
+          🔄 Restart
+        </button>
       </div>
     </header>
 
@@ -498,11 +548,35 @@
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
         <h2 class="section-title" style="margin: 0;">📜 Agent Logs</h2>
         <div style="display: flex; gap: 0.5rem;">
-          <button class="btn btn-secondary btn-sm" onclick="checkForUpdates()">🔄 Check for Updates</button>
-          <button class="btn btn-secondary btn-sm" onclick="loadLogs()">🔄 Refresh Logs</button>
+          <button class="btn btn-secondary btn-sm" onclick="confirmRestartAgent()">🔄 Restart Agent</button>
+          <button class="btn btn-secondary btn-sm" onclick="checkForUpdates()">⬆️ Check for Updates</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadLogs()">📋 Refresh Logs</button>
         </div>
       </div>
       <div id="logsView" class="logs-box">Connecting to agent...</div>
+    </div>
+  </div>
+
+  <!-- Restart Confirmation Modal -->
+  <div id="restartConfirmModal" class="overlay">
+    <div class="modal">
+      <div class="modal-icon">🔄</div>
+      <h3>Restart Agent Container?</h3>
+      <p>This will restart the local agent bridge process and reload your connections. If running in Docker, Docker will reboot the container automatically.</p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeRestartModal()">Cancel</button>
+        <button id="btnConfirmRestart" class="btn btn-primary" onclick="executeRestart()">Yes, Restart Agent</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Restarting Progress Overlay -->
+  <div id="restartingOverlay" class="overlay">
+    <div class="modal">
+      <div class="modal-icon"><span class="spinner" style="width: 32px; height: 32px; border-width: 3px;"></span></div>
+      <h3 id="restartingTitle">Restarting Agent…</h3>
+      <p id="restartingMsg">Sending restart signal to Docker container. Waiting for service to come back online…</p>
+      <div id="reconnectAttempts" style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;"></div>
     </div>
   </div>
 
@@ -852,6 +926,51 @@
         btn.disabled = false;
         btn.innerHTML = '⬆️ Apply Update & Restart';
       }
+    }
+
+    function confirmRestartAgent() {
+      document.getElementById('restartConfirmModal').style.display = 'flex';
+    }
+
+    function closeRestartModal() {
+      document.getElementById('restartConfirmModal').style.display = 'none';
+    }
+
+    async function executeRestart() {
+      closeRestartModal();
+      const overlay = document.getElementById('restartingOverlay');
+      const attemptsEl = document.getElementById('reconnectAttempts');
+      overlay.style.display = 'flex';
+      attemptsEl.innerText = 'Initiating reboot signal…';
+
+      try {
+        await fetch('/api/restart', { method: 'POST' });
+      } catch (e) {
+        // May fail if connection terminates immediately, which is normal on process exit
+      }
+
+      // Wait 2 seconds before starting health-check polling
+      let attempts = 0;
+      attemptsEl.innerText = 'Waiting for Docker container to reboot…';
+
+      setTimeout(() => {
+        const interval = setInterval(async () => {
+          attempts++;
+          attemptsEl.innerText = `Reconnecting to agent bridge (attempt ${attempts})…`;
+          try {
+            const res = await fetch('/api/status', { cache: 'no-store' });
+            if (res.ok) {
+              clearInterval(interval);
+              attemptsEl.innerText = 'Agent is back online! Reloading…';
+              setTimeout(() => {
+                window.location.reload();
+              }, 800);
+            }
+          } catch (err) {
+            // Still rebooting
+          }
+        }, 1500);
+      }, 2000);
     }
 
     // Initialize

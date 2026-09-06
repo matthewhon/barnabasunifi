@@ -136,7 +136,8 @@ export type CommandAction =
   | 'update_visitor'
   | 'delete_visitor'
   | 'sync_access_logs'
-  | 'apply_update';
+  | 'apply_update'
+  | 'restart_agent';
 
 export type CommandStatus = 'queued' | 'executing' | 'done' | 'failed' | 'cancelled';
 

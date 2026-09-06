@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
-import { getOrgSettings, updateOrgSettings, getLatestAgentRelease } from '@/lib/firestore';
+import { getOrgSettings, updateOrgSettings, getLatestAgentRelease, createDoorCommand } from '@/lib/firestore';
 import type { OrgSettings, AgentRelease } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
 
@@ -127,7 +127,7 @@ function SliderInput({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { orgId, isSuperAdmin } = useAuth();
+  const { orgId, user, isSuperAdmin } = useAuth();
   const { showToast } = useToast();
 
   const [settings, setSettings] = useState<OrgSettings | null>(null);
@@ -311,6 +311,32 @@ export default function SettingsPage() {
       showToast(`Failed to generate token: ${err.message}`, 'error');
     } finally {
       setGeneratingToken(false);
+    }
+  };
+
+  const [restartingAgent, setRestartingAgent] = useState(false);
+
+  const handleRestartAgent = async () => {
+    if (!orgId) return;
+    if (!window.confirm('Send restart signal to the on-premises Docker agent? The container will reboot automatically.')) {
+      return;
+    }
+    setRestartingAgent(true);
+    try {
+      await createDoorCommand(orgId, {
+        org_id: orgId,
+        action: 'restart_agent',
+        status: 'queued',
+        execute_at: new Date().toISOString(),
+        triggered_by: 'manual',
+        actor_uid: user?.uid,
+      });
+      showToast('Restart command queued! The agent container will reboot shortly.', 'success');
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      showToast(e?.message ?? 'Failed to send restart command.', 'error');
+    } finally {
+      setRestartingAgent(false);
     }
   };
 
@@ -765,6 +791,25 @@ export default function SettingsPage() {
                 )}
               </div>
 
+              {/* Remote Agent Operations */}
+              <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+                <div>
+                  <h4 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                    🔄 Remote Agent Control
+                  </h4>
+                  <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginTop: '0.25rem' }}>
+                    Send an instant reboot signal to the on-premises Docker agent container.
+                  </p>
+                </div>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleRestartAgent}
+                  disabled={restartingAgent}
+                >
+                  {restartingAgent ? 'Rebooting…' : '🔄 Restart Agent Container'}
+                </button>
+              </div>
+
               {/* Setup Instructions */}
               <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
                 <h4 style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--color-text-primary)' }}>
@@ -932,6 +977,18 @@ SKIP_TLS_VERIFY=true`}</pre>
                 <strong>Changelog:</strong> {latestRelease.changelog}
               </div>
             )}
+
+            {/* Quick Agent Actions */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', borderTop: '1px solid var(--color-border)', paddingTop: '1rem' }}>
+              <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>Agent Container:</span>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={handleRestartAgent}
+                disabled={restartingAgent}
+              >
+                {restartingAgent ? 'Rebooting…' : '🔄 Restart Remote Agent'}
+              </button>
+            </div>
 
             {/* Publish new release (super admin only) */}
             {isSuperAdmin && (
