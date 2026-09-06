@@ -9,6 +9,8 @@ import { PcoClient, PcoResource } from './client';
 interface OrgSettings {
   unlock_buffer_before_min: number;
   lock_buffer_after_min: number;
+  lock_timing_mode?: 'after_end' | 'after_start';
+  lock_after_start_min?: number;
   timezone: string;
 }
 
@@ -24,6 +26,9 @@ interface MappingData {
   enabled?: boolean;
   time_types?: string[];
   enabled_time_types?: string[];
+  lock_timing_mode?: 'after_end' | 'after_start';
+  lock_offset_min?: number;
+  unlock_offset_min?: number;
 }
 
 interface SyncResult {
@@ -64,8 +69,6 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
   }
 
   const settings = configSnap.data() as OrgSettings;
-  const unlockBufferMs = (settings.unlock_buffer_before_min ?? 15) * 60 * 1000;
-  const lockBufferMs = (settings.lock_buffer_after_min ?? 15) * 60 * 1000;
 
   // 2. Load enabled mappings from /organizations/{orgId}/mappings and subcollections
   const [mappingsSnap, serviceMappingsSnap, groupMappingsSnap] = await Promise.all([
@@ -106,10 +109,26 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
     idempotencyKey: string,
     startsAt: Date,
     endsAt: Date,
-    metadata: Record<string, unknown>
+    metadata: Record<string, unknown>,
+    mappingOptions?: {
+      unlock_offset_min?: number;
+      lock_offset_min?: number;
+      lock_timing_mode?: 'after_end' | 'after_start';
+    }
   ): Promise<void> {
-    const unlockAt = new Date(startsAt.getTime() - unlockBufferMs);
-    const lockAt = new Date(endsAt.getTime() + lockBufferMs);
+    const unlockOffsetMin = mappingOptions?.unlock_offset_min ?? settings.unlock_buffer_before_min ?? 15;
+    const unlockAt = new Date(startsAt.getTime() - unlockOffsetMin * 60 * 1000);
+
+    const lockMode = mappingOptions?.lock_timing_mode ?? settings.lock_timing_mode ?? 'after_end';
+    let lockAt: Date;
+
+    if (lockMode === 'after_start') {
+      const lockOffsetMin = mappingOptions?.lock_offset_min ?? settings.lock_after_start_min ?? 15;
+      lockAt = new Date(startsAt.getTime() + lockOffsetMin * 60 * 1000);
+    } else {
+      const lockOffsetMin = mappingOptions?.lock_offset_min ?? settings.lock_buffer_after_min ?? 15;
+      lockAt = new Date(endsAt.getTime() + lockOffsetMin * 60 * 1000);
+    }
 
     // Query for an existing window with this idempotency key
     const existingSnap = await windowsRef
@@ -123,6 +142,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       ends_at: Timestamp.fromDate(endsAt),
       unlock_at: Timestamp.fromDate(unlockAt),
       lock_at: Timestamp.fromDate(lockAt),
+      lock_timing_mode: lockMode,
       updated_at: FieldValue.serverTimestamp(),
       ...metadata,
     };
@@ -238,18 +258,28 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
           const planDetail = (plan.attributes?.title ?? plan.attributes?.series_title ?? plan.attributes?.dates) as string | undefined;
           const planTitle = planDetail ? `${serviceTypeName}: ${planDetail}` : serviceTypeName;
 
-          await upsertWindow(idempotencyKey, startsAt, endsAt, {
-            source: 'pco_service',
-            source_type: 'service',
-            source_label: planTitle,
-            pco_plan_id: planId,
-            pco_plan_time_id: planTime.id,
-            pco_service_type_id: serviceTypeId,
-            service_mapping_id: mapping?.id ?? null,
-            door_ids: doorIds,
-            door_labels: doorLabels,
-            status: 'pending',
-          });
+          await upsertWindow(
+            idempotencyKey,
+            startsAt,
+            endsAt,
+            {
+              source: 'pco_service',
+              source_type: 'service',
+              source_label: planTitle,
+              pco_plan_id: planId,
+              pco_plan_time_id: planTime.id,
+              pco_service_type_id: serviceTypeId,
+              service_mapping_id: mapping?.id ?? null,
+              door_ids: doorIds,
+              door_labels: doorLabels,
+              status: 'pending',
+            },
+            {
+              unlock_offset_min: mapping?.unlock_offset_min,
+              lock_offset_min: mapping?.lock_offset_min,
+              lock_timing_mode: mapping?.lock_timing_mode,
+            }
+          );
         }
       }
     }
@@ -300,17 +330,27 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
         const eventDetail = (attrs.name ?? attrs.title) as string | undefined;
         const eventTitle = eventDetail ? `${groupName}: ${eventDetail}` : groupName;
 
-        await upsertWindow(idempotencyKey, startsAt, endsAt, {
-          source: 'pco_group',
-          source_type: 'group',
-          source_label: eventTitle,
-          pco_event_id: event.id,
-          pco_group_id: groupId,
-          group_mapping_id: mapping?.id ?? null,
-          door_ids: doorIds,
-          door_labels: doorLabels,
-          status: 'pending',
-        });
+        await upsertWindow(
+          idempotencyKey,
+          startsAt,
+          endsAt,
+          {
+            source: 'pco_group',
+            source_type: 'group',
+            source_label: eventTitle,
+            pco_event_id: event.id,
+            pco_group_id: groupId,
+            group_mapping_id: mapping?.id ?? null,
+            door_ids: doorIds,
+            door_labels: doorLabels,
+            status: 'pending',
+          },
+          {
+            unlock_offset_min: mapping?.unlock_offset_min,
+            lock_offset_min: mapping?.lock_offset_min,
+            lock_timing_mode: mapping?.lock_timing_mode,
+          }
+        );
       }
     }
   } catch (err) {

@@ -33,9 +33,13 @@ export interface Organization {
   pco_connected: boolean; // derived: whether OAuth token exists
 }
 
+export type LockTimingMode = 'after_end' | 'after_start';
+
 export interface OrgSettings {
   unlock_buffer_before_min: number; // default 15
   lock_buffer_after_min: number;    // default 15
+  lock_timing_mode?: LockTimingMode; // default 'after_end'
+  lock_after_start_min?: number;    // default 15
   poll_interval_min: number;        // default 30
   timezone: string;                 // e.g. "America/Chicago"
   pco_oauth?: {
@@ -73,6 +77,9 @@ export interface Mapping {
   door_labels: string[];
   /** Only applies to service mappings — which time types trigger unlocks */
   time_types?: PlanTimeType[];
+  lock_timing_mode?: LockTimingMode;
+  lock_offset_min?: number;
+  unlock_offset_min?: number;
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -114,7 +121,8 @@ export interface ScheduleWindow {
   starts_at: string;          // ISO8601 — original PCO event start
   ends_at: string;            // ISO8601 — original PCO event end
   unlock_at: string;          // starts_at - buffer
-  lock_at: string;            // ends_at + buffer
+  lock_at: string;            // ends_at + buffer (or starts_at + offset)
+  lock_timing_mode?: LockTimingMode;
   door_ids: string[];
   door_labels: string[];
   status: ScheduleWindowStatus;

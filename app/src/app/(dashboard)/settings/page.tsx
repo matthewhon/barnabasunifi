@@ -143,6 +143,8 @@ export default function SettingsPage() {
   // Local form state
   const [unlockBuffer, setUnlockBuffer] = useState(15);
   const [lockBuffer, setLockBuffer] = useState(15);
+  const [lockTimingMode, setLockTimingMode] = useState<'after_end' | 'after_start'>('after_end');
+  const [lockAfterStartMin, setLockAfterStartMin] = useState(15);
   const [pollInterval, setPollInterval] = useState(30);
   const [timezone, setTimezone] = useState('America/Chicago');
   const [saving, setSaving] = useState(false);
@@ -220,6 +222,8 @@ export default function SettingsPage() {
         if (s) {
           setUnlockBuffer(s.unlock_buffer_before_min);
           setLockBuffer(s.lock_buffer_after_min);
+          setLockTimingMode(s.lock_timing_mode ?? 'after_end');
+          setLockAfterStartMin(s.lock_after_start_min ?? 15);
           setPollInterval(s.poll_interval_min);
           setTimezone(s.timezone ?? 'America/Chicago');
         }
@@ -244,6 +248,8 @@ export default function SettingsPage() {
       await updateOrgSettings(orgId, {
         unlock_buffer_before_min: unlockBuffer,
         lock_buffer_after_min: lockBuffer,
+        lock_timing_mode: lockTimingMode,
+        lock_after_start_min: lockAfterStartMin,
         poll_interval_min: pollInterval,
         timezone,
       });
@@ -253,7 +259,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [orgId, unlockBuffer, lockBuffer, pollInterval, timezone, showToast]);
+  }, [orgId, unlockBuffer, lockBuffer, lockTimingMode, lockAfterStartMin, pollInterval, timezone, showToast]);
 
   async function handleDisconnectPco() {
     if (!orgId) return;
@@ -880,14 +886,68 @@ SKIP_TLS_VERIFY=true`}</pre>
               max={120}
               step={5}
             />
-            <SliderInput
-              label="Lock Buffer After Event"
-              value={lockBuffer}
-              onChange={setLockBuffer}
-              min={0}
-              max={120}
-              step={5}
-            />
+
+            {/* Lock Timing Mode Selection */}
+            <div className="form-group" style={{ padding: '1rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+              <label className="form-label" style={{ fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: '0.5rem' }}>
+                Default Door Locking Rule
+              </label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem', marginBottom: '1rem' }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.625rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                  <input
+                    type="radio"
+                    name="lockTimingMode"
+                    value="after_end"
+                    checked={lockTimingMode === 'after_end'}
+                    onChange={() => setLockTimingMode('after_end')}
+                    style={{ marginTop: '0.2rem' }}
+                  />
+                  <div>
+                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>Lock after event concludes (Standard Buffer)</span>
+                    <p style={{ margin: '0.125rem 0 0 0', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                      Doors remain unlocked for the duration of the service, then lock after the specified buffer.
+                    </p>
+                  </div>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.625rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                  <input
+                    type="radio"
+                    name="lockTimingMode"
+                    value="after_start"
+                    checked={lockTimingMode === 'after_start'}
+                    onChange={() => setLockTimingMode('after_start')}
+                    style={{ marginTop: '0.2rem' }}
+                  />
+                  <div>
+                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>Lock after event starts (Security Mode)</span>
+                    <p style={{ margin: '0.125rem 0 0 0', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                      Doors unlock before the service, then automatically lock a set number of minutes after the service begins.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              {lockTimingMode === 'after_start' ? (
+                <SliderInput
+                  label="Lock Doors After Service Starts"
+                  value={lockAfterStartMin}
+                  onChange={setLockAfterStartMin}
+                  min={0}
+                  max={120}
+                  step={5}
+                />
+              ) : (
+                <SliderInput
+                  label="Lock Buffer After Service Ends"
+                  value={lockBuffer}
+                  onChange={setLockBuffer}
+                  min={0}
+                  max={120}
+                  step={5}
+                />
+              )}
+            </div>
             <div className="form-group">
               <label className="form-label">
                 Poll Interval{' '}

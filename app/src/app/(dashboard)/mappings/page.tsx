@@ -18,6 +18,7 @@ import type {
   Door,
   MappingSourceType,
   PlanTimeType,
+  LockTimingMode,
   PcoServiceType,
   PcoGroup,
   PcoTimeInfo,
@@ -183,6 +184,7 @@ interface ActiveMappingCardProps {
   orgSettings: OrgSettings | null;
   onToggle: (id: string, enabled: boolean) => Promise<void>;
   onDelete: (id: string, label: string) => void;
+  onEditTiming?: (mapping: Mapping) => void;
   toggling: boolean;
 }
 
@@ -194,6 +196,7 @@ function ActiveMappingCard({
   orgSettings,
   onToggle,
   onDelete,
+  onEditTiming,
   toggling,
 }: ActiveMappingCardProps) {
   // Find doors matching this mapping
@@ -221,8 +224,10 @@ function ActiveMappingCard({
 
   const nextWindow = matchingWindows[0];
 
-  const unlockBuffer = orgSettings?.unlock_buffer_before_min ?? 15;
-  const lockBuffer = orgSettings?.lock_buffer_after_min ?? 15;
+  const effectiveLockMode = mapping.lock_timing_mode ?? orgSettings?.lock_timing_mode ?? 'after_end';
+  const effectiveUnlockMin = mapping.unlock_offset_min ?? orgSettings?.unlock_buffer_before_min ?? 15;
+  const effectiveLockMin = mapping.lock_offset_min ?? (effectiveLockMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
+  const isCustomTiming = mapping.lock_timing_mode !== undefined || mapping.lock_offset_min !== undefined || mapping.unlock_offset_min !== undefined;
 
   const frequency = (pcoResource as PcoServiceType)?.frequency;
   const schedule = (pcoResource as PcoGroup)?.schedule;
@@ -469,20 +474,44 @@ function ActiveMappingCard({
           )}
         </div>
 
-        {/* Buffers applied */}
+        {/* Buffers & Lock Rule applied */}
         <div
           style={{
             padding: '0.625rem 0.75rem',
             background: 'var(--color-bg-elevated)',
             borderRadius: 'var(--radius-md)',
             border: '1px solid var(--color-border)',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: '0.25rem',
           }}
         >
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600, marginBottom: '0.25rem' }}>
-            Automatic Buffers
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
+              Door Locking Rule {isCustomTiming && <span className="badge badge-info" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>Custom</span>}
+            </div>
+            {onEditTiming && (
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', height: 'auto' }}
+                onClick={() => onEditTiming(mapping)}
+                title="Edit lock timing rule for this mapping"
+              >
+                ⚙️ Edit Rule
+              </button>
+            )}
           </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-primary)' }}>
-            Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{unlockBuffer} min</strong> before · Locks <strong style={{ color: 'var(--color-accent)' }}>+{lockBuffer} min</strong> after
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-primary)', lineHeight: 1.4 }}>
+            {effectiveLockMode === 'after_start' ? (
+              <>
+                <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>🛡️ Security Mode:</span> Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after start · Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before
+              </>
+            ) : (
+              <>
+                <span style={{ fontWeight: 600 }}>🕒 Standard Mode:</span> Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after end · Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -551,6 +580,281 @@ function ActiveMappingCard({
   );
 }
 
+// ─── Edit Timing Modal ───────────────────────────────────────────────────────
+
+interface EditTimingModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  mapping: Mapping | null;
+  orgSettings: OrgSettings | null;
+  onSave: (
+    mappingId: string,
+    updates: {
+      lock_timing_mode?: LockTimingMode;
+      lock_offset_min?: number;
+      unlock_offset_min?: number;
+    },
+  ) => Promise<void>;
+  saving: boolean;
+}
+
+function EditTimingModal({
+  isOpen,
+  onClose,
+  mapping,
+  orgSettings,
+  onSave,
+  saving,
+}: EditTimingModalProps) {
+  const [timingChoice, setTimingChoice] = useState<'default' | 'after_start' | 'after_end'>('default');
+  const [unlockMin, setUnlockMin] = useState(15);
+  const [lockMin, setLockMin] = useState(15);
+
+  useEffect(() => {
+    if (!mapping) return;
+    if (mapping.lock_timing_mode) {
+      setTimingChoice(mapping.lock_timing_mode);
+    } else {
+      setTimingChoice('default');
+    }
+    setUnlockMin(mapping.unlock_offset_min ?? orgSettings?.unlock_buffer_before_min ?? 15);
+    if (mapping.lock_offset_min !== undefined) {
+      setLockMin(mapping.lock_offset_min);
+    } else {
+      const mode = mapping.lock_timing_mode ?? orgSettings?.lock_timing_mode ?? 'after_end';
+      setLockMin(mode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
+    }
+  }, [mapping, orgSettings, isOpen]);
+
+  if (!mapping) return null;
+
+  const orgMode = orgSettings?.lock_timing_mode ?? 'after_end';
+  const orgUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
+  const orgLock = orgMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15);
+
+  async function handleSave() {
+    if (!mapping) return;
+    if (timingChoice === 'default') {
+      await onSave(mapping.id, {
+        lock_timing_mode: undefined,
+        lock_offset_min: undefined,
+        unlock_offset_min: undefined,
+      });
+    } else {
+      await onSave(mapping.id, {
+        lock_timing_mode: timingChoice,
+        lock_offset_min: lockMin,
+        unlock_offset_min: unlockMin,
+      });
+    }
+  }
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={`Edit Door Timing — ${mapping.pco_resource_label}`}
+      footer={
+        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%' }}>
+          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving…' : 'Save Timing Rule'}
+          </button>
+        </div>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        <div>
+          <label className="form-label" style={{ marginBottom: '0.5rem', display: 'block', fontWeight: 600 }}>
+            Timing & Locking Rule
+          </label>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>
+            Choose how doors should lock for <strong>{mapping.pco_resource_label}</strong>. You can lock doors shortly after the service starts for security, or keep them unlocked until after the service ends.
+          </p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {/* Option 1: Org Default */}
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.75rem',
+                padding: '0.75rem',
+                borderRadius: 'var(--radius-md)',
+                cursor: 'pointer',
+                background: timingChoice === 'default' ? 'rgba(36,101,245,0.08)' : 'var(--color-bg-elevated)',
+                border: `1px solid ${timingChoice === 'default' ? 'var(--color-accent)' : 'var(--color-border)'}`,
+              }}
+            >
+              <input
+                type="radio"
+                name="editTimingChoice"
+                value="default"
+                checked={timingChoice === 'default'}
+                onChange={() => setTimingChoice('default')}
+                style={{ marginTop: '0.2rem' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                  Use Organization Default ({orgMode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'})
+                </span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                  {orgMode === 'after_start'
+                    ? `Locks +${orgLock} min after start · Unlocks -${orgUnlock} min before`
+                    : `Locks +${orgLock} min after end · Unlocks -${orgUnlock} min before`}
+                </span>
+              </div>
+            </label>
+
+            {/* Option 2: Security Mode (after start) */}
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.75rem',
+                padding: '0.75rem',
+                borderRadius: 'var(--radius-md)',
+                cursor: 'pointer',
+                background: timingChoice === 'after_start' ? 'rgba(36,101,245,0.08)' : 'var(--color-bg-elevated)',
+                border: `1px solid ${timingChoice === 'after_start' ? 'var(--color-accent)' : 'var(--color-border)'}`,
+              }}
+            >
+              <input
+                type="radio"
+                name="editTimingChoice"
+                value="after_start"
+                checked={timingChoice === 'after_start'}
+                onChange={() => setTimingChoice('after_start')}
+                style={{ marginTop: '0.2rem' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                  🛡️ Security Mode — Lock after service starts
+                </span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                  Doors will unlock before the service and automatically lock a set time after the service begins.
+                </span>
+              </div>
+            </label>
+
+            {/* Option 3: Standard Mode (after end) */}
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.75rem',
+                padding: '0.75rem',
+                borderRadius: 'var(--radius-md)',
+                cursor: 'pointer',
+                background: timingChoice === 'after_end' ? 'rgba(36,101,245,0.08)' : 'var(--color-bg-elevated)',
+                border: `1px solid ${timingChoice === 'after_end' ? 'var(--color-accent)' : 'var(--color-border)'}`,
+              }}
+            >
+              <input
+                type="radio"
+                name="editTimingChoice"
+                value="after_end"
+                checked={timingChoice === 'after_end'}
+                onChange={() => setTimingChoice('after_end')}
+                style={{ marginTop: '0.2rem' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                  🕒 Standard Mode — Lock after service ends
+                </span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                  Doors stay unlocked for the full duration of the service and lock after it concludes.
+                </span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        {/* Sliders if custom mode selected */}
+        {timingChoice !== 'default' && (
+          <div
+            style={{
+              padding: '1rem',
+              background: 'var(--color-bg-elevated)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1rem',
+            }}
+          >
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
+                  Unlock doors before start
+                </label>
+                <span style={{ fontWeight: 700, color: 'var(--color-accent)', fontSize: '0.8125rem' }}>
+                  {unlockMin} min before
+                </span>
+              </div>
+              <input
+                type="range"
+                className="form-range"
+                min="0"
+                max="60"
+                step="5"
+                value={unlockMin}
+                onChange={(e) => setUnlockMin(Number(e.target.value))}
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
+                  {timingChoice === 'after_start' ? 'Lock doors after start' : 'Lock doors after end'}
+                </label>
+                <span style={{ fontWeight: 700, color: 'var(--color-accent)', fontSize: '0.8125rem' }}>
+                  {lockMin} min {timingChoice === 'after_start' ? 'after start' : 'after end'}
+                </span>
+              </div>
+              <input
+                type="range"
+                className="form-range"
+                min="0"
+                max={timingChoice === 'after_start' ? '120' : '60'}
+                step="5"
+                value={lockMin}
+                onChange={(e) => setLockMin(Number(e.target.value))}
+              />
+            </div>
+
+            {/* Example preview */}
+            <div
+              style={{
+                fontSize: '0.75rem',
+                color: 'var(--color-text-secondary)',
+                background: 'var(--color-bg-surface)',
+                padding: '0.5rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px dashed var(--color-border)',
+              }}
+            >
+              💡 <strong>Example:</strong> For a 10:00 AM – 11:30 AM service, doors unlock at{' '}
+              <strong>
+                {10 - Math.floor(unlockMin / 60)}:{String((60 - (unlockMin % 60)) % 60).padStart(2, '0')}{' '}
+                {unlockMin > 0 ? 'AM' : 'AM'}
+              </strong>{' '}
+              and lock at{' '}
+              <strong>
+                {timingChoice === 'after_start'
+                  ? `${10 + Math.floor(lockMin / 60)}:${String(lockMin % 60).padStart(2, '0')} AM`
+                  : `${11 + Math.floor((30 + lockMin) / 60)}:${String((30 + lockMin) % 60).padStart(2, '0')} AM`}
+              </strong>.
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Add Mapping Modal ────────────────────────────────────────────────────────
 
 interface AddMappingModalProps {
@@ -567,6 +871,9 @@ interface AddMappingModalProps {
     door_ids: string[];
     door_labels: string[];
     time_types: PlanTimeType[];
+    lock_timing_mode?: LockTimingMode;
+    lock_offset_min?: number;
+    unlock_offset_min?: number;
     enabled: boolean;
   }) => Promise<void>;
   saving: boolean;
@@ -587,6 +894,9 @@ function AddMappingModal({
   const [selectedResourceId, setSelectedResourceId] = useState('');
   const [selectedDoorIds, setSelectedDoorIds] = useState<string[]>([]);
   const [timeTypes, setTimeTypes] = useState<PlanTimeType[]>(['service']);
+  const [timingChoice, setTimingChoice] = useState<'default' | 'after_start' | 'after_end'>('default');
+  const [customUnlockMin, setCustomUnlockMin] = useState(15);
+  const [customLockMin, setCustomLockMin] = useState(15);
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -595,6 +905,9 @@ function AddMappingModal({
     setSelectedResourceId('');
     setSelectedDoorIds([]);
     setTimeTypes(['service']);
+    setTimingChoice('default');
+    setCustomUnlockMin(orgSettings?.unlock_buffer_before_min ?? 15);
+    setCustomLockMin(15);
     setEnabled(true);
     setError(null);
   }
@@ -632,6 +945,9 @@ function AddMappingModal({
       door_ids: selectedDoorIds,
       door_labels: selectedDoors.map((d) => d.label),
       time_types: sourceType === 'service' ? timeTypes : [],
+      lock_timing_mode: timingChoice === 'default' ? undefined : timingChoice,
+      lock_offset_min: timingChoice === 'default' ? undefined : customLockMin,
+      unlock_offset_min: timingChoice === 'default' ? undefined : customUnlockMin,
       enabled,
     });
     reset();
@@ -643,11 +959,15 @@ function AddMappingModal({
     const labels: Record<number, string> = {
       1: 'Select PCO Resource',
       2: 'Select Doors',
-      3: sourceType === 'service' ? 'Trigger Time Types' : 'Review & Enable',
-      4: 'Review & Enable',
+      3: sourceType === 'service' ? 'Trigger Time Types' : 'Timing & Review',
+      4: 'Timing & Review',
     };
     return labels[s] ?? `Step ${s}`;
   };
+
+  const orgMode = orgSettings?.lock_timing_mode ?? 'after_end';
+  const orgUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
+  const orgLock = orgMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15);
 
   return (
     <Modal
@@ -928,9 +1248,102 @@ function AddMappingModal({
         </div>
       )}
 
-      {/* Final step: Review & Enable toggle */}
+      {/* Final step: Timing Rules, Summary & Enable toggle */}
       {((step === 4 && sourceType === 'service') || (step === 3 && sourceType === 'group')) && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {/* Timing Configuration Card */}
+          <div
+            style={{
+              padding: '0.875rem',
+              background: 'var(--color-bg-elevated)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem',
+            }}
+          >
+            <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
+              Door Locking Rule
+            </label>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="addTimingChoice"
+                  value="default"
+                  checked={timingChoice === 'default'}
+                  onChange={() => setTimingChoice('default')}
+                />
+                <span>
+                  Org Default ({orgMode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'} · {orgMode === 'after_start' ? `+${orgLock}m after start` : `+${orgLock}m after end`})
+                </span>
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="addTimingChoice"
+                  value="after_start"
+                  checked={timingChoice === 'after_start'}
+                  onChange={() => setTimingChoice('after_start')}
+                />
+                <span style={{ fontWeight: timingChoice === 'after_start' ? 600 : 400 }}>
+                  🛡️ Security Mode (Lock after service starts)
+                </span>
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="addTimingChoice"
+                  value="after_end"
+                  checked={timingChoice === 'after_end'}
+                  onChange={() => setTimingChoice('after_end')}
+                />
+                <span style={{ fontWeight: timingChoice === 'after_end' ? 600 : 400 }}>
+                  🕒 Standard Mode (Lock after service ends)
+                </span>
+              </label>
+            </div>
+
+            {timingChoice !== 'default' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid var(--color-border)' }}>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                    <span>Unlock before:</span>
+                    <strong style={{ color: 'var(--color-accent)' }}>{customUnlockMin}m</strong>
+                  </div>
+                  <input
+                    type="range"
+                    className="form-range"
+                    min="0"
+                    max="60"
+                    step="5"
+                    value={customUnlockMin}
+                    onChange={(e) => setCustomUnlockMin(Number(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                    <span>{timingChoice === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
+                    <strong style={{ color: 'var(--color-accent)' }}>{customLockMin}m</strong>
+                  </div>
+                  <input
+                    type="range"
+                    className="form-range"
+                    min="0"
+                    max={timingChoice === 'after_start' ? '120' : '60'}
+                    step="5"
+                    value={customLockMin}
+                    onChange={(e) => setCustomLockMin(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
           <div
             style={{
               padding: '0.875rem',
@@ -959,8 +1372,12 @@ function AddMappingModal({
               </div>
             )}
             <div>
-              <span style={{ color: 'var(--color-text-muted)' }}>Auto Buffers:</span>{' '}
-              -{orgSettings?.unlock_buffer_before_min ?? 15} min before / +{orgSettings?.lock_buffer_after_min ?? 15} min after
+              <span style={{ color: 'var(--color-text-muted)' }}>Locking Rule:</span>{' '}
+              {timingChoice === 'default'
+                ? `Default (${orgMode === 'after_start' ? `Locks +${orgLock}m after start` : `Locks +${orgLock}m after end`})`
+                : timingChoice === 'after_start'
+                ? `🛡️ Security Mode: Locks +${customLockMin}m after start · Unlocks -${customUnlockMin}m before`
+                : `🕒 Standard Mode: Locks +${customLockMin}m after end · Unlocks -${customUnlockMin}m before`}
             </div>
           </div>
 
@@ -999,6 +1416,10 @@ export default function MappingsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
+
+  const [editTimingModalOpen, setEditTimingModalOpen] = useState(false);
+  const [editingMapping, setEditingMapping] = useState<Mapping | null>(null);
+  const [savingTiming, setSavingTiming] = useState(false);
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -1111,6 +1532,9 @@ export default function MappingsPage() {
       door_ids: string[];
       door_labels: string[];
       time_types: PlanTimeType[];
+      lock_timing_mode?: LockTimingMode;
+      lock_offset_min?: number;
+      unlock_offset_min?: number;
       enabled: boolean;
     }) => {
       if (!orgId) return;
@@ -1138,6 +1562,34 @@ export default function MappingsPage() {
       }
     },
     [orgId, tab],
+  );
+
+  const handleUpdateTiming = useCallback(
+    async (
+      mappingId: string,
+      updates: {
+        lock_timing_mode?: LockTimingMode;
+        lock_offset_min?: number;
+        unlock_offset_min?: number;
+      },
+    ) => {
+      if (!orgId) return;
+      setSavingTiming(true);
+      try {
+        await updateMapping(orgId, mappingId, updates);
+        setMappings((prev) =>
+          prev.map((m) => (m.id === mappingId ? { ...m, ...updates } : m)),
+        );
+        setEditTimingModalOpen(false);
+        setEditingMapping(null);
+        showFeedback('Timing rule updated successfully.', true);
+      } catch {
+        showFeedback('Failed to update timing rule.', false);
+      } finally {
+        setSavingTiming(false);
+      }
+    },
+    [orgId],
   );
 
   return (
@@ -1320,7 +1772,7 @@ export default function MappingsPage() {
           >
             <span>Active Mappings ({filteredMappings.length})</span>
             <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 'normal' }}>
-              Buffers: -{orgSettings?.unlock_buffer_before_min ?? 15}m / +{orgSettings?.lock_buffer_after_min ?? 15}m
+              Org Defaults: {orgSettings?.lock_timing_mode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'} (-{orgSettings?.unlock_buffer_before_min ?? 15}m / +{orgSettings?.lock_timing_mode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15)}m)
             </span>
           </div>
 
@@ -1354,6 +1806,10 @@ export default function MappingsPage() {
                     orgSettings={orgSettings}
                     onToggle={handleToggle}
                     onDelete={openDeleteModal}
+                    onEditTiming={(mappingToEdit) => {
+                      setEditingMapping(mappingToEdit);
+                      setEditTimingModalOpen(true);
+                    }}
                     toggling={toggling === m.id}
                   />
                 );
@@ -1374,6 +1830,19 @@ export default function MappingsPage() {
         orgSettings={orgSettings}
         onSave={handleSaveMapping}
         saving={saving}
+      />
+
+      {/* Edit Timing Modal */}
+      <EditTimingModal
+        isOpen={editTimingModalOpen}
+        onClose={() => {
+          setEditTimingModalOpen(false);
+          setEditingMapping(null);
+        }}
+        mapping={editingMapping}
+        orgSettings={orgSettings}
+        onSave={handleUpdateTiming}
+        saving={savingTiming}
       />
 
       {/* Delete Confirmation */}
