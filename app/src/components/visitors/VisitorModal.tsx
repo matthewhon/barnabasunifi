@@ -17,6 +17,19 @@ interface VisitorModalProps {
   onSaved?: () => void;
 }
 
+function getVisitorPin(pin: unknown): string {
+  if (!pin) return '';
+  if (typeof pin === 'string') return pin;
+  if (typeof pin === 'number') return String(pin);
+  if (typeof pin === 'object' && pin !== null) {
+    const obj = pin as any;
+    if (typeof obj.pin_code === 'string') return obj.pin_code;
+    if (typeof obj.pin === 'string') return obj.pin;
+    if (typeof obj.passcode === 'string') return obj.passcode;
+  }
+  return '';
+}
+
 function generateRandomPin(length = 6): string {
   // Generate random digits, avoiding trivially predictable sequences
   let pin = '';
@@ -68,13 +81,13 @@ export default function VisitorModal({
 
   useEffect(() => {
     if (visitor) {
-      setFirstName(visitor.first_name || '');
-      setLastName(visitor.last_name || '');
-      setMobilePhone(visitor.mobile_phone || '');
-      setEmail(visitor.email || '');
-      setPurpose(visitor.purpose || '');
-      setPinCode(visitor.pin_code || '');
-      setSelectedDoorIds(visitor.door_ids || []);
+      setFirstName(typeof visitor.first_name === 'string' ? visitor.first_name : '');
+      setLastName(typeof visitor.last_name === 'string' ? visitor.last_name : '');
+      setMobilePhone(typeof visitor.mobile_phone === 'string' ? visitor.mobile_phone : '');
+      setEmail(typeof visitor.email === 'string' ? visitor.email : '');
+      setPurpose(typeof visitor.purpose === 'string' ? visitor.purpose : '');
+      setPinCode(getVisitorPin(visitor.pin_code));
+      setSelectedDoorIds(Array.isArray(visitor.door_ids) ? visitor.door_ids : []);
 
       const sDate = parseSafeDate(visitor.start_time) || new Date();
       const eDate = parseSafeDate(visitor.end_time) || addHours(sDate, 2);

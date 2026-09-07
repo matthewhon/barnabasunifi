@@ -62,6 +62,18 @@ export function normalizeUnifiVisitor(raw: any, orgId = ''): UnifiVisitor {
     status = 'expired';
   }
 
+  let pinCode = '';
+  const pinCandidate = raw.pin_code || raw.pin || raw.passcode;
+  if (typeof pinCandidate === 'string') {
+    pinCode = pinCandidate;
+  } else if (typeof pinCandidate === 'number') {
+    pinCode = String(pinCandidate);
+  } else if (typeof pinCandidate === 'object' && pinCandidate !== null) {
+    if (typeof pinCandidate.pin_code === 'string') pinCode = pinCandidate.pin_code;
+    else if (typeof pinCandidate.pin === 'string') pinCode = pinCandidate.pin;
+    else if (typeof pinCandidate.passcode === 'string') pinCode = pinCandidate.passcode;
+  }
+
   return {
     id,
     org_id: orgId,
@@ -69,15 +81,15 @@ export function normalizeUnifiVisitor(raw: any, orgId = ''): UnifiVisitor {
     first_name: firstName,
     last_name: lastName,
     full_name: fullName,
-    mobile_phone: raw.mobile_phone || raw.phone || '',
-    email: raw.email || '',
-    pin_code: raw.pin_code || raw.pin || raw.passcode || '',
+    mobile_phone: typeof raw.mobile_phone === 'string' ? raw.mobile_phone : (typeof raw.phone === 'string' ? raw.phone : ''),
+    email: typeof raw.email === 'string' ? raw.email : '',
+    pin_code: pinCode,
     start_time: startTimeIso,
     end_time: endTimeIso,
     door_ids: doorIds,
     door_labels: doorLabels,
     status,
-    purpose: raw.purpose || raw.note || raw.remarks || raw.visit_reason || '',
+    purpose: typeof raw.purpose === 'string' ? raw.purpose : (typeof raw.note === 'string' ? raw.note : (typeof raw.remarks === 'string' ? raw.remarks : (typeof raw.visit_reason === 'string' ? raw.visit_reason : ''))),
     raw_data: raw,
     last_synced: new Date().toISOString(),
     sync_status: 'synced',

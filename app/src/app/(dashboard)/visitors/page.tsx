@@ -97,8 +97,24 @@ function KeyIcon() {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function statusBadgeClass(status: VisitorStatus): string {
-  switch (status) {
+function getVisitorPin(pin: unknown): string {
+  if (!pin) return '';
+  if (typeof pin === 'string') return pin;
+  if (typeof pin === 'number') return String(pin);
+  if (typeof pin === 'object' && pin !== null) {
+    const obj = pin as any;
+    if (typeof obj.pin_code === 'string') return obj.pin_code;
+    if (typeof obj.pin === 'string') return obj.pin;
+    if (typeof obj.passcode === 'string') return obj.passcode;
+    if (typeof obj.pin_code_length === 'number') {
+      return '••••••';
+    }
+  }
+  return '';
+}
+
+function statusBadgeClass(status: unknown): string {
+  switch (String(status)) {
     case 'active': return 'badge-success';
     case 'upcoming': return 'badge-info';
     case 'expired': return 'badge-neutral';
@@ -251,20 +267,22 @@ export default function VisitorsPage() {
     const doorNames = (Array.isArray(visitor.door_labels) ? visitor.door_labels : []).join(', ') || 'assigned doors';
     const validUntilFormatted = formatVisitorTime(visitor.end_time, timezone);
     const validFromFormatted = formatVisitorTime(visitor.start_time, timezone);
-    const text = `Hi ${visitor.first_name}, here is your UniFi Access door PIN: ${visitor.pin_code}. It is valid for ${doorNames} from ${validFromFormatted} to ${validUntilFormatted}.`;
+    const pinStr = getVisitorPin(visitor.pin_code) || 'N/A';
+    const text = `Hi ${visitor.first_name || 'there'}, here is your UniFi Access door PIN: ${pinStr}. It is valid for ${doorNames} from ${validFromFormatted} to ${validUntilFormatted}.`;
 
     navigator.clipboard.writeText(text);
     setCopiedId(visitor.id);
-    showFeedback(`Copied invitation details for ${visitor.first_name} to clipboard!`, true);
+    showFeedback(`Copied invitation details for ${visitor.first_name || 'visitor'} to clipboard!`, true);
     setTimeout(() => setCopiedId(null), 3000);
   };
 
   // Quick Copy PIN only
   const handleCopyPinOnly = (visitor: UnifiVisitor) => {
-    if (!visitor.pin_code) return;
-    navigator.clipboard.writeText(visitor.pin_code);
+    const pinStr = getVisitorPin(visitor.pin_code);
+    if (!pinStr || pinStr === '••••••') return;
+    navigator.clipboard.writeText(pinStr);
     setCopiedId(`pin_${visitor.id}`);
-    showFeedback(`Copied PIN ${visitor.pin_code} to clipboard!`, true);
+    showFeedback(`Copied PIN ${pinStr} to clipboard!`, true);
     setTimeout(() => setCopiedId(null), 2500);
   };
 
@@ -571,6 +589,12 @@ export default function VisitorsPage() {
             const notice = getValidityNotice(visitor);
             const isPinCopied = copiedId === `pin_${visitor.id}`;
             const isTextCopied = copiedId === visitor.id;
+            const pinStr = getVisitorPin(visitor.pin_code) || '••••••';
+            const firstName = typeof visitor.first_name === 'string' ? visitor.first_name : 'Visitor';
+            const lastName = typeof visitor.last_name === 'string' ? visitor.last_name : '';
+            const purpose = typeof visitor.purpose === 'string' ? visitor.purpose : '';
+            const phone = typeof visitor.mobile_phone === 'string' ? visitor.mobile_phone : '';
+            const email = typeof visitor.email === 'string' ? visitor.email : '';
 
             return (
               <div
@@ -588,10 +612,10 @@ export default function VisitorsPage() {
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 600, fontSize: '1rem' }}>
-                      {visitor.first_name} {visitor.last_name || ''}
+                      {firstName} {lastName}
                     </span>
                     <span className={`badge ${statusBadgeClass(visitor.status)}`} style={{ textTransform: 'capitalize' }}>
-                      {visitor.status}
+                      {String(visitor.status || 'unknown')}
                     </span>
                     {visitor.sync_status === 'pending' && (
                       <span className="badge badge-warning" title="Syncing to UniFi Access…">
@@ -600,35 +624,38 @@ export default function VisitorsPage() {
                     )}
                   </div>
 
-                  {visitor.purpose && (
+                  {purpose && (
                     <div style={{ fontSize: '0.8125rem', color: 'var(--color-accent, #2563eb)', marginTop: '0.25rem', fontWeight: 500 }}>
-                      {visitor.purpose}
+                      {purpose}
                     </div>
                   )}
 
                   <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginTop: '0.25rem' }}>
-                    {visitor.mobile_phone && <span>📞 {visitor.mobile_phone}</span>}
-                    {visitor.email && <span>✉️ {visitor.email}</span>}
+                    {phone && <span>📞 {phone}</span>}
+                    {email && <span>✉️ {email}</span>}
                   </div>
 
                   {/* Doors assigned */}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.5rem' }}>
                     {Array.isArray(visitor.door_labels) && visitor.door_labels.length > 0 ? (
-                      visitor.door_labels.map((label, idx) => (
-                        <span
-                          key={idx}
-                          style={{
-                            fontSize: '0.6875rem',
-                            padding: '0.125rem 0.375rem',
-                            borderRadius: 'var(--radius-sm, 4px)',
-                            background: 'var(--color-bg-elevated)',
-                            color: 'var(--color-text-secondary)',
-                            border: '1px solid var(--color-border)',
-                          }}
-                        >
-                          🚪 {label}
-                        </span>
-                      ))
+                      visitor.door_labels.map((label, idx) => {
+                        const labelText = typeof label === 'string' ? label : ((label as any)?.name || (label as any)?.label || (label as any)?.id || 'Door');
+                        return (
+                          <span
+                            key={idx}
+                            style={{
+                              fontSize: '0.6875rem',
+                              padding: '0.125rem 0.375rem',
+                              borderRadius: 'var(--radius-sm, 4px)',
+                              background: 'var(--color-bg-elevated)',
+                              color: 'var(--color-text-secondary)',
+                              border: '1px solid var(--color-border)',
+                            }}
+                          >
+                            🚪 {labelText}
+                          </span>
+                        );
+                      })
                     ) : (
                       <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
                         No doors assigned
@@ -667,7 +694,7 @@ export default function VisitorsPage() {
                         border: '1px solid var(--color-border)',
                       }}
                     >
-                      {visitor.pin_code || '••••••'}
+                      {pinStr}
                     </div>
 
                     <button
