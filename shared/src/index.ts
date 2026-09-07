@@ -42,6 +42,7 @@ export interface OrgSettings {
   lock_after_start_min?: number;    // default 15
   poll_interval_min: number;        // default 30
   timezone: string;                 // e.g. "America/Chicago"
+  enable_user_sync?: boolean;       // Opt-in flag for syncing PCO Lists to UniFi Users & Policies
   pco_oauth?: {
     access_token: string;
     refresh_token: string;
@@ -85,6 +86,39 @@ export interface Mapping {
   updated_at: string;
 }
 
+export interface AccessPolicyMapping {
+  id: string;
+  org_id: string;
+  pco_list_id: string;
+  pco_list_name: string;
+  unifi_policy_id: string;
+  unifi_policy_name: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SyncedUser {
+  id: string;                      // Firestore document ID (e.g. pco_person_id)
+  org_id: string;
+  pco_person_id: string;
+  unifi_user_id?: string;
+  first_name: string;
+  last_name?: string;
+  full_name?: string;
+  email?: string;
+  phone_number?: string;
+  active_list_ids: string[];
+  active_list_names?: string[];
+  assigned_policy_ids: string[];
+  assigned_policy_names?: string[];
+  status: 'active' | 'pending' | 'no_policy' | 'error';
+  sync_error?: string;
+  last_synced_at: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 // ─── Doors ───────────────────────────────────────────────────────────────────
 
 export type DoorState = 'locked' | 'unlocked' | 'unknown';
@@ -120,11 +154,12 @@ export interface ScheduleWindow {
   updated_at: string;
 }
 
-// ─── Door Commands ────────────────────────────────────────────────────────────
+// ─── Door & User Commands ─────────────────────────────────────────────────────
 
 export type CommandAction =
   | 'unlock'
   | 'lock'
+  | 'sync_doors'
   | 'sync_schedules'
   | 'update_schedule'
   | 'create_schedule'
@@ -132,9 +167,18 @@ export type CommandAction =
   | 'sync_visitors'
   | 'create_visitor'
   | 'update_visitor'
-  | 'delete_visitor';
+  | 'delete_visitor'
+  | 'sync_users'
+  | 'create_user'
+  | 'update_user'
+  | 'assign_policies'
+  | 'sync_policies'
+  | 'sync_access_logs'
+  | 'apply_update'
+  | 'upgrade_agent'
+  | 'restart_agent';
 
-export type CommandStatus = 'queued' | 'executing' | 'done' | 'failed' | 'cancelled';
+export type CommandStatus = 'queued' | 'executing' | 'done' | 'failed' | 'cancelled' | 'skipped';
 
 export interface DoorCommand {
   id: string;
@@ -145,6 +189,10 @@ export interface DoorCommand {
   schedule_data?: Record<string, unknown>;
   visitor_id?: string;
   visitor_data?: Record<string, unknown>;
+  user_id?: string;
+  unifi_user_id?: string;
+  user_data?: Record<string, unknown>;
+  policy_ids?: string[];
   action: CommandAction;
   execute_at: string;         // ISO8601
   duration_min?: number;      // for temporary unlocks
@@ -177,7 +225,11 @@ export type AuditAction =
   | 'visitor_created'
   | 'visitor_updated'
   | 'visitor_deleted'
-  | 'visitor_synced';
+  | 'visitor_synced'
+  | 'user_created'
+  | 'user_updated'
+  | 'policies_assigned'
+  | 'user_sync';
 
 export interface AuditLogEntry {
   id: string;
@@ -260,7 +312,41 @@ export interface PcoGroupEvent {
   location?: string;
 }
 
+export interface PcoList {
+  id: string;
+  name: string;
+  category?: string;
+  total_people?: number;
+  updated_at?: string;
+  attributes?: Record<string, unknown>;
+}
+
+export interface PcoPerson {
+  id: string;
+  first_name: string;
+  last_name?: string;
+  name: string;
+  email?: string;
+  phone_number?: string;
+  avatar?: string;
+  status?: string;
+}
+
 // ─── UniFi API ────────────────────────────────────────────────────────────────
+
+export interface UnifiAccessPolicy {
+  id: string;
+  org_id?: string;
+  unifi_policy_id: string;
+  name: string;
+  door_ids?: string[];
+  door_labels?: string[];
+  schedule_id?: string;
+  schedule_name?: string;
+  user_count?: number;
+  raw_data?: Record<string, unknown>;
+  last_synced?: string;
+}
 
 export interface UnifiDoor {
   id: string;

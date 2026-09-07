@@ -34,11 +34,16 @@ export async function syncSchedules(
     return [];
   }
 
+  const isUuid = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
   const batch = db.batch();
   const now = admin.firestore.Timestamp.now();
+  const validScheduleIds = new Set<string>();
 
   for (const schedule of schedules) {
     if (!schedule.id) continue;
+    validScheduleIds.add(schedule.id);
     const scheduleRef = db.doc(`organizations/${orgId}/unifi_schedules/${schedule.id}`);
 
     const record = {
@@ -66,6 +71,35 @@ export async function syncSchedules(
         );
       }
     }
+  }
+
+  // Prune phantom or orphaned schedule documents in Firestore
+  try {
+    const existingSchedsSnap = await db.collection(`organizations/${orgId}/unifi_schedules`).get();
+    let prunedSchedCount = 0;
+    for (const docSnap of existingSchedsSnap.docs) {
+      const docId = docSnap.id;
+      const data = docSnap.data();
+      const schedName = String(data.name || '').trim();
+      const hasDoors = Array.isArray(data.door_ids) && data.door_ids.length > 0;
+      const hasActiveSlots = Array.isArray(data.weekly_schedule) && data.weekly_schedule.some((d: any) => d.active && d.slots?.length > 0);
+
+      // If document is not in valid schedules and looks like a phantom UUID / empty schedule
+      if (!validScheduleIds.has(docId)) {
+        if (isUuid(docId) || isUuid(schedName) || !schedName || schedName === 'Schedule') {
+          if (!hasDoors && !hasActiveSlots) {
+            batch.delete(docSnap.ref);
+            prunedSchedCount++;
+            logger.info(`[ScheduleSync] Pruning phantom schedule ${docId} (name: "${schedName}")`);
+          }
+        }
+      }
+    }
+    if (prunedSchedCount > 0) {
+      logger.info(`[ScheduleSync] Pruned ${prunedSchedCount} phantom schedule document(s) from Firestore.`);
+    }
+  } catch (pruneErr) {
+    logger.debug(`[ScheduleSync] Error during phantom schedule pruning: ${pruneErr}`);
   }
 
   try {

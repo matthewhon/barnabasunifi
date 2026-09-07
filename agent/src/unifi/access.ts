@@ -534,16 +534,21 @@ export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
     '';
 
   const doorLabel = raw.door_name || raw.door_label || '';
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(rawName).trim());
+
   if (
     !rawName ||
+    isUuid ||
     rawName.startsWith('unlock-') ||
     rawName.startsWith('user ') ||
     rawName.toLowerCase() === 'schedule'
   ) {
     if (doorLabel) {
       rawName = `${doorLabel} Unlock Schedule`;
-    } else if (!rawName) {
-      rawName = 'Schedule';
+    } else if (raw.type === 'unlock' || raw.is_unlock) {
+      rawName = 'Default Unlock Schedule';
+    } else if (!rawName || isUuid) {
+      rawName = 'Access Schedule';
     }
   }
   const name = String(rawName);
@@ -1331,7 +1336,7 @@ export class UnifiAccessClient {
       }
     }
 
-    // Pass 3: Enrich doors with schedules/rules from v2 unlock_schedules and locations API
+    // Pass 3: Enrich existing doors with schedules/rules from v2 unlock_schedules and locations API
     try {
       const endpoints = [
         '/proxy/access/api/v2/unlock_schedules',
@@ -1369,23 +1374,32 @@ export class UnifiAccessClient {
               dr.door_unlock_rule?.name ||
               dr.door_unlock_rule?.schedule_name ||
               dr.keep_open_schedule?.name;
+            const isUuidSched = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(rawSchedName).trim());
             const schedName =
-              rawSchedName && !rawSchedName.startsWith('unlock-')
+              rawSchedName && !isUuidSched && !rawSchedName.startsWith('unlock-')
                 ? rawSchedName
-                : (schedId && existing?.name ? `${existing.name} Unlock Schedule` : rawSchedName);
+                : (schedId && existing?.name ? `${existing.name} Unlock Schedule` : undefined);
 
             if (existing) {
               if (schedId && !existing.schedule_id) existing.schedule_id = String(schedId);
               if (schedName && !existing.schedule_name) existing.schedule_name = String(schedName);
               if (dr.door_unlock_rule && !existing.door_unlock_rule) existing.door_unlock_rule = dr.door_unlock_rule;
-            } else if (dr.type === 'door' || ep.includes('doors') || ep.includes('locations')) {
+            } else if (
+              dr.type === 'door' &&
+              dr.name &&
+              dr.name.trim().length > 0 &&
+              !ep.includes('rule') &&
+              !ep.includes('unlock_schedules')
+            ) {
+              // Only add if explicitly marked type 'door' with a real human label from locations
+              const cleanName = dr.name.trim();
               doorMap.set(doorId, {
                 id: doorId,
-                name: dr.name || dr.full_name || doorId,
+                name: cleanName,
                 door_lock_relay_status: (dr.door_lock_relay_status === 'unlock' ? 'unlock' : 'lock'),
                 door_position_status: dr.door_position_status ?? undefined,
-                type: dr.type || 'door',
-                full_name: dr.full_name || dr.name,
+                type: 'door',
+                full_name: dr.full_name || cleanName,
                 device_state: dr.device_state || 'connected',
                 schedule_id: schedId ? String(schedId) : undefined,
                 schedule_name: schedName ? String(schedName) : undefined,
@@ -1397,7 +1411,15 @@ export class UnifiAccessClient {
       }
     } catch {}
 
-    return Array.from(doorMap.values());
+    // Filter out invalid/empty phantom door records
+    const validDoors = Array.from(doorMap.values()).filter((door) => {
+      const name = (door.name || door.full_name || '').trim();
+      if (!name) return false;
+      if (!door.id || door.id.trim() === '') return false;
+      return true;
+    });
+
+    return validDoors;
   }
 
   /**
@@ -1797,16 +1819,12 @@ export class UnifiAccessClient {
       } catch {}
     }
 
-    // 2. Query v2 API work_times, schedules, door unlock rules, and locations
+    // 2. Query v2 API work_times and schedules
     const v2ScheduleEndpoints = [
       '/proxy/access/api/v2/unlock_schedules',
       '/proxy/access/api/v2/work_times',
       '/proxy/access/api/v2/work_time',
       '/proxy/access/api/v2/schedules',
-      '/proxy/access/api/v2/door_unlock_rules',
-      '/proxy/access/api/v2/settings/door_unlock_rules',
-      '/proxy/access/api/v2/locations',
-      '/proxy/access/api/v2/dashboard/locations',
     ];
     for (const ep of v2ScheduleEndpoints) {
       try {
@@ -1939,7 +1957,13 @@ export class UnifiAccessClient {
 
         if (embedded && typeof embedded === 'object') {
           const schedId = String(embedded.id || embedded.unique_id || `door-sched-${doorId}`);
-          const schedName = String(embedded.name || `${doorName} Unlock Schedule`);
+          const rawSchedName = embedded.name || embedded.schedule_name || '';
+          const isUuidName = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(rawSchedName).trim());
+          const schedName =
+            rawSchedName && !isUuidName && !rawSchedName.startsWith('unlock-')
+              ? rawSchedName
+              : `${doorName} Unlock Schedule`;
+
           const normalized = normalizeUnifiSchedule({
             ...embedded,
             id: schedId,
@@ -1994,8 +2018,16 @@ export class UnifiAccessClient {
           const dr = doorMapById.get(doorId);
           const doorName = dr?.name || dr?.full_name || 'Door';
 
+          const rawSchedName = item.schedule_info?.name || item.name || '';
+          const isUuidName = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(rawSchedName).trim());
+          const schedName =
+            rawSchedName && !isUuidName && !rawSchedName.startsWith('unlock-')
+              ? rawSchedName
+              : `${doorName} Unlock Schedule`;
+
           const normalized = normalizeUnifiSchedule({
             ...item,
+            name: schedName,
             door_id: doorId,
             door_name: doorName,
             door_label: doorName,
@@ -2033,7 +2065,19 @@ export class UnifiAccessClient {
       }
     }
 
-    const allSchedules = Array.from(schedulesMap.values());
+    const isUuid = (str: string) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
+    // Filter out schedules with empty/invalid IDs or phantom empty entries
+    const allSchedules = Array.from(schedulesMap.values()).filter((sched) => {
+      if (!sched.id || sched.id.trim() === '') return false;
+      const hasActiveSlots = sched.weekly_schedule?.some((d) => d.active && d.slots.length > 0);
+      const hasDoors = Boolean(sched.door_ids && sched.door_ids.length > 0);
+      if (isUuid(sched.name) && !hasActiveSlots && !hasDoors) {
+        return false;
+      }
+      return true;
+    });
     logger.info(`[UniFi] Resolved ${allSchedules.length} schedule(s) across doors`);
     return allSchedules;
   }
@@ -2556,4 +2600,257 @@ export class UnifiAccessClient {
 
     return [];
   }
+
+  // ---------------------------------------------------------------------------
+  // Access Policies Management
+  // ---------------------------------------------------------------------------
+
+  private getUserEndpoints(subpath = ''): string[] {
+    const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
+    return [
+      ...this.getDeveloperEndpoints('users', subpath),
+      `/proxy/access/api/v2/users${cleanSub}`,
+      `/proxy/access/api/v1/developer/users${cleanSub}`,
+    ];
+  }
+
+  /**
+   * Fetch all access policies from UniFi Access.
+   */
+  async getAccessPolicies(): Promise<any[]> {
+    const endpoints = this.getAccessPolicyEndpoints();
+
+    for (const endpoint of endpoints) {
+      try {
+        const res = await this.http.get<any>(endpoint);
+        const rawList = Array.isArray(res.data?.data)
+          ? res.data.data
+          : Array.isArray(res.data?.data?.access_policies)
+          ? res.data.data.access_policies
+          : Array.isArray(res.data)
+          ? res.data
+          : null;
+
+        if (rawList) {
+          logger.info(`[UniFi] Fetched ${rawList.length} access policy(ies) via ${endpoint}`);
+          return rawList.map((p: any) => ({
+            id: String(p.id || p.unique_id || p._id || ''),
+            unifi_policy_id: String(p.id || p.unique_id || p._id || ''),
+            name: String(p.name || p.policy_name || 'Policy'),
+            door_ids: Array.isArray(p.doors || p.door_ids || p.resources)
+              ? (p.doors || p.door_ids || p.resources).map((d: any) => typeof d === 'string' ? d : String(d.id || d.unique_id))
+              : [],
+            schedule_id: p.schedule_id || p.schedule?.id,
+            schedule_name: p.schedule_name || p.schedule?.name,
+            raw_data: p,
+          }));
+        }
+      } catch (err: any) {
+        logger.debug(`[UniFi] getAccessPolicies tried ${endpoint}: ${err.response?.status || err.message}`);
+      }
+    }
+
+    // Fallback: v2 policies
+    try {
+      const res = await this.http.get<any>('/proxy/access/api/v2/policies');
+      const rawList = Array.isArray(res.data?.data) ? res.data.data : Array.isArray(res.data) ? res.data : [];
+      return rawList.map((p: any) => ({
+        id: String(p.id || p.unique_id || ''),
+        unifi_policy_id: String(p.id || p.unique_id || ''),
+        name: String(p.name || 'Policy'),
+        door_ids: Array.isArray(p.doors || p.door_ids) ? (p.doors || p.door_ids) : [],
+        raw_data: p,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // User Management
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch all users from UniFi Access.
+   */
+  async getUsers(): Promise<any[]> {
+    const endpoints = this.getUserEndpoints();
+
+    for (const endpoint of endpoints) {
+      try {
+        const res = await this.http.get<any>(endpoint);
+        const rawList = Array.isArray(res.data?.data)
+          ? res.data.data
+          : Array.isArray(res.data?.data?.users)
+          ? res.data.data.users
+          : Array.isArray(res.data)
+          ? res.data
+          : null;
+
+        if (rawList) {
+          logger.info(`[UniFi] Fetched ${rawList.length} user(s) via ${endpoint}`);
+          return rawList.map((u: any) => ({
+            id: String(u.id || u.unique_id || u._id || ''),
+            unifi_user_id: String(u.id || u.unique_id || u._id || ''),
+            first_name: String(u.first_name || u.firstName || ''),
+            last_name: String(u.last_name || u.lastName || ''),
+            name: String(u.name || `${u.first_name || ''} ${u.last_name || ''}`).trim(),
+            user_email: u.user_email || u.email,
+            mobile_phone: u.mobile_phone || u.phone,
+            access_policy_ids: Array.isArray(u.access_policy_ids || u.access_policies || u.policies)
+              ? (u.access_policy_ids || u.access_policies || u.policies).map((p: any) => typeof p === 'string' ? p : String(p.id || p.unique_id))
+              : [],
+            status: u.status || (u.is_active === false ? 'disabled' : 'active'),
+            raw_data: u,
+          }));
+        }
+      } catch (err: any) {
+        logger.debug(`[UniFi] getUsers tried ${endpoint}: ${err.response?.status || err.message}`);
+      }
+    }
+
+    return [];
+  }
+
+  /**
+   * Create a local user in UniFi Access.
+   */
+  async createUser(userData: {
+    first_name: string;
+    last_name?: string;
+    full_name?: string;
+    email?: string;
+    phone_number?: string;
+    avatar?: string;
+    policy_ids?: string[];
+  }): Promise<any> {
+    const endpoints = this.getUserEndpoints();
+    const payload: Record<string, any> = {
+      first_name: userData.first_name || 'User',
+      last_name: userData.last_name || '',
+      name: userData.full_name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim(),
+    };
+
+    if (userData.email) {
+      payload.user_email = userData.email;
+      payload.email = userData.email;
+    }
+    if (userData.phone_number) {
+      payload.mobile_phone = userData.phone_number;
+    }
+    if (userData.policy_ids && userData.policy_ids.length > 0) {
+      payload.access_policy_ids = userData.policy_ids;
+      payload.access_policies = userData.policy_ids;
+      payload.policies = userData.policy_ids;
+    }
+
+    for (const endpoint of endpoints) {
+      try {
+        const res = await this.http.post<any>(endpoint, payload);
+        const created = res.data?.data || res.data;
+        const createdId = String(created.id || created.unique_id || created._id || '');
+        logger.info(`[UniFi] ✓ Created user '${payload.first_name} ${payload.last_name}' (ID: ${createdId}) via ${endpoint}`);
+
+        // If policy_ids were provided and the create didn't attach them automatically, assign them now
+        if (createdId && userData.policy_ids && userData.policy_ids.length > 0) {
+          try {
+            await this.assignUserAccessPolicies(createdId, userData.policy_ids);
+          } catch (policyErr) {
+            logger.warn(`[UniFi] User created but initial policy assignment had warning: ${policyErr}`);
+          }
+        }
+
+        return { id: createdId, ...created };
+      } catch (err: any) {
+        logger.debug(`[UniFi] createUser tried ${endpoint}: ${err.response?.status || err.message}`);
+      }
+    }
+
+    throw new Error(`Failed to create user '${payload.first_name} ${payload.last_name}' across all UniFi endpoints.`);
+  }
+
+  /**
+   * Updates an existing user's assigned access policies in UniFi Access.
+   * If policyIds is empty ([]), revokes all assigned policies.
+   */
+  async assignUserAccessPolicies(userId: string, policyIds: string[]): Promise<void> {
+    const candidateEndpoints: { method: 'put' | 'post' | 'patch'; url: string; body: any }[] = [
+      // 1. Dedicated policy assignment endpoints
+      ...this.getDeveloperEndpoints(`users/${encodeURIComponent(userId)}/access_policies`).map((url) => ({
+        method: 'put' as const,
+        url,
+        body: { access_policy_ids: policyIds, policy_ids: policyIds },
+      })),
+      ...this.getDeveloperEndpoints(`users/${encodeURIComponent(userId)}/access_policies`).map((url) => ({
+        method: 'post' as const,
+        url,
+        body: { access_policy_ids: policyIds, policy_ids: policyIds },
+      })),
+      // 2. User update with access_policy_ids
+      ...this.getDeveloperEndpoints(`users/${encodeURIComponent(userId)}`).map((url) => ({
+        method: 'put' as const,
+        url,
+        body: { access_policy_ids: policyIds, access_policies: policyIds, policies: policyIds },
+      })),
+      // 3. v2 user update
+      {
+        method: 'put' as const,
+        url: `/proxy/access/api/v2/user/${encodeURIComponent(userId)}`,
+        body: { access_policy_ids: policyIds, policies: policyIds },
+      },
+      {
+        method: 'put' as const,
+        url: `/proxy/access/api/v2/users/${encodeURIComponent(userId)}`,
+        body: { access_policy_ids: policyIds, policies: policyIds },
+      },
+    ];
+
+    let lastError: any = null;
+    for (const attempt of candidateEndpoints) {
+      try {
+        if (attempt.method === 'put') {
+          await this.http.put(attempt.url, attempt.body);
+        } else if (attempt.method === 'patch') {
+          await this.http.patch(attempt.url, attempt.body);
+        } else {
+          await this.http.post(attempt.url, attempt.body);
+        }
+        logger.info(`[UniFi] ✓ Assigned ${policyIds.length} access policy(ies) to user ${userId} via ${attempt.url}`);
+        return;
+      } catch (err: any) {
+        lastError = err;
+        logger.debug(`[UniFi] assignUserAccessPolicies tried ${attempt.url} -> ${err.response?.status || err.message}`);
+      }
+    }
+
+    logger.warn(`[UniFi] Could not update access policies for user ${userId}: ${lastError?.message}`);
+  }
+
+  /**
+   * Set user active / disabled status in UniFi Access.
+   */
+  async setUserStatus(userId: string, status: 'active' | 'disabled'): Promise<void> {
+    const endpoints = [
+      ...this.getDeveloperEndpoints(`users/${encodeURIComponent(userId)}`),
+      `/proxy/access/api/v2/user/${encodeURIComponent(userId)}`,
+      `/proxy/access/api/v2/users/${encodeURIComponent(userId)}`,
+    ];
+
+    const body = {
+      status,
+      is_active: status === 'active',
+      is_disabled: status === 'disabled',
+    };
+
+    for (const endpoint of endpoints) {
+      try {
+        await this.http.put(endpoint, body);
+        logger.info(`[UniFi] ✓ Set status='${status}' for user ${userId}`);
+        return;
+      } catch (err: any) {
+        logger.debug(`[UniFi] setUserStatus tried ${endpoint} -> ${err.response?.status || err.message}`);
+      }
+    }
+  }
 }
+

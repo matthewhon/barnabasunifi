@@ -280,6 +280,16 @@ export default function DashboardPage() {
     }
   }, [orgId]);
 
+  const isUuid = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
+  const validDoors = doors.filter((d) => {
+    const label = (d.label || '').trim();
+    if (!label) return false;
+    if (isUuid(label) && d.current_state === 'unknown') return false;
+    return true;
+  });
+
   // Upcoming: future windows, sorted asc, top 5
   const upcoming = scheduleWindows
     .filter((w) => !safeIsPast(w.lock_at) && w.status !== 'cancelled')
@@ -332,7 +342,7 @@ export default function DashboardPage() {
             Door Status
           </h2>
           <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-            Live · {doors.length} door{doors.length !== 1 ? 's' : ''}
+            Live · {validDoors.length} door{validDoors.length !== 1 ? 's' : ''}
           </span>
         </div>
 
@@ -340,7 +350,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-3">
             {[1, 2, 3].map((i) => <SkeletonCard key={i} />)}
           </div>
-        ) : doors.length === 0 ? (
+        ) : validDoors.length === 0 ? (
           <div className="card empty-state">
             <p className="empty-state-title">No doors configured</p>
             <p style={{ fontSize: '0.875rem' }}>
@@ -349,7 +359,7 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div className="grid grid-cols-3">
-            {doors.map((door) => (
+            {validDoors.map((door) => (
               <DoorStatusCard key={door.id} door={door} />
             ))}
           </div>

@@ -1,6 +1,7 @@
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore } from 'firebase-admin/firestore';
 import { syncOrgSchedule } from './sync';
+import { syncOrgUsers } from './userSync';
 
 /**
  * Scheduled Cloud Function: scheduledPcoSync
@@ -43,6 +44,19 @@ export const scheduledPcoSync = onSchedule(
           console.log(
             `scheduledPcoSync: [${orgName}] ✓ windowsCreated=${result.windowsCreated} windowsUpdated=${result.windowsUpdated}`
           );
+
+          // Also sync users and access policies (respects enable_user_sync setting)
+          try {
+            const userResult = await syncOrgUsers(orgId);
+            if (!userResult.skipped) {
+              console.log(
+                `scheduledPcoSync: [${orgName}] ✓ userSync created=${userResult.usersCreated} updated=${userResult.usersUpdated} revoked=${userResult.policiesRevoked}`
+              );
+            }
+          } catch (userErr) {
+            console.error(`scheduledPcoSync: [${orgName}] ✗ userSync failed:`, userErr);
+          }
+
           return { orgId, ...result };
         } catch (err) {
           console.error(`scheduledPcoSync: [${orgName}] ✗ sync failed:`, err);

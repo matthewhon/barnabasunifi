@@ -12,6 +12,13 @@ import {
   subscribeToDoors,
   subscribeToScheduleWindows,
   getOrgSettings,
+  updateOrgSettings,
+  subscribeToAccessPolicyMappings,
+  createAccessPolicyMapping,
+  updateAccessPolicyMapping,
+  deleteAccessPolicyMapping,
+  subscribeToSyncedUsers,
+  subscribeToAccessPolicies,
 } from '@/lib/firestore';
 import type {
   Mapping,
@@ -24,6 +31,10 @@ import type {
   PcoTimeInfo,
   ScheduleWindow,
   OrgSettings,
+  AccessPolicyMapping,
+  SyncedUser,
+  UnifiAccessPolicy,
+  PcoList,
 } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import { safeFormat, safeFormatDistanceToNow, parseSafeDate } from '@/lib/date-utils';
@@ -202,9 +213,10 @@ function ActiveMappingCard({
   // Find doors matching this mapping
   const mappedDoors = mapping.door_ids.map((dId) => {
     const found = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
+    const cleanLabel = (found?.label || '').trim();
     return {
       id: dId,
-      label: found?.label ?? dId,
+      label: cleanLabel || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId),
       state: found?.current_state ?? 'unknown',
       isHeld: found?.is_held_unlocked ?? false,
       position: found?.door_position_status,
@@ -855,6 +867,235 @@ function EditTimingModal({
   );
 }
 
+// ─── Add Access Policy Mapping Modal ──────────────────────────────────────────
+
+interface AddPolicyMappingModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  pcoLists: PcoList[];
+  pcoListsLoading: boolean;
+  accessPolicies: UnifiAccessPolicy[];
+  onSave: (data: {
+    pco_list_id: string;
+    pco_list_name: string;
+    unifi_policy_id: string;
+    unifi_policy_name: string;
+    enabled: boolean;
+  }) => Promise<void>;
+  saving: boolean;
+  onRefreshPolicies?: () => void;
+  onRefreshLists?: () => void;
+}
+
+function AddPolicyMappingModal({
+  isOpen,
+  onClose,
+  pcoLists,
+  pcoListsLoading,
+  accessPolicies,
+  onSave,
+  saving,
+  onRefreshPolicies,
+  onRefreshLists,
+}: AddPolicyMappingModalProps) {
+  const [selectedListId, setSelectedListId] = useState('');
+  const [selectedPolicyId, setSelectedPolicyId] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  function reset() {
+    setSelectedListId('');
+    setSelectedPolicyId('');
+    setEnabled(true);
+    setError(null);
+  }
+
+  function handleClose() {
+    reset();
+    onClose();
+  }
+
+  const selectedList = pcoLists.find((l) => l.id === selectedListId);
+  const selectedPolicy = accessPolicies.find((p) => (p.unifi_policy_id || p.id) === selectedPolicyId);
+
+  async function handleSave() {
+    setError(null);
+    if (!selectedListId) {
+      setError('Please select a Planning Center List.');
+      return;
+    }
+    if (!selectedPolicyId) {
+      setError('Please select a UniFi Access Policy.');
+      return;
+    }
+
+    await onSave({
+      pco_list_id: selectedListId,
+      pco_list_name: selectedList?.name ?? selectedListId,
+      unifi_policy_id: selectedPolicyId,
+      unifi_policy_name: selectedPolicy?.name ?? selectedPolicyId,
+      enabled,
+    });
+    reset();
+  }
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      title="Add Planning Center List to Access Policy Mapping"
+      footer={
+        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+          <button className="btn btn-secondary" onClick={handleClose} disabled={saving}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleSave}
+            disabled={saving || !selectedListId || !selectedPolicyId}
+          >
+            {saving ? 'Creating…' : 'Create Mapping'}
+          </button>
+        </div>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        {error && (
+          <div className="alert alert-danger" style={{ fontSize: '0.8125rem' }}>
+            {error}
+          </div>
+        )}
+
+        <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
+          Link a Planning Center List directly to a UniFi Access Policy. People currently in this list
+          will automatically receive the chosen access policy. When they leave the list, the policy is revoked.
+        </p>
+
+        {/* 1. Select Planning Center List */}
+        <div className="form-group">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
+            <label className="form-label" style={{ margin: 0, fontWeight: 600 }}>
+              1. Planning Center List
+            </label>
+            {onRefreshLists && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
+                onClick={onRefreshLists}
+                disabled={pcoListsLoading}
+              >
+                <RefreshIcon /> Refresh Lists
+              </button>
+            )}
+          </div>
+
+          {pcoListsLoading ? (
+            <div className="skeleton" style={{ height: '2.5rem', borderRadius: 'var(--radius-md)' }} />
+          ) : (
+            <select
+              className="form-select"
+              value={selectedListId}
+              onChange={(e) => setSelectedListId(e.target.value)}
+            >
+              <option value="">Select a Planning Center List…</option>
+              {pcoLists.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name} {l.category ? `(${l.category})` : ''} {l.total_people ? `· ${l.total_people} members` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+          <span className="form-hint">
+            Only active members from this list will be synchronized.
+          </span>
+        </div>
+
+        {/* 2. Select UniFi Access Policy */}
+        <div className="form-group">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
+            <label className="form-label" style={{ margin: 0, fontWeight: 600 }}>
+              2. UniFi Access Policy
+            </label>
+            {onRefreshPolicies && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
+                onClick={onRefreshPolicies}
+              >
+                <RefreshIcon /> Sync from UniFi
+              </button>
+            )}
+          </div>
+
+          {accessPolicies.length === 0 ? (
+            <div
+              style={{
+                padding: '0.875rem',
+                background: 'var(--color-bg-base)',
+                border: '1px dashed var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.8125rem',
+                color: 'var(--color-text-secondary)',
+              }}
+            >
+              No access policies discovered from UniFi yet. Ensure your local agent is connected and click &quot;Sync from UniFi&quot;.
+            </div>
+          ) : (
+            <select
+              className="form-select"
+              value={selectedPolicyId}
+              onChange={(e) => setSelectedPolicyId(e.target.value)}
+            >
+              <option value="">Select a UniFi Access Policy…</option>
+              {accessPolicies.map((p) => {
+                const polId = p.unifi_policy_id || p.id;
+                return (
+                  <option key={polId} value={polId}>
+                    {p.name} {p.door_ids && p.door_ids.length > 0 ? `(${p.door_ids.length} door(s))` : ''}
+                  </option>
+                );
+              })}
+            </select>
+          )}
+          <span className="form-hint">
+            The door schedules and permission rules configured on this policy in UniFi will apply to list members.
+          </span>
+        </div>
+
+        {/* 3. Enable Mapping */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0.875rem 1rem',
+            background: 'var(--color-bg-base)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-border)',
+          }}
+        >
+          <div>
+            <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+              Enable Mapping Immediately
+            </span>
+            <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+              Automatically include this list in periodic and manual user synchronizations.
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            style={{ width: '1.125rem', height: '1.125rem', cursor: 'pointer' }}
+          />
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Add Mapping Modal ────────────────────────────────────────────────────────
 
 interface AddMappingModalProps {
@@ -900,6 +1141,16 @@ function AddMappingModal({
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const isUuid = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
+  const validDoors = doors.filter((d) => {
+    const label = (d.label || '').trim();
+    if (!label) return false;
+    if (isUuid(label) && d.current_state === 'unknown') return false;
+    return true;
+  });
+
   function reset() {
     setStep(1);
     setSelectedResourceId('');
@@ -937,7 +1188,7 @@ function AddMappingModal({
     if (selectedDoorIds.length === 0) { setError('Please select at least one door.'); return; }
     if (sourceType === 'service' && timeTypes.length === 0) { setError('Please select at least one time type.'); return; }
 
-    const selectedDoors = doors.filter((d) => selectedDoorIds.includes(d.id));
+    const selectedDoors = validDoors.filter((d) => selectedDoorIds.includes(d.id));
 
     await onSave({
       pco_resource_id: selectedResourceId,
@@ -1164,13 +1415,13 @@ function AddMappingModal({
           <label className="form-label" style={{ marginBottom: '0.75rem', display: 'block' }}>
             Select UniFi Doors ({selectedDoorIds.length} selected)
           </label>
-          {doors.length === 0 ? (
+          {validDoors.length === 0 ? (
             <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
               No doors available. Configure the local agent first.
             </p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '16rem', overflowY: 'auto' }}>
-              {doors.map((door) => (
+              {validDoors.map((door) => (
                 <label
                   key={door.id}
                   style={{
@@ -1403,8 +1654,14 @@ function AddMappingModal({
 export default function MappingsPage() {
   const { orgId } = useAuth();
 
-  const [tab, setTab] = useState<MappingSourceType>('service');
+  const [tab, setTab] = useState<MappingSourceType | 'user_policy'>('service');
   const [mappings, setMappings] = useState<Mapping[]>([]);
+  const [policyMappings, setPolicyMappings] = useState<AccessPolicyMapping[]>([]);
+  const [syncedUsers, setSyncedUsers] = useState<SyncedUser[]>([]);
+  const [accessPolicies, setAccessPolicies] = useState<UnifiAccessPolicy[]>([]);
+  const [pcoLists, setPcoLists] = useState<PcoList[]>([]);
+  const [pcoListsLoading, setPcoListsLoading] = useState(false);
+
   const [doors, setDoors] = useState<Door[]>([]);
   const [scheduleWindows, setScheduleWindows] = useState<ScheduleWindow[]>([]);
   const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
@@ -1413,6 +1670,7 @@ export default function MappingsPage() {
   const [pcoError, setPcoError] = useState<string | null>(null);
   const [mappingsLoading, setMappingsLoading] = useState(true);
 
+  // Door mapping modals
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
@@ -1425,6 +1683,21 @@ export default function MappingsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingLabel, setDeletingLabel] = useState('');
   const [deleting, setDeleting] = useState(false);
+
+  // Policy mapping modals & actions
+  const [policyModalOpen, setPolicyModalOpen] = useState(false);
+  const [savingPolicyMapping, setSavingPolicyMapping] = useState(false);
+  const [togglingPolicyId, setTogglingPolicyId] = useState<string | null>(null);
+
+  const [deletePolicyModalOpen, setDeletePolicyModalOpen] = useState(false);
+  const [deletingPolicyId, setDeletingPolicyId] = useState<string | null>(null);
+  const [deletingPolicyLabel, setDeletingPolicyLabel] = useState('');
+  const [deletingPolicy, setDeletingPolicy] = useState(false);
+
+  const [syncingUsers, setSyncingUsers] = useState(false);
+  const [syncingPolicies, setSyncingPolicies] = useState(false);
+  const [enablingSync, setEnablingSync] = useState(false);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
 
   const [feedback, setFeedback] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -1457,9 +1730,30 @@ export default function MappingsPage() {
     return () => unsub();
   }, [orgId]);
 
+  // Subscribe to access policy mappings
+  useEffect(() => {
+    if (!orgId) return;
+    const unsub = subscribeToAccessPolicyMappings(orgId, (pm) => setPolicyMappings(pm));
+    return () => unsub();
+  }, [orgId]);
+
+  // Subscribe to synced users
+  useEffect(() => {
+    if (!orgId) return;
+    const unsub = subscribeToSyncedUsers(orgId, (su) => setSyncedUsers(su));
+    return () => unsub();
+  }, [orgId]);
+
+  // Subscribe to access policies
+  useEffect(() => {
+    if (!orgId) return;
+    const unsub = subscribeToAccessPolicies(orgId, (ap) => setAccessPolicies(ap));
+    return () => unsub();
+  }, [orgId]);
+
   // Load PCO resources when tab changes or orgId changes
   const fetchPcoResources = useCallback(() => {
-    if (!orgId) return;
+    if (!orgId || tab === 'user_policy') return;
     setPcoLoading(true);
     setPcoError(null);
     const getPcoResources = httpsCallable<
@@ -1480,9 +1774,31 @@ export default function MappingsPage() {
       .finally(() => setPcoLoading(false));
   }, [orgId, tab]);
 
+  // Fetch PCO lists for policy mapping
+  const fetchPcoLists = useCallback(async () => {
+    if (!orgId) return;
+    setPcoListsLoading(true);
+    try {
+      const getPcoListsFn = httpsCallable<{ orgId: string }, { lists: PcoList[] }>(
+        functions,
+        'getPcoLists'
+      );
+      const res = await getPcoListsFn({ orgId });
+      setPcoLists(res.data?.lists || []);
+    } catch (err: any) {
+      console.error('Failed to fetch PCO lists:', err);
+    } finally {
+      setPcoListsLoading(false);
+    }
+  }, [orgId]);
+
   useEffect(() => {
-    fetchPcoResources();
-  }, [fetchPcoResources]);
+    if (tab === 'user_policy') {
+      fetchPcoLists();
+    } else {
+      fetchPcoResources();
+    }
+  }, [tab, fetchPcoResources, fetchPcoLists]);
 
   const filteredMappings = mappings.filter((m) => m.source_type === tab);
 
@@ -1537,7 +1853,7 @@ export default function MappingsPage() {
       unlock_offset_min?: number;
       enabled: boolean;
     }) => {
-      if (!orgId) return;
+      if (!orgId || tab === 'user_policy') return;
       setSaving(true);
       try {
         const id = await createMapping(orgId, {
@@ -1592,15 +1908,158 @@ export default function MappingsPage() {
     [orgId],
   );
 
+  // Policy Mapping Handlers
+  const handleSavePolicyMapping = useCallback(
+    async (data: {
+      pco_list_id: string;
+      pco_list_name: string;
+      unifi_policy_id: string;
+      unifi_policy_name: string;
+      enabled: boolean;
+    }) => {
+      if (!orgId) return;
+      setSavingPolicyMapping(true);
+      try {
+        await createAccessPolicyMapping(orgId, data);
+        setPolicyModalOpen(false);
+        showFeedback('Access policy mapping created.', true);
+      } catch {
+        showFeedback('Failed to create access policy mapping.', false);
+      } finally {
+        setSavingPolicyMapping(false);
+      }
+    },
+    [orgId]
+  );
+
+  const handleTogglePolicyMapping = useCallback(
+    async (id: string, enabled: boolean) => {
+      if (!orgId) return;
+      setTogglingPolicyId(id);
+      try {
+        await updateAccessPolicyMapping(orgId, id, { enabled });
+        setPolicyMappings((prev) =>
+          prev.map((pm) => (pm.id === id ? { ...pm, enabled } : pm))
+        );
+      } catch {
+        showFeedback('Failed to update policy mapping.', false);
+      } finally {
+        setTogglingPolicyId(null);
+      }
+    },
+    [orgId]
+  );
+
+  function openDeletePolicyModal(id: string, label: string) {
+    setDeletingPolicyId(id);
+    setDeletingPolicyLabel(label);
+    setDeletePolicyModalOpen(true);
+  }
+
+  const handleDeletePolicyConfirm = useCallback(async () => {
+    if (!orgId || !deletingPolicyId) return;
+    setDeletingPolicy(true);
+    try {
+      await deleteAccessPolicyMapping(orgId, deletingPolicyId);
+      setDeletePolicyModalOpen(false);
+      showFeedback('Access policy mapping deleted.', true);
+    } catch {
+      showFeedback('Failed to delete policy mapping.', false);
+    } finally {
+      setDeletingPolicy(false);
+    }
+  }, [orgId, deletingPolicyId]);
+
+  const handleTriggerUserSync = useCallback(async () => {
+    if (!orgId) return;
+    setSyncingUsers(true);
+    try {
+      const triggerFn = httpsCallable<{ orgId: string }, any>(functions, 'triggerUserSync');
+      const res = await triggerFn({ orgId });
+      showFeedback(
+        `User Sync completed: ${res.data?.usersCreated ?? 0} created, ${res.data?.usersUpdated ?? 0} updated, ${res.data?.policiesRevoked ?? 0} policies revoked.`,
+        true
+      );
+    } catch (err: any) {
+      showFeedback(`User Sync failed: ${err.message}`, false);
+    } finally {
+      setSyncingUsers(false);
+    }
+  }, [orgId]);
+
+  const handleSyncPolicies = useCallback(async () => {
+    if (!orgId) return;
+    setSyncingPolicies(true);
+    try {
+      const syncFn = httpsCallable<{ orgId: string }, any>(functions, 'syncUnifiAccessPolicies');
+      await syncFn({ orgId });
+      showFeedback('Access policies sync requested from local agent.', true);
+    } catch (err: any) {
+      showFeedback(`Sync failed: ${err.message}`, false);
+    } finally {
+      setSyncingPolicies(false);
+    }
+  }, [orgId]);
+
+  const handleEnableUserSyncFromBanner = useCallback(async () => {
+    if (!orgId) return;
+    setEnablingSync(true);
+    try {
+      await updateOrgSettings(orgId, { enable_user_sync: true });
+      setOrgSettings((prev) => (prev ? { ...prev, enable_user_sync: true } : prev));
+      showFeedback('User & Access Policy Sync has been enabled for this organization.', true);
+    } catch {
+      showFeedback('Failed to enable user sync.', false);
+    } finally {
+      setEnablingSync(false);
+    }
+  }, [orgId]);
+
+  // Filter synced users by query
+  const filteredUsers = syncedUsers.filter((u) => {
+    if (!userSearchQuery) return true;
+    const q = userSearchQuery.toLowerCase();
+    const nameMatch = u.full_name?.toLowerCase().includes(q) || `${u.first_name} ${u.last_name || ''}`.toLowerCase().includes(q);
+    const emailMatch = u.email?.toLowerCase().includes(q);
+    const listMatch = u.active_list_names?.some((l) => l.toLowerCase().includes(q));
+    const policyMatch = u.assigned_policy_names?.some((p) => p.toLowerCase().includes(q));
+    return nameMatch || emailMatch || listMatch || policyMatch;
+  });
+
   return (
     <div>
       {/* Header */}
       <div className="page-header">
         <h1 className="page-title">Mappings</h1>
-        <button className="btn btn-primary btn-sm" onClick={() => setModalOpen(true)}>
-          <PlusIcon />
-          Add Mapping
-        </button>
+        {tab === 'user_policy' ? (
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleSyncPolicies}
+              disabled={syncingPolicies}
+              title="Sync access policy definitions from local UniFi console"
+            >
+              <RefreshIcon /> {syncingPolicies ? 'Syncing…' : 'Fetch Policies'}
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleTriggerUserSync}
+              disabled={syncingUsers}
+              title="Reconcile Planning Center list members with UniFi Access Users"
+            >
+              <RefreshIcon /> {syncingUsers ? 'Reconciling…' : 'Sync Users Now'}
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => setPolicyModalOpen(true)}>
+              <PlusIcon />
+              Add List Mapping
+            </button>
+          </div>
+        ) : (
+          <button className="btn btn-primary btn-sm" onClick={() => setModalOpen(true)}>
+            <PlusIcon />
+            Add Mapping
+          </button>
+        )}
       </div>
 
       {feedback && (
@@ -1611,225 +2070,505 @@ export default function MappingsPage() {
 
       {/* Tabs */}
       <div className="tabs">
-        {(['service', 'group'] as MappingSourceType[]).map((t) => (
-          <button
-            key={t}
-            className={`tab ${tab === t ? 'active' : ''}`}
-            onClick={() => setTab(t)}
-          >
-            {t === 'service' ? 'Services' : 'Groups'}
-          </button>
-        ))}
+        <button
+          className={`tab ${tab === 'service' ? 'active' : ''}`}
+          onClick={() => setTab('service')}
+        >
+          Services
+        </button>
+        <button
+          className={`tab ${tab === 'group' ? 'active' : ''}`}
+          onClick={() => setTab('group')}
+        >
+          Groups
+        </button>
+        <button
+          className={`tab ${tab === 'user_policy' ? 'active' : ''}`}
+          onClick={() => setTab('user_policy')}
+        >
+          Access Policies & Lists
+        </button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.9fr', gap: '1.5rem', alignItems: 'start' }}>
-        {/* Left panel: PCO resources & Pulled Times */}
-        <div className="card" style={{ padding: '1.25rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.875rem' }}>
-            <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-              {tab === 'service' ? 'PCO Service Types & Times' : 'PCO Groups & Schedules'}
-            </span>
-            <button
-              className="btn btn-ghost btn-sm"
-              style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-              onClick={fetchPcoResources}
-              disabled={pcoLoading}
-              title="Refresh resources from Planning Center"
+      {/* ─── TAB: Access Policies & Lists ─── */}
+      {tab === 'user_policy' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {/* Feature Disabled Banner */}
+          {!orgSettings?.enable_user_sync && (
+            <div
+              style={{
+                padding: '1rem 1.25rem',
+                background: 'rgba(234, 179, 8, 0.1)',
+                border: '1px solid rgba(234, 179, 8, 0.3)',
+                borderRadius: 'var(--radius-lg)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '1rem',
+                flexWrap: 'wrap',
+              }}
             >
-              <RefreshIcon />
-            </button>
-          </div>
-
-          {pcoLoading ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="skeleton" style={{ height: '5rem', borderRadius: 'var(--radius-md)' }} />
-              ))}
-            </div>
-          ) : pcoError ? (
-            <div style={{ padding: '1rem', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-md)' }}>
-              <p style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.8125rem', marginBottom: '0.75rem', fontWeight: 500 }}>
-                {pcoError}
-              </p>
+              <div>
+                <div style={{ fontWeight: 600, color: 'var(--color-warning, #ca8a04)', fontSize: '0.9375rem' }}>
+                  User & Access Policy Sync is Currently Paused
+                </div>
+                <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginTop: '0.2rem' }}>
+                  Turn on the feature to automatically provision UniFi users and sync door policies based on active list mappings.
+                </div>
+              </div>
               <button
-                className="btn btn-secondary btn-sm"
-                style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
-                onClick={fetchPcoResources}
+                className="btn btn-primary btn-sm"
+                onClick={handleEnableUserSyncFromBanner}
+                disabled={enablingSync}
               >
-                Retry
+                {enablingSync ? 'Enabling…' : 'Enable Feature Now'}
               </button>
             </div>
-          ) : pcoResources.length === 0 ? (
-            <div className="empty-state" style={{ padding: '1.5rem 0' }}>
-              <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
-                No {tab === 'service' ? 'service types' : 'groups'} found
-              </p>
-              <p style={{ fontSize: '0.8125rem' }}>
-                Ensure Planning Center is connected in Settings.
-              </p>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              {pcoResources.map((r) => {
-                const isMapped = mappings.some((m) => m.pco_resource_id === r.id);
-                const upcomingTimes = r.upcoming_times ?? [];
-                const freq = (r as PcoServiceType).frequency;
-                const sched = (r as PcoGroup).schedule;
-                const planTitle = (r as PcoServiceType).upcoming_plan_title;
+          )}
 
-                return (
-                  <div
-                    key={r.id}
-                    style={{
-                      padding: '0.75rem',
-                      borderRadius: 'var(--radius-md)',
-                      background: 'var(--color-bg-elevated)',
-                      border: '1px solid var(--color-border)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.5rem',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
-                      <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
-                        {r.name}
-                      </span>
-                      {isMapped ? (
-                        <span className="badge badge-success" style={{ fontSize: '0.6875rem' }}>
-                          Mapped
-                        </span>
-                      ) : (
-                        <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
-                          Unmapped
-                        </span>
-                      )}
-                    </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.9fr', gap: '1.5rem', alignItems: 'start' }}>
+            {/* Left: Active List Mappings */}
+            <div className="card" style={{ padding: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                  Active List Mappings ({policyMappings.length})
+                </span>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                  onClick={fetchPcoLists}
+                  disabled={pcoListsLoading}
+                >
+                  <RefreshIcon />
+                </button>
+              </div>
 
-                    {(freq || sched) && (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-                        <ClockIcon />
-                        <span>{freq ? `Frequency: ${freq}` : `Schedule: ${sched}`}</span>
-                      </div>
-                    )}
+              {policyMappings.length === 0 ? (
+                <div className="empty-state" style={{ padding: '1.5rem 0' }}>
+                  <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
+                    No list mappings configured
+                  </p>
+                  <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                    Click &quot;Add List Mapping&quot; to connect a Planning Center list with a UniFi access policy.
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {policyMappings.map((pm) => (
+                    <div
+                      key={pm.id}
+                      style={{
+                        padding: '0.875rem',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--color-bg-elevated)',
+                        border: '1px solid var(--color-border)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
+                            {pm.pco_list_name}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.15rem' }}>
+                            Policy: <strong style={{ color: 'var(--color-primary)' }}>{pm.unifi_policy_name}</strong>
+                          </div>
+                        </div>
 
-                    {planTitle && (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                        Plan: {planTitle}
-                      </div>
-                    )}
-
-                    {upcomingTimes.length > 0 ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: '0.125rem' }}>
-                        <span style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>
-                          Times:
-                        </span>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                          {upcomingTimes.map((t) => {
-                            const style = timeTypeBadgeStyle(t.time_type);
-                            return (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <label
+                            style={{
+                              position: 'relative',
+                              display: 'inline-block',
+                              width: '2.25rem',
+                              height: '1.25rem',
+                              cursor: togglingPolicyId === pm.id ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={pm.enabled}
+                              disabled={togglingPolicyId === pm.id}
+                              onChange={(e) => handleTogglePolicyMapping(pm.id, e.target.checked)}
+                              style={{ opacity: 0, width: 0, height: 0 }}
+                            />
+                            <span
+                              style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                backgroundColor: pm.enabled ? 'var(--color-primary)' : 'var(--color-border)',
+                                borderRadius: '1.25rem',
+                                transition: 'background-color 0.2s',
+                              }}
+                            >
                               <span
-                                key={t.id}
                                 style={{
-                                  fontSize: '0.6875rem',
-                                  padding: '0.15rem 0.4rem',
-                                  borderRadius: 'var(--radius-sm)',
-                                  background: style.bg,
-                                  color: style.color,
-                                  border: `1px solid ${style.border}`,
-                                  fontWeight: 500,
+                                  position: 'absolute',
+                                  height: '0.95rem',
+                                  width: '0.95rem',
+                                  left: pm.enabled ? '1.15rem' : '0.15rem',
+                                  bottom: '0.15rem',
+                                  backgroundColor: 'white',
+                                  borderRadius: '50%',
+                                  transition: 'left 0.2s',
                                 }}
-                              >
-                                {formatIsoTimeRange(t.starts_at, t.ends_at)} {t.time_type ? `(${t.time_type})` : ''}
-                              </span>
-                            );
-                          })}
+                              />
+                            </span>
+                          </label>
+
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            style={{ color: 'var(--color-danger)', padding: '0.2rem' }}
+                            onClick={() => openDeletePolicyModal(pm.id, pm.pco_list_name)}
+                          >
+                            <TrashIcon />
+                          </button>
                         </div>
                       </div>
-                    ) : (
-                      <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
-                        No upcoming times scheduled
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Right panel: Active Mappings with Full Details */}
-        <div>
-          <div
-            style={{
-              fontWeight: 600,
-              color: 'var(--color-text-primary)',
-              marginBottom: '0.875rem',
-              fontSize: '0.875rem',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}
-          >
-            <span>Active Mappings ({filteredMappings.length})</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 'normal' }}>
-              Org Defaults: {orgSettings?.lock_timing_mode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'} (-{orgSettings?.unlock_buffer_before_min ?? 15}m / +{orgSettings?.lock_timing_mode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15)}m)
-            </span>
+            {/* Right: Synced Users Table */}
+            <div className="card" style={{ padding: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                  Synced Users ({syncedUsers.length})
+                </span>
+
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Filter users by name, email, list…"
+                  value={userSearchQuery}
+                  onChange={(e) => setUserSearchQuery(e.target.value)}
+                  style={{ maxWidth: '16rem', fontSize: '0.8125rem', padding: '0.35rem 0.65rem' }}
+                />
+              </div>
+
+              {filteredUsers.length === 0 ? (
+                <div className="empty-state" style={{ padding: '2rem 0' }}>
+                  <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
+                    {syncedUsers.length === 0 ? 'No users synced yet' : 'No users match filter'}
+                  </p>
+                  <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                    {syncedUsers.length === 0
+                      ? 'Add a list mapping and click "Sync Users Now" to reconcile memberships.'
+                      : 'Try clearing your search filter.'}
+                  </p>
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="table" style={{ width: '100%', fontSize: '0.8125rem' }}>
+                    <thead>
+                      <tr>
+                        <th>User</th>
+                        <th>Contact</th>
+                        <th>Active PCO Lists</th>
+                        <th>Assigned UniFi Policies</th>
+                        <th>Status</th>
+                        <th>Last Synced</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredUsers.map((u) => {
+                        const hasPolicies = u.assigned_policy_ids && u.assigned_policy_ids.length > 0;
+                        return (
+                          <tr key={u.id}>
+                            <td>
+                              <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                                {u.full_name || `${u.first_name} ${u.last_name || ''}`.trim()}
+                              </div>
+                            </td>
+                            <td>
+                              <div style={{ color: 'var(--color-text-secondary)' }}>{u.email || '—'}</div>
+                              {u.phone_number && (
+                                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>{u.phone_number}</div>
+                              )}
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                                {u.active_list_names && u.active_list_names.length > 0 ? (
+                                  u.active_list_names.map((ln, i) => (
+                                    <span key={i} className="badge badge-info" style={{ fontSize: '0.6875rem' }}>
+                                      {ln}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span style={{ color: 'var(--color-text-muted)' }}>None</span>
+                                )}
+                              </div>
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                                {u.assigned_policy_names && u.assigned_policy_names.length > 0 ? (
+                                  u.assigned_policy_names.map((pn, i) => (
+                                    <span key={i} className="badge badge-success" style={{ fontSize: '0.6875rem' }}>
+                                      {pn}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span style={{ color: 'var(--color-text-muted)' }}>None (Revoked)</span>
+                                )}
+                              </div>
+                            </td>
+                            <td>
+                              {hasPolicies ? (
+                                <span className="badge badge-success" style={{ fontSize: '0.6875rem' }}>
+                                  Active ({u.assigned_policy_ids.length})
+                                </span>
+                              ) : (
+                                <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
+                                  No Policy
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                              {u.last_synced_at ? safeFormatDistanceToNow(parseSafeDate(u.last_synced_at)) : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── TABS: Services / Groups ─── */}
+      {tab !== 'user_policy' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.9fr', gap: '1.5rem', alignItems: 'start' }}>
+          {/* Left panel: PCO resources & Pulled Times */}
+          <div className="card" style={{ padding: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.875rem' }}>
+              <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                {tab === 'service' ? 'PCO Service Types & Times' : 'PCO Groups & Schedules'}
+              </span>
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                onClick={fetchPcoResources}
+                disabled={pcoLoading}
+                title="Refresh resources from Planning Center"
+              >
+                <RefreshIcon />
+              </button>
+            </div>
+
+            {pcoLoading ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="skeleton" style={{ height: '5rem', borderRadius: 'var(--radius-md)' }} />
+                ))}
+              </div>
+            ) : pcoError ? (
+              <div style={{ padding: '1rem', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-md)' }}>
+                <p style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.8125rem', marginBottom: '0.75rem', fontWeight: 500 }}>
+                  {pcoError}
+                </p>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
+                  onClick={fetchPcoResources}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : pcoResources.length === 0 ? (
+              <div className="empty-state" style={{ padding: '1.5rem 0' }}>
+                <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
+                  No {tab === 'service' ? 'service types' : 'groups'} found
+                </p>
+                <p style={{ fontSize: '0.8125rem' }}>
+                  Ensure Planning Center is connected in Settings.
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {pcoResources.map((r) => {
+                  const isMapped = mappings.some((m) => m.pco_resource_id === r.id);
+                  const upcomingTimes = r.upcoming_times ?? [];
+                  const freq = (r as PcoServiceType).frequency;
+                  const sched = (r as PcoGroup).schedule;
+                  const planTitle = (r as PcoServiceType).upcoming_plan_title;
+
+                  return (
+                    <div
+                      key={r.id}
+                      style={{
+                        padding: '0.75rem',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--color-bg-elevated)',
+                        border: '1px solid var(--color-border)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                        <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
+                          {r.name}
+                        </span>
+                        {isMapped ? (
+                          <span className="badge badge-success" style={{ fontSize: '0.6875rem' }}>
+                            Mapped
+                          </span>
+                        ) : (
+                          <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
+                            Unmapped
+                          </span>
+                        )}
+                      </div>
+
+                      {(freq || sched) && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                          <ClockIcon />
+                          <span>{freq ? `Frequency: ${freq}` : `Schedule: ${sched}`}</span>
+                        </div>
+                      )}
+
+                      {planTitle && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                          Plan: {planTitle}
+                        </div>
+                      )}
+
+                      {upcomingTimes.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: '0.125rem' }}>
+                          <span style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>
+                            Times:
+                          </span>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                            {upcomingTimes.map((t) => {
+                              const style = timeTypeBadgeStyle(t.time_type);
+                              return (
+                                <span
+                                  key={t.id}
+                                  style={{
+                                    fontSize: '0.6875rem',
+                                    padding: '0.15rem 0.4rem',
+                                    borderRadius: 'var(--radius-sm)',
+                                    background: style.bg,
+                                    color: style.color,
+                                    border: `1px solid ${style.border}`,
+                                    fontWeight: 500,
+                                  }}
+                                >
+                                  {formatIsoTimeRange(t.starts_at, t.ends_at)} {t.time_type ? `(${t.time_type})` : ''}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                          No upcoming times scheduled
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
-          {mappingsLoading ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {[1, 2].map((i) => (
-                <div key={i} className="card skeleton" style={{ height: '10rem', borderRadius: 'var(--radius-lg)' }} />
-              ))}
+          {/* Right panel: Active Mappings with Full Details */}
+          <div>
+            <div
+              style={{
+                fontWeight: 600,
+                color: 'var(--color-text-primary)',
+                marginBottom: '0.875rem',
+                fontSize: '0.875rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <span>Active Mappings ({filteredMappings.length})</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 'normal' }}>
+                Org Defaults: {orgSettings?.lock_timing_mode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'} (-{orgSettings?.unlock_buffer_before_min ?? 15}m / +{orgSettings?.lock_timing_mode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15)}m)
+              </span>
             </div>
-          ) : filteredMappings.length === 0 ? (
-            <div className="card empty-state">
-              <p className="empty-state-title">
-                No {tab === 'service' ? 'service' : 'group'} mappings yet
-              </p>
-              <p style={{ fontSize: '0.875rem' }}>
-                Click &quot;Add Mapping&quot; to link a Planning Center {tab === 'service' ? 'service type' : 'group'} with UniFi doors.
-              </p>
-            </div>
-          ) : (
-            <div>
-              {filteredMappings.map((m) => {
-                const matchedResource = pcoResources.find((r) => r.id === m.pco_resource_id);
 
-                return (
-                  <ActiveMappingCard
-                    key={m.id}
-                    mapping={m}
-                    pcoResource={matchedResource}
-                    doors={doors}
-                    scheduleWindows={scheduleWindows}
-                    orgSettings={orgSettings}
-                    onToggle={handleToggle}
-                    onDelete={openDeleteModal}
-                    onEditTiming={(mappingToEdit) => {
-                      setEditingMapping(mappingToEdit);
-                      setEditTimingModalOpen(true);
-                    }}
-                    toggling={toggling === m.id}
-                  />
-                );
-              })}
-            </div>
-          )}
+            {mappingsLoading ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {[1, 2].map((i) => (
+                  <div key={i} className="card skeleton" style={{ height: '10rem', borderRadius: 'var(--radius-lg)' }} />
+                ))}
+              </div>
+            ) : filteredMappings.length === 0 ? (
+              <div className="card empty-state">
+                <p className="empty-state-title">
+                  No {tab === 'service' ? 'service' : 'group'} mappings yet
+                </p>
+                <p style={{ fontSize: '0.875rem' }}>
+                  Click &quot;Add Mapping&quot; to link a Planning Center {tab === 'service' ? 'service type' : 'group'} with UniFi doors.
+                </p>
+              </div>
+            ) : (
+              <div>
+                {filteredMappings.map((m) => {
+                  const matchedResource = pcoResources.find((r) => r.id === m.pco_resource_id);
+
+                  return (
+                    <ActiveMappingCard
+                      key={m.id}
+                      mapping={m}
+                      pcoResource={matchedResource}
+                      doors={doors}
+                      scheduleWindows={scheduleWindows}
+                      orgSettings={orgSettings}
+                      onToggle={handleToggle}
+                      onDelete={openDeleteModal}
+                      onEditTiming={(mappingToEdit) => {
+                        setEditingMapping(mappingToEdit);
+                        setEditTimingModalOpen(true);
+                      }}
+                      toggling={toggling === m.id}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Add Mapping Modal */}
       <AddMappingModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        sourceType={tab}
+        sourceType={tab === 'user_policy' ? 'service' : tab}
         pcoResources={pcoResources}
         doors={doors}
         pcoError={pcoError}
         orgSettings={orgSettings}
         onSave={handleSaveMapping}
         saving={saving}
+      />
+
+      {/* Add Policy Mapping Modal */}
+      <AddPolicyMappingModal
+        isOpen={policyModalOpen}
+        onClose={() => setPolicyModalOpen(false)}
+        pcoLists={pcoLists}
+        pcoListsLoading={pcoListsLoading}
+        accessPolicies={accessPolicies}
+        onSave={handleSavePolicyMapping}
+        saving={savingPolicyMapping}
+        onRefreshPolicies={handleSyncPolicies}
+        onRefreshLists={fetchPcoLists}
       />
 
       {/* Edit Timing Modal */}
@@ -1845,7 +2584,7 @@ export default function MappingsPage() {
         saving={savingTiming}
       />
 
-      {/* Delete Confirmation */}
+      {/* Delete Door Mapping Confirmation */}
       <Modal
         isOpen={deleteModalOpen}
         onClose={() => !deleting && setDeleteModalOpen(false)}
@@ -1870,6 +2609,31 @@ export default function MappingsPage() {
         </p>
       </Modal>
 
+      {/* Delete Policy Mapping Confirmation */}
+      <Modal
+        isOpen={deletePolicyModalOpen}
+        onClose={() => !deletingPolicy && setDeletePolicyModalOpen(false)}
+        title="Delete Access Policy Mapping"
+        footer={
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => setDeletePolicyModalOpen(false)} disabled={deletingPolicy}>
+              Cancel
+            </button>
+            <button className="btn btn-danger" onClick={handleDeletePolicyConfirm} disabled={deletingPolicy}>
+              {deletingPolicy ? 'Deleting…' : 'Delete'}
+            </button>
+          </div>
+        }
+      >
+        <p style={{ color: 'var(--color-text-secondary)' }}>
+          Are you sure you want to delete the mapping for list{' '}
+          <strong style={{ color: 'var(--color-text-primary)' }}>{deletingPolicyLabel}</strong>?
+        </p>
+        <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginTop: '0.75rem' }}>
+          Deleting this mapping will revoke this access policy from members of this list on the next reconciliation.
+        </p>
+      </Modal>
+
       <style>{`
         @media (max-width: 900px) {
           div[style*="grid-template-columns: 1.1fr 1.9fr"] {
@@ -1880,3 +2644,4 @@ export default function MappingsPage() {
     </div>
   );
 }
+

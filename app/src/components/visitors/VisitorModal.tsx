@@ -79,6 +79,16 @@ export default function VisitorModal({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const isUuid = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
+  const validDoors = doors.filter((d) => {
+    const label = (d.label || '').trim();
+    if (!label) return false;
+    if (isUuid(label) && d.current_state === 'unknown') return false;
+    return true;
+  });
+
   useEffect(() => {
     if (visitor) {
       setFirstName(typeof visitor.first_name === 'string' ? visitor.first_name : '');
@@ -100,7 +110,7 @@ export default function VisitorModal({
       setEmail('');
       setPurpose('');
       setPinCode(generateRandomPin(6));
-      setSelectedDoorIds(doors.map((d) => d.unifi_door_id || d.id));
+      setSelectedDoorIds(validDoors.map((d) => d.unifi_door_id || d.id));
 
       const now = new Date();
       // Round to current minute
@@ -577,7 +587,13 @@ export default function VisitorModal({
             </label>
             <button
               type="button"
-              onClick={handleSelectAllDoors}
+              onClick={() => {
+                if (selectedDoorIds.length === validDoors.length) {
+                  setSelectedDoorIds([]);
+                } else {
+                  setSelectedDoorIds(validDoors.map((d) => d.unifi_door_id || d.id));
+                }
+              }}
               style={{
                 fontSize: '0.75rem',
                 color: 'var(--color-accent, #2563eb)',
@@ -587,11 +603,11 @@ export default function VisitorModal({
                 fontWeight: 600,
               }}
             >
-              {selectedDoorIds.length === doors.length ? 'Deselect All' : 'Select All'}
+              {selectedDoorIds.length === validDoors.length ? 'Deselect All' : 'Select All'}
             </button>
           </div>
 
-          {doors.length === 0 ? (
+          {validDoors.length === 0 ? (
             <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
               No doors found. Ensure your UniFi doors are synced.
             </div>
@@ -608,7 +624,7 @@ export default function VisitorModal({
                 borderRadius: 'var(--radius-md)',
               }}
             >
-              {doors.map((door) => {
+              {validDoors.map((door) => {
                 const doorId = door.unifi_door_id || door.id;
                 const isSelected = selectedDoorIds.includes(doorId);
                 return (

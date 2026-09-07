@@ -81,6 +81,19 @@ interface DoorCardProps {
   actionLoading: boolean;
 }
 
+function isUuid(str: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+}
+
+function getFriendlyScheduleName(name?: string | null, fallbackDoorLabel?: string): string {
+  if (!name || !name.trim()) return fallbackDoorLabel ? `${fallbackDoorLabel} Unlock Schedule` : 'Unlock Schedule';
+  const trimmed = name.trim();
+  if (isUuid(trimmed) || trimmed.toLowerCase() === 'schedule' || trimmed.startsWith('unlock-')) {
+    return fallbackDoorLabel ? `${fallbackDoorLabel} Unlock Schedule` : 'Unlock Schedule';
+  }
+  return trimmed;
+}
+
 function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: DoorCardProps) {
   const isLocked = door.current_state === 'locked';
   const isUnknown = door.current_state === 'unknown';
@@ -90,6 +103,9 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
     const unifiDoorId = door.unifi_door_id;
     return s.door_ids?.includes(doorId) || (unifiDoorId && s.door_ids?.includes(unifiDoorId));
   });
+
+  const rawScheduleLabel = door.schedule_name || door.unlock_schedule_name;
+  const friendlyScheduleLabel = rawScheduleLabel ? getFriendlyScheduleName(rawScheduleLabel, door.label) : null;
 
   const borderColor = isUnknown
     ? 'var(--color-border)'
@@ -172,7 +188,7 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
               key={s.id}
               href="/schedule"
               style={{ textDecoration: 'none' }}
-              title={`Assigned to UniFi schedule: ${s.name}`}
+              title={`Assigned to UniFi schedule: ${getFriendlyScheduleName(s.name, door.label)}`}
             >
               <span
                 className="badge badge-neutral"
@@ -183,15 +199,15 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
                   cursor: 'pointer',
                 }}
               >
-                🗓️ {s.name}
+                🗓️ {getFriendlyScheduleName(s.name, door.label)}
               </span>
             </Link>
           ))
-        ) : (door.schedule_name || door.unlock_schedule_name) ? (
+        ) : friendlyScheduleLabel ? (
           <Link
             href="/schedule"
             style={{ textDecoration: 'none' }}
-            title={`Assigned door schedule: ${door.schedule_name || door.unlock_schedule_name}`}
+            title={`Assigned door schedule: ${friendlyScheduleLabel}`}
           >
             <span
               className="badge badge-neutral"
@@ -202,7 +218,7 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
                 cursor: 'pointer',
               }}
             >
-              🗓️ {door.schedule_name || door.unlock_schedule_name}
+              🗓️ {friendlyScheduleLabel}
             </span>
           </Link>
         ) : null}
@@ -684,6 +700,13 @@ export default function DoorsPage() {
 
   const onlineAgents = agents.filter((a) => a.status === 'online').length;
 
+  const validDoors = doors.filter((d) => {
+    const label = (d.label || '').trim();
+    if (!label) return false;
+    if (isUuid(label) && d.current_state === 'unknown') return false;
+    return true;
+  });
+
   return (
     <div>
       {/* Page Header */}
@@ -732,7 +755,7 @@ export default function DoorsPage() {
             <div key={i} className="card skeleton" style={{ height: '10rem' }} />
           ))}
         </div>
-      ) : doors.length === 0 ? (
+      ) : validDoors.length === 0 ? (
         <div className="card empty-state" style={{ textAlign: 'center', padding: '3rem 1.5rem' }}>
           <p className="empty-state-title">No doors found</p>
           <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', marginBottom: '1.25rem' }}>
@@ -750,7 +773,7 @@ export default function DoorsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-3">
-          {doors.map((door) => (
+          {validDoors.map((door) => (
             <DoorCard
               key={door.id}
               door={door}

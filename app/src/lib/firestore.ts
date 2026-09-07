@@ -21,6 +21,9 @@ import type {
   Organization,
   OrgSettings,
   Mapping,
+  AccessPolicyMapping,
+  SyncedUser,
+  UnifiAccessPolicy,
   Door,
   ScheduleWindow,
   DoorCommand,
@@ -88,6 +91,95 @@ export async function updateMapping(
 export async function deleteMapping(orgId: string, mappingId: string): Promise<void> {
   await deleteDoc(doc(db, 'organizations', orgId, 'mappings', mappingId));
 }
+
+// ─── Access Policy Mappings ──────────────────────────────────────────────────
+
+export async function getAccessPolicyMappings(orgId: string): Promise<AccessPolicyMapping[]> {
+  const snap = await getDocs(collection(db, 'organizations', orgId, 'access_policy_mappings'));
+  return snap.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
+    created_at: normalizeTimestamp(d.data().created_at),
+    updated_at: normalizeTimestamp(d.data().updated_at),
+  } as AccessPolicyMapping));
+}
+
+export function subscribeToAccessPolicyMappings(
+  orgId: string,
+  callback: (mappings: AccessPolicyMapping[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'organizations', orgId, 'access_policy_mappings'), (snap) => {
+    callback(
+      snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        created_at: normalizeTimestamp(d.data().created_at),
+        updated_at: normalizeTimestamp(d.data().updated_at),
+      } as AccessPolicyMapping))
+    );
+  });
+}
+
+export async function createAccessPolicyMapping(
+  orgId: string,
+  mapping: Omit<AccessPolicyMapping, 'id' | 'org_id' | 'created_at' | 'updated_at'>
+): Promise<string> {
+  const ref = await addDoc(collection(db, 'organizations', orgId, 'access_policy_mappings'), {
+    ...mapping,
+    org_id: orgId,
+    created_at: serverTimestamp(),
+    updated_at: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function updateAccessPolicyMapping(
+  orgId: string,
+  mappingId: string,
+  updates: Partial<AccessPolicyMapping>
+): Promise<void> {
+  await updateDoc(doc(db, 'organizations', orgId, 'access_policy_mappings', mappingId), {
+    ...updates,
+    updated_at: serverTimestamp(),
+  });
+}
+
+export async function deleteAccessPolicyMapping(orgId: string, mappingId: string): Promise<void> {
+  await deleteDoc(doc(db, 'organizations', orgId, 'access_policy_mappings', mappingId));
+}
+
+// ─── Synced Users & Access Policies ──────────────────────────────────────────
+
+export function subscribeToSyncedUsers(
+  orgId: string,
+  callback: (users: SyncedUser[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'organizations', orgId, 'synced_users'), (snap) => {
+    callback(
+      snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        last_synced_at: normalizeTimestamp(d.data().last_synced_at),
+      } as SyncedUser))
+    );
+  });
+}
+
+export function subscribeToAccessPolicies(
+  orgId: string,
+  callback: (policies: UnifiAccessPolicy[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'organizations', orgId, 'access_policies'), (snap) => {
+    callback(
+      snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        last_synced: normalizeTimestamp(d.data().last_synced),
+      } as UnifiAccessPolicy))
+    );
+  });
+}
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

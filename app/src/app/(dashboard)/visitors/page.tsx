@@ -222,6 +222,18 @@ export default function VisitorsPage() {
     };
   }, [orgId]);
 
+  const isUuid = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
+  const validDoors = useMemo(() => {
+    return doors.filter((d) => {
+      const label = (d.label || '').trim();
+      if (!label) return false;
+      if (isUuid(label) && d.current_state === 'unknown') return false;
+      return true;
+    });
+  }, [doors]);
+
   // Sync from UniFi
   const handleSync = async () => {
     if (!orgId || syncing) return;
@@ -531,7 +543,7 @@ export default function VisitorsPage() {
             style={{ width: 'auto', fontSize: '0.8125rem' }}
           >
             <option value="all">All Doors</option>
-            {doors.map((d) => (
+            {validDoors.map((d) => (
               <option key={d.id} value={d.unifi_door_id || d.id}>
                 {d.label}
               </option>
@@ -806,7 +818,7 @@ export default function VisitorsPage() {
           }}
           orgId={orgId || ''}
           visitor={editingVisitor}
-          doors={doors}
+          doors={validDoors}
           onSaved={() => {
             showFeedback(
               editingVisitor ? 'Visitor updated successfully!' : 'Visitor created successfully!',

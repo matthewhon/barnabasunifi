@@ -199,4 +199,52 @@ export class PcoClient {
       'where[starts_at][lte]': before,
     });
   }
+
+  // -------------------------------------------------------------------------
+  // People & Lists API
+  // -------------------------------------------------------------------------
+
+  /** Returns all lists for the organization. */
+  async getLists(): Promise<PcoResource[]> {
+    return this.getAll('/people/v2/lists');
+  }
+
+  /**
+   * Returns all people in a specific list, including their emails and phone numbers.
+   */
+  async getListPeople(listId: string): Promise<{ people: PcoResource[]; included?: PcoResource[] }> {
+    const pageSize = 100;
+    const allPeople: PcoResource[] = [];
+    const allIncluded: PcoResource[] = [];
+    let offset = 0;
+
+    while (true) {
+      const response = (await this.http.get<PcoListResponse>(
+        `/people/v2/lists/${encodeURIComponent(listId)}/people`,
+        {
+          params: {
+            include: 'emails,phone_numbers',
+            per_page: pageSize,
+            offset,
+          },
+        }
+      )).data;
+
+      const items = response.data ?? [];
+      allPeople.push(...items);
+      if (response.included && Array.isArray(response.included)) {
+        allIncluded.push(...response.included);
+      }
+
+      const totalCount = response.meta?.total_count ?? items.length;
+      offset += items.length;
+
+      if (offset >= totalCount || items.length < pageSize) {
+        break;
+      }
+    }
+
+    return { people: allPeople, included: allIncluded };
+  }
 }
+

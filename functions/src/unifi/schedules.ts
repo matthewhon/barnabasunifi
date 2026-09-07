@@ -91,7 +91,26 @@ export function parseTimeHHMM(rawTime: any, defaultVal = '08:00'): string {
 
 export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
   const id = String(raw.id || raw.unique_id || raw._id || raw.schedule_id || '');
-  const name = String(raw.name || raw.schedule_name || raw.alias || raw.title || 'Schedule');
+  let rawName = raw.name || raw.schedule_name || raw.alias || raw.title || '';
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(rawName).trim());
+  const doorLabel = raw.door_name || raw.door_label || '';
+
+  if (
+    !rawName ||
+    isUuid ||
+    rawName.startsWith('unlock-') ||
+    rawName.startsWith('user ') ||
+    rawName.toLowerCase() === 'schedule'
+  ) {
+    if (doorLabel) {
+      rawName = `${doorLabel} Unlock Schedule`;
+    } else if (raw.type === 'unlock' || raw.is_unlock) {
+      rawName = 'Default Unlock Schedule';
+    } else {
+      rawName = 'Access Schedule';
+    }
+  }
+  const name = String(rawName);
   const type = raw.type || (raw.is_unlock ? 'unlock' : 'access');
   const isDefault = Boolean(raw.is_default || raw.default);
   const holidayGroupId = raw.holiday_group_id || raw.holiday_id;
@@ -452,12 +471,26 @@ export const syncUnifiSchedules = onCall<{ orgId: string }>(
         }
       }
 
-      const allSchedules = Array.from(schedulesMap.values());
+      const isUuid = (str: string) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
+      const allSchedules = Array.from(schedulesMap.values()).filter((sched) => {
+        if (!sched.id || sched.id.trim() === '') return false;
+        const hasActiveSlots = sched.weekly_schedule?.some((d) => d.active && d.slots.length > 0);
+        const hasDoors = Boolean(sched.door_ids && sched.door_ids.length > 0);
+        if (isUuid(sched.name) && !hasActiveSlots && !hasDoors) {
+          return false;
+        }
+        return true;
+      });
+
       const batch = db.batch();
       const now = FieldValue.serverTimestamp();
+      const validScheduleIds = new Set<string>();
 
       for (const schedule of allSchedules) {
         if (!schedule.id) continue;
+        validScheduleIds.add(schedule.id);
         const ref = db.doc(`organizations/${orgId}/unifi_schedules/${schedule.id}`);
         batch.set(ref, {
           ...schedule,
@@ -479,12 +512,31 @@ export const syncUnifiSchedules = onCall<{ orgId: string }>(
         }
       }
 
+      // Prune phantom or orphaned schedule documents in Firestore
+      try {
+        const existingSchedsSnap = await db.collection(`organizations/${orgId}/unifi_schedules`).get();
+        for (const docSnap of existingSchedsSnap.docs) {
+          const docId = docSnap.id;
+          const data = docSnap.data();
+          const schedName = String(data.name || '').trim();
+          const hasDoors = Array.isArray(data.door_ids) && data.door_ids.length > 0;
+          const hasActiveSlots = Array.isArray(data.weekly_schedule) && data.weekly_schedule.some((d: any) => d.active && d.slots?.length > 0);
+          if (!validScheduleIds.has(docId)) {
+            if (isUuid(docId) || isUuid(schedName) || !schedName || schedName === 'Schedule') {
+              if (!hasDoors && !hasActiveSlots) {
+                batch.delete(docSnap.ref);
+              }
+            }
+          }
+        }
+      } catch {}
+
       await batch.commit();
 
       return {
         success: true,
         mode: 'remote',
-        count: normalizedSchedules.length,
+        count: allSchedules.length,
       };
     }
 

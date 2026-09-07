@@ -81,15 +81,23 @@ export async function syncDoors(
     return [];
   }
 
+  const isUuid = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
   const batch = db.batch();
   const now = admin.firestore.Timestamp.now();
+  const validDoorIds = new Set<string>();
 
   for (const door of doors) {
+    const rawLabel = (door.full_name || door.name || '').trim();
+    const label = rawLabel || (door.id ? `Door ${door.id.slice(0, 8)}` : 'Door');
+    validDoorIds.add(door.id);
+
     const doorRef = db.doc(`organizations/${orgId}/doors/${door.id}`);
 
     const record: Record<string, any> = {
       unifi_door_id: door.id,
-      label: door.full_name ?? door.name ?? door.id,
+      label,
       current_state: normalizeDoorState(door.door_lock_relay_status),
       door_position_status: door.door_position_status ?? null,
       device_state: door.device_state ?? null,
@@ -106,11 +114,41 @@ export async function syncDoors(
       record.schedule_id = String(schedId);
     }
     if (door.schedule_name) {
-      record.schedule_name = String(door.schedule_name);
+      const cleanSchedName = String(door.schedule_name).trim();
+      record.schedule_name =
+        cleanSchedName && !isUuid(cleanSchedName) && !cleanSchedName.startsWith('unlock-')
+          ? cleanSchedName
+          : `${label} Unlock Schedule`;
     }
 
     // set with merge:true so we don't overwrite fields managed by the web app or schedule sync
     batch.set(doorRef, record, { merge: true });
+  }
+
+  // Prune phantom or orphaned door documents in Firestore
+  try {
+    const existingDoorsSnap = await db.collection(`organizations/${orgId}/doors`).get();
+    let prunedCount = 0;
+    for (const docSnap of existingDoorsSnap.docs) {
+      const docId = docSnap.id;
+      const data = docSnap.data();
+      const docLabel = (data.label || '').trim();
+
+      // If document does not match a valid physical door returned by UniFi
+      if (!validDoorIds.has(docId)) {
+        // Prune if blank, or matches a rule UUID, or is unknown state without recent access
+        if (!docLabel || isUuid(docLabel) || (isUuid(docId) && !data.last_accessed_at)) {
+          batch.delete(docSnap.ref);
+          prunedCount++;
+          logger.info(`[DoorSync] Pruning phantom/stale door ${docId} (label: "${docLabel}")`);
+        }
+      }
+    }
+    if (prunedCount > 0) {
+      logger.info(`[DoorSync] Pruned ${prunedCount} phantom door document(s) from Firestore.`);
+    }
+  } catch (pruneErr) {
+    logger.debug(`[DoorSync] Error during phantom door pruning: ${pruneErr}`);
   }
 
   try {

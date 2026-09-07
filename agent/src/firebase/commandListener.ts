@@ -17,6 +17,7 @@ import { syncDoors } from './doorSync';
 import { syncSchedules } from './scheduleSync';
 import { syncVisitors } from './visitorSync';
 import { syncAccessLogs } from './accessLogSync';
+import { syncAccessPolicies, syncUsers } from './userSync';
 import { checkForUpdate, applyPendingUpdate } from './updateChecker';
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,11 @@ export type CommandAction =
   | 'create_visitor'
   | 'update_visitor'
   | 'delete_visitor'
+  | 'sync_users'
+  | 'create_user'
+  | 'update_user'
+  | 'assign_policies'
+  | 'sync_policies'
   | 'sync_access_logs'
   | 'apply_update'
   | 'upgrade_agent'
@@ -59,6 +65,11 @@ export interface DoorCommand {
   unifi_visitor_id?: string;
   firestore_visitor_id?: string;
   visitor_data?: Record<string, unknown>;
+  user_id?: string;
+  pco_person_id?: string;
+  unifi_user_id?: string;
+  user_data?: Record<string, unknown>;
+  policy_ids?: string[];
   status: CommandStatus;
   execute_at: FirebaseFirestore.Timestamp | string | Date;
   duration_min?: number;
@@ -129,6 +140,16 @@ async function writeAuditLog(
       action = 'visitor_deleted';
     } else if (command.action === 'sync_access_logs') {
       action = 'access_logs_synced';
+    } else if (command.action === 'sync_users') {
+      action = 'users_synced';
+    } else if (command.action === 'create_user') {
+      action = 'user_created';
+    } else if (command.action === 'update_user') {
+      action = 'user_updated';
+    } else if (command.action === 'assign_policies') {
+      action = 'policies_assigned';
+    } else if (command.action === 'sync_policies') {
+      action = 'policies_synced';
     } else {
       action = command.action;
     }
@@ -140,6 +161,7 @@ async function writeAuditLog(
       door_label: command.door_label ?? null,
       unifi_door_id: command.unifi_door_id ?? null,
       schedule_id: command.schedule_id ?? null,
+      user_id: command.user_id ?? command.pco_person_id ?? null,
       status,
       result: status === 'done' ? 'success' : 'error',
       result_message: resultMessage,
@@ -404,6 +426,112 @@ export function startCommandListener(
           maxPages: backfill ? 50 : 15,
         });
         resultMessage = `Synced ${synced.length} access log(s) from UniFi Access.`;
+      } else if (command.action === 'sync_policies') {
+        const policies = await syncAccessPolicies(orgId, unifiClient);
+        resultMessage = `Synced ${policies.length} access policy(ies) from UniFi Access.`;
+      } else if (command.action === 'sync_users') {
+        const users = await syncUsers(orgId, unifiClient);
+        resultMessage = `Synced ${users.length} user(s) from UniFi Access.`;
+      } else if (command.action === 'create_user') {
+        const userData = (command.user_data as Record<string, any>) || {};
+        const policyIds = (command.policy_ids as string[]) || (userData.policy_ids as string[]) || [];
+
+        const created = await unifiClient.createUser({
+          first_name: userData.first_name || 'User',
+          last_name: userData.last_name || '',
+          full_name: userData.full_name,
+          email: userData.email,
+          phone_number: userData.phone_number,
+          avatar: userData.avatar,
+          policy_ids: policyIds,
+        });
+
+        const pcoId = command.pco_person_id || command.user_id;
+        if (pcoId && created.id) {
+          await db.doc(`organizations/${orgId}/synced_users/${pcoId}`).set(
+            {
+              unifi_user_id: created.id,
+              status: policyIds.length > 0 ? 'active' : 'no_policy',
+              assigned_policy_ids: policyIds,
+              last_synced_at: new Date().toISOString(),
+              updated_at: nowTimestamp(),
+            },
+            { merge: true }
+          );
+        }
+
+        resultMessage = `Created UniFi user '${userData.full_name || userData.first_name}' (ID: ${created.id}) with ${policyIds.length} policy(ies).`;
+      } else if (command.action === 'assign_policies' || command.action === 'update_user') {
+        const pcoId = command.pco_person_id || command.user_id;
+        let unifiUserId = command.unifi_user_id;
+        const policyIds = (command.policy_ids as string[]) || [];
+
+        if (!unifiUserId && pcoId) {
+          const userDoc = await db.doc(`organizations/${orgId}/synced_users/${pcoId}`).get();
+          if (userDoc.exists) {
+            unifiUserId = userDoc.data()?.unifi_user_id;
+          }
+        }
+
+        // If still no unifiUserId, try finding by email or name in UniFi
+        if (!unifiUserId) {
+          const userData = (command.user_data as Record<string, any>) || {};
+          const existingUniFiUsers = await unifiClient.getUsers();
+          const match = existingUniFiUsers.find(
+            (u) =>
+              (userData.email && (u.user_email === userData.email || u.email === userData.email)) ||
+              (userData.full_name && u.name?.toLowerCase() === userData.full_name.toLowerCase())
+          );
+          if (match) {
+            unifiUserId = match.id;
+          }
+        }
+
+        if (unifiUserId) {
+          await unifiClient.assignUserAccessPolicies(unifiUserId, policyIds);
+
+          if (pcoId) {
+            await db.doc(`organizations/${orgId}/synced_users/${pcoId}`).set(
+              {
+                unifi_user_id: unifiUserId,
+                status: policyIds.length > 0 ? 'active' : 'no_policy',
+                assigned_policy_ids: policyIds,
+                last_synced_at: new Date().toISOString(),
+                updated_at: nowTimestamp(),
+              },
+              { merge: true }
+            );
+          }
+
+          resultMessage = `Updated user ${unifiUserId}: assigned ${policyIds.length} access policy(ies).`;
+        } else {
+          // User not found in UniFi -> Create them instead
+          const userData = (command.user_data as Record<string, any>) || {};
+          const created = await unifiClient.createUser({
+            first_name: userData.first_name || 'User',
+            last_name: userData.last_name || '',
+            full_name: userData.full_name,
+            email: userData.email,
+            phone_number: userData.phone_number,
+            avatar: userData.avatar,
+            policy_ids: policyIds,
+          });
+
+          if (pcoId && created.id) {
+            await db.doc(`organizations/${orgId}/synced_users/${pcoId}`).set(
+              {
+                unifi_user_id: created.id,
+                status: policyIds.length > 0 ? 'active' : 'no_policy',
+                assigned_policy_ids: policyIds,
+                last_synced_at: new Date().toISOString(),
+                updated_at: nowTimestamp(),
+              },
+              { merge: true }
+            );
+          }
+
+          resultMessage = `User was not in UniFi; created new UniFi user (ID: ${created.id}) with ${policyIds.length} policy(ies).`;
+        }
       } else if (command.action === 'apply_update' || command.action === 'upgrade_agent') {
         const updateState = await checkForUpdate();
         if (updateState.updateAvailable) {

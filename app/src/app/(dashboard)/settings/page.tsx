@@ -151,7 +151,9 @@ export default function SettingsPage() {
   const [lockAfterStartMin, setLockAfterStartMin] = useState(15);
   const [pollInterval, setPollInterval] = useState(30);
   const [timezone, setTimezone] = useState('America/Chicago');
+  const [enableUserSync, setEnableUserSync] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingUserSync, setSavingUserSync] = useState(false);
   const [testingPco, setTestingPco] = useState(false);
   const [testingUnifi, setTestingUnifi] = useState(false);
 
@@ -230,6 +232,7 @@ export default function SettingsPage() {
           setLockAfterStartMin(s.lock_after_start_min ?? 15);
           setPollInterval(s.poll_interval_min);
           setTimezone(s.timezone ?? 'America/Chicago');
+          setEnableUserSync(Boolean(s.enable_user_sync));
         }
       })
       .finally(() => {
@@ -270,6 +273,22 @@ export default function SettingsPage() {
       setSaving(false);
     }
   }, [orgId, unlockBuffer, lockBuffer, lockTimingMode, lockAfterStartMin, pollInterval, timezone, showToast]);
+
+  const handleToggleUserSync = useCallback(async (newVal: boolean) => {
+    if (!orgId) return;
+    setSavingUserSync(true);
+    try {
+      await updateOrgSettings(orgId, {
+        enable_user_sync: newVal,
+      });
+      setEnableUserSync(newVal);
+      showToast(`User & Access Policy Sync has been ${newVal ? 'enabled' : 'disabled'}.`, 'success');
+    } catch {
+      showToast('Failed to update user sync setting.', 'error');
+    } finally {
+      setSavingUserSync(false);
+    }
+  }, [orgId, showToast]);
 
   async function handleDisconnectPco() {
     if (!orgId) return;
@@ -1036,8 +1055,94 @@ SKIP_TLS_VERIFY=true`}</pre>
           </div>
         </SectionCard>
 
-        {/* ── 4. Agent Software ── */}
-        <SectionCard title="4. Agent Software & Network Status">
+        {/* ── 4. User & Access Policy Sync ── */}
+        <SectionCard title="4. User & Access Policy Synchronization">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', lineHeight: 1.5, margin: 0 }}>
+              Automatically create UniFi users and assign door access policies based on Planning Center Online Lists.
+              When enabled, users added to mapped lists will be provisioned in UniFi Access with their assigned policy.
+              When removed from a list, the policy is revoked (additive policy model).
+            </p>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '1rem',
+                background: 'var(--color-bg-base)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border)',
+                marginTop: '0.5rem',
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.9375rem' }}>
+                  Enable User & Access Policy Sync
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>
+                  {enableUserSync
+                    ? 'Sync is active. Users in mapped lists are automatically synchronized with UniFi Access.'
+                    : 'Sync is currently paused. No user changes or policy updates will occur.'}
+                </div>
+              </div>
+
+              <label
+                style={{
+                  position: 'relative',
+                  display: 'inline-block',
+                  width: '2.75rem',
+                  height: '1.5rem',
+                  cursor: savingUserSync ? 'not-allowed' : 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={enableUserSync}
+                  disabled={savingUserSync}
+                  onChange={(e) => handleToggleUserSync(e.target.checked)}
+                  style={{ opacity: 0, width: 0, height: 0 }}
+                />
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: enableUserSync ? 'var(--color-primary)' : 'var(--color-border)',
+                    borderRadius: '1.5rem',
+                    transition: 'background-color 0.2s',
+                  }}
+                >
+                  <span
+                    style={{
+                      position: 'absolute',
+                      height: '1.125rem',
+                      width: '1.125rem',
+                      left: enableUserSync ? '1.375rem' : '0.1875rem',
+                      bottom: '0.1875rem',
+                      backgroundColor: 'white',
+                      borderRadius: '50%',
+                      transition: 'left 0.2s',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                    }}
+                  />
+                </span>
+              </label>
+            </div>
+
+            <div style={{ marginTop: '0.5rem' }}>
+              <a href="/mappings" className="btn btn-secondary btn-sm">
+                Manage List to Policy Mappings ➔
+              </a>
+            </div>
+          </div>
+        </SectionCard>
+
+        {/* ── 5. Agent Software ── */}
+        <SectionCard title="5. Agent Software & Network Status">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             {/* Version Overview Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(14rem, 1fr))', gap: '0.75rem' }}>

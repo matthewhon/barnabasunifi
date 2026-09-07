@@ -114,17 +114,31 @@ export const syncUnifiDoors = onCall<{ orgId: string }>(
         }
       }
 
+      const isUuid = (str: string) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
+      const validDoors = rawDoors.filter((d) => {
+        const id = String(d.id || d.unique_id || '');
+        const name = (d.full_name || d.name || '').trim();
+        return Boolean(id && name);
+      });
+
       const batch = db.batch();
       const now = FieldValue.serverTimestamp();
+      const validDoorIds = new Set<string>();
 
-      for (const door of rawDoors) {
+      for (const door of validDoors) {
         const doorId = String(door.id || door.unique_id || '');
         if (!doorId) continue;
+        validDoorIds.add(doorId);
+
+        const rawLabel = (door.full_name || door.name || '').trim();
+        const label = rawLabel || `Door ${doorId.slice(0, 8)}`;
 
         const doorRef = db.doc(`organizations/${orgId}/doors/${doorId}`);
         const record: Record<string, any> = {
           unifi_door_id: doorId,
-          label: door.full_name ?? door.name ?? doorId,
+          label,
           current_state: normalizeDoorState(door.door_lock_relay_status),
           door_position_status: door.door_position_status ?? null,
           device_state: door.device_state ?? null,
@@ -138,18 +152,37 @@ export const syncUnifiDoors = onCall<{ orgId: string }>(
           record.schedule_id = String(schedId);
         }
         if (door.schedule_name) {
-          record.schedule_name = String(door.schedule_name);
+          const cleanSchedName = String(door.schedule_name).trim();
+          record.schedule_name =
+            cleanSchedName && !isUuid(cleanSchedName) && !cleanSchedName.startsWith('unlock-')
+              ? cleanSchedName
+              : `${label} Unlock Schedule`;
         }
 
         batch.set(doorRef, record, { merge: true });
       }
+
+      // Prune phantom or orphaned door documents in Firestore
+      try {
+        const existingDoorsSnap = await db.collection(`organizations/${orgId}/doors`).get();
+        for (const docSnap of existingDoorsSnap.docs) {
+          const docId = docSnap.id;
+          const data = docSnap.data();
+          const docLabel = (data.label || '').trim();
+          if (!validDoorIds.has(docId)) {
+            if (!docLabel || isUuid(docLabel) || (isUuid(docId) && !data.last_accessed_at)) {
+              batch.delete(docSnap.ref);
+            }
+          }
+        }
+      } catch {}
 
       await batch.commit();
 
       return {
         success: true,
         mode: 'remote',
-        count: rawDoors.length,
+        count: validDoors.length,
       };
     }
 
