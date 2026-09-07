@@ -202,6 +202,7 @@ export const syncUnifiAccessLogs = onCall<{ orgId: string; backfill?: boolean; d
       }
 
       const host = remoteConfig.host.replace(/\/$/, '');
+      const devApiKey = remoteConfig.api_key || remoteConfig.access_token;
       const agent = new https.Agent({ rejectUnauthorized: false });
       const client = axios.create({
         baseURL: host,
@@ -214,6 +215,11 @@ export const syncUnifiAccessLogs = onCall<{ orgId: string; backfill?: boolean; d
         timeout: 15000,
       });
 
+      const devHeaders = {
+        'X-API-KEY': devApiKey,
+        Authorization: `Bearer ${devApiKey}`,
+      };
+
       let rawLogs: any[] = [];
       const lookbackSec = (days || 90) * 24 * 60 * 60;
       const sinceEpoch = Math.floor(Date.now() / 1000) - lookbackSec;
@@ -223,7 +229,7 @@ export const syncUnifiAccessLogs = onCall<{ orgId: string; backfill?: boolean; d
           topic: 'door_openings',
           page_size: 100,
           since: sinceEpoch,
-        });
+        }, { headers: devHeaders });
         rawLogs = Array.isArray(res.data?.data) ? res.data.data : [];
       } catch {
         try {
@@ -231,7 +237,7 @@ export const syncUnifiAccessLogs = onCall<{ orgId: string; backfill?: boolean; d
             topic: 'door_openings',
             page_size: 100,
             since: sinceEpoch,
-          });
+          }, { headers: devHeaders });
           rawLogs = Array.isArray(res.data?.data) ? res.data.data : [];
         } catch {
           try {

@@ -305,8 +305,10 @@ export default function SettingsPage() {
   const [unifiMode, setUnifiMode] = useState<'agent' | 'remote'>('agent');
   const [remoteHost, setRemoteHost] = useState('');
   const [remoteToken, setRemoteToken] = useState('');
+  const [remoteApiKey, setRemoteApiKey] = useState('');
   const [agentHost, setAgentHost] = useState('');
   const [agentToken, setAgentToken] = useState('');
+  const [agentApiKey, setAgentApiKey] = useState('');
   const [agentSkipTls, setAgentSkipTls] = useState(true);
   const [agentDiscoveredHost, setAgentDiscoveredHost] = useState('');
   const [wizardStep, setWizardStep] = useState(1);
@@ -374,10 +376,12 @@ export default function SettingsPage() {
       if (settings.unifi_remote) {
         setRemoteHost(settings.unifi_remote.host ?? '');
         setRemoteToken(settings.unifi_remote.access_token ?? '');
+        setRemoteApiKey(settings.unifi_remote.api_key ?? '');
       }
       if (settings.unifi_agent) {
         setAgentHost(settings.unifi_agent.host ?? '');
         setAgentToken(settings.unifi_agent.access_token ?? '');
+        setAgentApiKey(settings.unifi_agent.api_key ?? '');
         setAgentSkipTls(settings.unifi_agent.skip_tls_verify ?? true);
         setAgentDiscoveredHost(settings.unifi_agent.auto_discovered_host ?? '');
       }
@@ -390,7 +394,7 @@ export default function SettingsPage() {
     try {
       await updateOrgSettings(orgId, {
         unifi_mode: mode,
-        ...(mode === 'remote' ? { unifi_remote: { host: remoteHost.trim(), access_token: remoteToken.trim() } } : {}),
+        ...(mode === 'remote' ? { unifi_remote: { host: remoteHost.trim(), access_token: remoteToken.trim(), api_key: remoteApiKey.trim() } } : {}),
       });
       setUnifiMode(mode);
       showToast(`UniFi connection mode updated to ${mode === 'agent' ? 'Local Agent' : 'Remote Direct'}.`, 'success');
@@ -409,6 +413,7 @@ export default function SettingsPage() {
         unifi_agent: {
           host: agentHost.trim(),
           access_token: agentToken.trim(),
+          api_key: agentApiKey.trim(),
           skip_tls_verify: agentSkipTls,
           auto_discovered_host: agentDiscoveredHost,
         },
@@ -679,14 +684,25 @@ export default function SettingsPage() {
                 <span className="form-hint">Public HTTPS URL of your UniFi OS Console or Access application.</span>
               </div>
               <div className="form-group" style={{ marginBottom: '1rem' }}>
-                <label className="form-label">UniFi Developer API Bearer Token</label>
+                <label className="form-label">UniFi Access API Token</label>
                 <input
                   type="password"
                   className="form-input"
-                  placeholder="API Token generated in UniFi Access -> Settings -> API"
+                  placeholder="Console / Access API Token"
                   value={remoteToken}
                   onChange={(e) => setRemoteToken(e.target.value)}
                 />
+              </div>
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
+                <label className="form-label">UniFi Developer API Key (Optional — for Access Logs &amp; Schedules)</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  placeholder="Key generated in UniFi Access -> Settings -> Developer API"
+                  value={remoteApiKey}
+                  onChange={(e) => setRemoteApiKey(e.target.value)}
+                />
+                <span className="form-hint">Generated in UniFi Access under Settings &gt; Developer API. Required for access log history.</span>
               </div>
               <button
                 className="btn btn-primary btn-sm"
@@ -704,17 +720,29 @@ export default function SettingsPage() {
                   🏢 UniFi Access Credentials
                 </h4>
                 <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginBottom: '1rem' }}>
-                  Store your UniFi Access API token securely in the cloud. The Docker agent will pull it automatically upon pairing.
+                  Store your UniFi Access credentials securely in the cloud. The Docker agent will pull them automatically upon pairing.
                 </p>
 
                 <div className="form-group" style={{ marginBottom: '1rem' }}>
-                  <label className="form-label">UniFi Developer API Bearer Token <span style={{ color: 'var(--color-danger)' }}>*</span></label>
+                  <label className="form-label">UniFi Access API Token <span style={{ color: 'var(--color-danger)' }}>*</span></label>
                   <input
                     type="password"
                     className="form-input"
-                    placeholder="API Token generated in UniFi Access -> Settings -> Developer API"
+                    placeholder="API Token generated in UniFi Access / Console"
                     value={agentToken}
                     onChange={(e) => setAgentToken(e.target.value)}
+                  />
+                  <span className="form-hint">Primary console token used for door status synchronization and actuation.</span>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label className="form-label">UniFi Developer API Key (Optional — for Access Logs &amp; Schedules)</label>
+                  <input
+                    type="password"
+                    className="form-input"
+                    placeholder="API Key generated in UniFi Access -> Settings -> Developer API"
+                    value={agentApiKey}
+                    onChange={(e) => setAgentApiKey(e.target.value)}
                   />
                   <span className="form-hint">Created inside your local UniFi Access app under Settings &gt; General &gt; Developer API.</span>
                 </div>

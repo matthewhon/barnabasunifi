@@ -11,6 +11,7 @@ import * as dotenv from 'dotenv';
 export interface AgentConfig {
   unifiHost: string;
   unifiAccessToken: string;
+  unifiApiKey?: string;
   firebaseServiceAccountPath: string;
   firebaseProjectId: string;
   orgId: string;
@@ -134,6 +135,8 @@ export function getConfigurationStatus(): ConfigStatus {
   const unifiAccessToken = getEnv('UNIFI_ACCESS_TOKEN');
   if (!unifiAccessToken) missing.push('UNIFI_ACCESS_TOKEN');
 
+  const unifiApiKey = getEnv('UNIFI_API_KEY');
+
   const firebaseProjectId = getEnv('FIREBASE_PROJECT_ID', 'barnabasunfi');
   const orgId = getEnv('ORG_ID');
   if (!orgId) missing.push('ORG_ID');
@@ -153,6 +156,7 @@ export function getConfigurationStatus(): ConfigStatus {
   const config: AgentConfig = {
     unifiHost: unifiHost.replace(/\/$/, ''),
     unifiAccessToken,
+    unifiApiKey: unifiApiKey || undefined,
     firebaseServiceAccountPath: resolvedSaPath || './service-account.json',
     firebaseProjectId,
     orgId,

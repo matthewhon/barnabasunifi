@@ -73,7 +73,7 @@ async function attemptAutoRegistration(connectionToken: string): Promise<boolean
     );
 
     if (response.data?.ok) {
-      const { orgId, customToken, projectId, unifiHost, unifiAccessToken, skipTlsVerify } = response.data;
+      const { orgId, customToken, projectId, unifiHost, unifiAccessToken, unifiApiKey, skipTlsVerify } = response.data;
       logger.info(`[AutoRegister] ✓ Paired successfully with Organization: ${orgId}`);
 
       saveConfig({
@@ -82,6 +82,7 @@ async function attemptAutoRegistration(connectionToken: string): Promise<boolean
         AGENT_AUTH_TOKEN: customToken,
         ...(unifiHost ? { UNIFI_HOST: unifiHost } : {}),
         ...(unifiAccessToken ? { UNIFI_ACCESS_TOKEN: unifiAccessToken } : {}),
+        ...(unifiApiKey ? { UNIFI_API_KEY: unifiApiKey } : {}),
         ...(skipTlsVerify !== undefined ? { SKIP_TLS_VERIFY: String(skipTlsVerify) } : {}),
       });
       return true;
@@ -179,7 +180,8 @@ async function startBridgeWorker(): Promise<void> {
   const unifiClient = new UnifiAccessClient(
     config.unifiHost,
     config.unifiAccessToken,
-    config.skipTlsVerify
+    config.skipTlsVerify,
+    config.unifiApiKey
   );
 
   // 3. Test UniFi connectivity with auto-discovery fallback
@@ -193,7 +195,7 @@ async function startBridgeWorker(): Promise<void> {
         logger.info(`[Bridge] Discovered active console on LAN at: ${discovered}. Connecting…`);
         config.unifiHost = discovered;
         saveConfig({ UNIFI_HOST: discovered });
-        unifiClient.updateCredentials(discovered, config.unifiAccessToken, config.skipTlsVerify);
+        unifiClient.updateCredentials(discovered, config.unifiAccessToken, config.skipTlsVerify, config.unifiApiKey);
         connected = await unifiClient.testConnection();
       }
     }
@@ -348,6 +350,14 @@ async function startBridgeWorker(): Promise<void> {
         changed = true;
       }
 
+      const incomingApiKey = unifiConfig.api_key || unifiConfig.developer_api_key || '';
+      if (incomingApiKey && incomingApiKey !== config.unifiApiKey) {
+        logger.info('[Bridge] Detected updated UniFi Developer API key in cloud settings. Updating…');
+        config.unifiApiKey = incomingApiKey;
+        saveConfig({ UNIFI_API_KEY: incomingApiKey });
+        changed = true;
+      }
+
       if (unifiConfig.host && unifiConfig.host !== config.unifiHost) {
         logger.info(`[Bridge] Detected updated UniFi Host (${unifiConfig.host}) in cloud settings. Updating…`);
         config.unifiHost = unifiConfig.host;
@@ -364,7 +374,7 @@ async function startBridgeWorker(): Promise<void> {
 
       if (changed) {
         logger.info('[Bridge] Re-applying cloud credentials to UniFi client…');
-        unifiClient.updateCredentials(config.unifiHost, config.unifiAccessToken, config.skipTlsVerify);
+        unifiClient.updateCredentials(config.unifiHost, config.unifiAccessToken, config.skipTlsVerify, config.unifiApiKey);
         const testOk = await unifiClient.testConnection();
         bridgeState.unifiConnected = testOk;
         if (testOk) {

@@ -53,10 +53,12 @@ export interface OrgSettings {
   unifi_remote?: {
     host: string;
     access_token: string;
+    api_key?: string;
   };
   unifi_agent?: {
     host?: string;
     access_token: string;
+    api_key?: string;
     skip_tls_verify?: boolean;
     auto_discovered_host?: string;
   };

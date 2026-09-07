@@ -488,8 +488,16 @@
       <div class="form-group">
         <label for="unifiToken">UniFi Access API Token</label>
         <div class="input-with-btn">
-          <input type="password" id="unifiToken" placeholder="Paste Developer API token">
+          <input type="password" id="unifiToken" placeholder="Paste UniFi Access Token">
           <button type="button" class="btn btn-secondary btn-sm" onclick="toggleTokenVisibility()">👁️ Show</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="unifiApiKey">UniFi Developer API Key <span style="font-size: 0.75rem; color: var(--text-secondary); font-weight: normal;">(Optional — for Access Logs &amp; Integrations)</span></label>
+        <div class="input-with-btn">
+          <input type="password" id="unifiApiKey" placeholder="Paste Developer API Key (UniFi Access → Settings → Developer API)">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="toggleApiKeyVisibility()">👁️ Show</button>
         </div>
       </div>
 
@@ -617,6 +625,7 @@
           const fields = [
             { id: 'unifiHost', val: data.config.unifiHost },
             { id: 'unifiToken', val: data.config.unifiAccessToken },
+            { id: 'unifiApiKey', val: data.config.unifiApiKey },
             { id: 'orgId', val: data.config.orgId },
             { id: 'agentId', val: data.config.agentId || 'agent-main-campus' },
             { id: 'agentLabel', val: data.config.agentLabel || 'Main Campus Agent' },
@@ -751,9 +760,15 @@
       inp.type = inp.type === 'password' ? 'text' : 'password';
     }
 
+    function toggleApiKeyVisibility() {
+      const inp = document.getElementById('unifiApiKey');
+      inp.type = inp.type === 'password' ? 'text' : 'password';
+    }
+
     async function testUnifi() {
       const host = document.getElementById('unifiHost').value.trim();
       const token = document.getElementById('unifiToken').value.trim();
+      const apiKey = document.getElementById('unifiApiKey').value.trim();
       const skipTls = document.getElementById('skipTls').checked;
       const resEl = document.getElementById('unifiTestResult');
 
@@ -768,7 +783,7 @@
         const res = await fetch('/api/test-unifi', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ host, token, skipTls })
+          body: JSON.stringify({ host, token, apiKey, skipTls })
         });
         const data = await res.json();
         if (data.ok) {
@@ -836,6 +851,9 @@
           if (data.unifiAccessToken) {
             document.getElementById('unifiToken').value = data.unifiAccessToken;
           }
+          if (data.unifiApiKey) {
+            document.getElementById('unifiApiKey').value = data.unifiApiKey;
+          }
           if (data.orgId) {
             document.getElementById('orgId').value = data.orgId;
           }
@@ -871,6 +889,7 @@
       const payload = {
         UNIFI_HOST: document.getElementById('unifiHost').value.trim(),
         UNIFI_ACCESS_TOKEN: document.getElementById('unifiToken').value.trim(),
+        UNIFI_API_KEY: document.getElementById('unifiApiKey').value.trim(),
         SKIP_TLS_VERIFY: document.getElementById('skipTls').checked ? 'true' : 'false',
         ORG_ID: document.getElementById('orgId').value.trim(),
         AGENT_ID: document.getElementById('agentId').value.trim(),

@@ -835,6 +835,8 @@ function parseHubDoorStatus(
 export class UnifiAccessClient {
   private readonly http: AxiosInstance;
   private host: string;
+  private token: string;
+  private apiKey: string;
   private doorToHubMap: Map<string, string> = new Map();
   private doorToPortMap: Map<string, 'd1' | 'd2'> = new Map();
   /** Latest raw device list from the v2 devices API, used for hub validation in unlockDoor */
@@ -842,12 +844,15 @@ export class UnifiAccessClient {
 
   /**
    * @param host           - Base URL of the UniFi console, e.g. https://192.168.1.1
-   * @param token          - UniFi Access API token
+   * @param token          - UniFi Access API / console token
    * @param skipTlsVerify  - When true, disables TLS certificate validation
    *                         (needed for self-signed certs on UniFi consoles)
+   * @param apiKey         - Optional dedicated UniFi Access Developer API key (for access logs & integrations)
    */
-  constructor(host: string, token: string, skipTlsVerify = false) {
+  constructor(host: string, token: string, skipTlsVerify = false, apiKey?: string) {
     this.host = host.replace(/\/$/, '');
+    this.token = token;
+    this.apiKey = apiKey || '';
 
     const httpsAgent = new https.Agent({
       rejectUnauthorized: !skipTlsVerify,
@@ -865,8 +870,21 @@ export class UnifiAccessClient {
       timeout: 15_000,
     });
 
-    // Log outgoing requests at debug level
+    // Log outgoing requests at debug level & dynamically apply Developer API Key when targeting developer routes
     this.http.interceptors.request.use((config) => {
+      const url = config.url || '';
+      const isDevEndpoint =
+        url.includes(':12445') ||
+        url.includes('/developer/') ||
+        url.includes('/integration/');
+
+      const effectiveKey = (isDevEndpoint && this.apiKey) ? this.apiKey : (this.token || this.apiKey);
+      if (effectiveKey) {
+        config.headers = config.headers || {};
+        config.headers['Authorization'] = `Bearer ${effectiveKey}`;
+        config.headers['X-API-KEY'] = effectiveKey;
+      }
+
       logger.debug(`UniFi → ${config.method?.toUpperCase()} ${config.url}`);
       return config;
     });
@@ -1063,8 +1081,12 @@ export class UnifiAccessClient {
   /**
    * Dynamically update host and token (e.g. after cloud config pull or token rotation).
    */
-  updateCredentials(host: string, token: string, skipTlsVerify?: boolean): void {
+  updateCredentials(host: string, token: string, skipTlsVerify?: boolean, apiKey?: string): void {
     this.host = host.replace(/\/$/, '');
+    this.token = token;
+    if (apiKey !== undefined) {
+      this.apiKey = apiKey;
+    }
     this.http.defaults.baseURL = this.host;
     this.http.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     this.http.defaults.headers.common['X-API-KEY'] = token;
@@ -2034,9 +2056,8 @@ export class UnifiAccessClient {
     const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
     try {
       const u = new URL(this.host);
-      // 1. Dedicated Developer API port (12445) on controller LAN (both https and http)
+      // 1. Dedicated Developer API port (12445) on controller LAN (HTTPS)
       endpoints.push(`https://${u.hostname}:12445/api/v1/developer/${resource}${cleanSub}`);
-      endpoints.push(`http://${u.hostname}:12445/api/v1/developer/${resource}${cleanSub}`);
     } catch {}
 
     // 2. Port 443 proxy endpoints

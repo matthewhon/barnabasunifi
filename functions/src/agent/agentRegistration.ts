@@ -154,6 +154,7 @@ export const registerAgentWithToken = onRequest({ cors: true }, async (req, res)
 
     const effectiveUnifiHost = unifiAgentConfig?.host || unifiHost || unifiAgentConfig?.auto_discovered_host || '';
     const unifiAccessToken = unifiAgentConfig?.access_token || '';
+    const unifiApiKey = unifiAgentConfig?.api_key || unifiAgentConfig?.developer_api_key || '';
     const skipTlsVerify = unifiAgentConfig?.skip_tls_verify ?? true;
 
     // 4. Register or update the agent in Firestore
@@ -211,6 +212,7 @@ export const registerAgentWithToken = onRequest({ cors: true }, async (req, res)
       projectId: process.env.GCLOUD_PROJECT || 'barnabasunfi',
       unifiHost: effectiveUnifiHost,
       unifiAccessToken,
+      unifiApiKey,
       skipTlsVerify,
     });
   } catch (err: any) {

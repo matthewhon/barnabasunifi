@@ -104,6 +104,7 @@ export function startWebServer(
         ? {
             unifiHost: configStatus.config.unifiHost,
             unifiAccessToken: configStatus.config.unifiAccessToken || '',
+            unifiApiKey: configStatus.config.unifiApiKey || '',
             orgId: configStatus.config.orgId,
             agentId: configStatus.config.agentId,
             agentLabel: configStatus.config.agentLabel,
@@ -113,6 +114,7 @@ export function startWebServer(
         : {
             unifiHost: process.env.UNIFI_HOST || '',
             unifiAccessToken: process.env.UNIFI_ACCESS_TOKEN || '',
+            unifiApiKey: process.env.UNIFI_API_KEY || '',
             orgId: process.env.ORG_ID || '',
             agentId: process.env.AGENT_ID || 'agent-main-campus',
             agentLabel: process.env.AGENT_LABEL || 'Main Campus Agent',
@@ -144,14 +146,14 @@ export function startWebServer(
 
   // POST /api/test-unifi
   app.post('/api/test-unifi', async (req, res) => {
-    const { host, token, skipTls } = req.body || {};
+    const { host, token, apiKey, skipTls } = req.body || {};
     if (!host) {
       res.status(400).json({ ok: false, error: 'Host is required' });
       return;
     }
 
     try {
-      const client = new UnifiAccessClient(host, token || '', Boolean(skipTls));
+      const client = new UnifiAccessClient(host, token || '', Boolean(skipTls), apiKey);
       const connected = await client.testConnection();
       if (!connected) {
         res.json({ ok: false, error: 'Could not connect to host. Check IP or self-signed cert setting.' });
@@ -227,7 +229,7 @@ export function startWebServer(
       );
 
       if (response.data?.ok) {
-        const { orgId, customToken, projectId, unifiHost: returnedHost, unifiAccessToken, skipTlsVerify } = response.data;
+        const { orgId, customToken, projectId, unifiHost: returnedHost, unifiAccessToken, unifiApiKey, skipTlsVerify } = response.data;
         // Save to config
         saveConfig({
           ORG_ID: orgId,
@@ -238,6 +240,7 @@ export function startWebServer(
           CONNECTION_TOKEN: token,
           ...(returnedHost ? { UNIFI_HOST: returnedHost } : {}),
           ...(unifiAccessToken ? { UNIFI_ACCESS_TOKEN: unifiAccessToken } : {}),
+          ...(unifiApiKey ? { UNIFI_API_KEY: unifiApiKey } : {}),
           ...(skipTlsVerify !== undefined ? { SKIP_TLS_VERIFY: String(skipTlsVerify) } : {}),
         });
 
@@ -254,6 +257,7 @@ export function startWebServer(
           agentLabel: label || process.env.AGENT_LABEL || 'Main Campus Agent',
           unifiHost: returnedHost || unifiHost,
           unifiAccessToken: unifiAccessToken || '',
+          unifiApiKey: unifiApiKey || '',
           skipTlsVerify: skipTlsVerify ?? true,
           projectId: projectId || 'barnabasunfi',
           message: 'Agent registered and linked successfully! Credentials pulled from cloud.',
@@ -336,6 +340,10 @@ export function startWebServer(
     // Don't wipe existing UNIFI_ACCESS_TOKEN if empty string was submitted
     if (updates.UNIFI_ACCESS_TOKEN === '' && (process.env.UNIFI_ACCESS_TOKEN || '').trim()) {
       delete updates.UNIFI_ACCESS_TOKEN;
+    }
+    // Don't wipe existing UNIFI_API_KEY if empty string was submitted
+    if (updates.UNIFI_API_KEY === '' && (process.env.UNIFI_API_KEY || '').trim()) {
+      delete updates.UNIFI_API_KEY;
     }
     try {
       saveConfig(updates);
