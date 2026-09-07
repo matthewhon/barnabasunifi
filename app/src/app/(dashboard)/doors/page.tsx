@@ -271,8 +271,13 @@ function AgentStatusRow({
   const isOnline = agent.status === 'online';
   const isDegraded = agent.status === 'degraded';
   const targetVersion = agent.latest_version || latestVersion;
-  const isOutdated = Boolean(targetVersion && agent.version && agent.version !== targetVersion);
+  const localVer = agent.version;
+  const isOutdated = Boolean(targetVersion && localVer && localVer !== targetVersion);
+  const isAhead = Boolean(targetVersion && localVer && localVer > targetVersion);
+  const isExactMatch = Boolean(targetVersion && localVer && localVer === targetVersion);
+
   const [approving, setApproving] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [togglingAuto, setTogglingAuto] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -301,6 +306,29 @@ function AgentStatusRow({
     }
   };
 
+  const handleRestart = async () => {
+    if (!agent.org_id) return;
+    if (!window.confirm(`Send restart signal to reboot Docker agent "${agent.label || agent.id}"?`)) {
+      return;
+    }
+    setRestarting(true);
+    setMsg(null);
+    try {
+      await createDoorCommand(agent.org_id, {
+        org_id: agent.org_id,
+        action: 'restart_agent',
+        status: 'queued',
+        execute_at: new Date().toISOString(),
+        triggered_by: 'manual',
+      });
+      setMsg('Restart command queued! Docker container is rebooting…');
+    } catch (err: any) {
+      setMsg(`Error sending restart command: ${err.message}`);
+    } finally {
+      setRestarting(false);
+    }
+  };
+
   const handleToggleAuto = async () => {
     setTogglingAuto(true);
     try {
@@ -326,51 +354,64 @@ function AgentStatusRow({
           alignItems: 'center',
           gap: '0.75rem',
           flexWrap: 'wrap',
+          justifyContent: 'space-between',
         }}
       >
-        <div
-          style={{
-            width: '0.5rem',
-            height: '0.5rem',
-            borderRadius: '50%',
-            flexShrink: 0,
-            background: isOnline
-              ? 'var(--color-success)'
-              : isDegraded
-              ? 'var(--color-warning)'
-              : 'var(--color-text-muted)',
-            boxShadow: isOnline ? '0 0 0 3px rgba(34,197,94,0.25)' : undefined,
-          }}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div
+            style={{
+              width: '0.5rem',
+              height: '0.5rem',
+              borderRadius: '50%',
+              flexShrink: 0,
+              background: isOnline
+                ? 'var(--color-success)'
+                : isDegraded
+                ? 'var(--color-warning)'
+                : 'var(--color-text-muted)',
+              boxShadow: isOnline ? '0 0 0 3px rgba(34,197,94,0.25)' : undefined,
+            }}
+          />
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
             <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
               {agent.label}
             </span>
             <span className="badge badge-neutral" style={{ fontSize: '0.75rem', fontFamily: 'monospace' }}>
-              v{agent.version}
+              v{localVer}
             </span>
-            {agent.local_ip && (
-              <span className="badge badge-neutral" style={{ fontSize: '0.6875rem', fontFamily: 'monospace', gap: '0.25rem' }}>
-                🌐 {agent.local_ip}
+            {agent.local_ip ? (
+              <span className="badge badge-neutral" style={{ fontSize: '0.6875rem', fontFamily: 'monospace', gap: '0.25rem', color: '#38bdf8' }}>
+                📍 IP: {agent.local_ip}
+              </span>
+            ) : (
+              <span className="badge badge-neutral" style={{ fontSize: '0.6875rem', opacity: 0.75 }}>
+                📍 IP: Detecting…
               </span>
             )}
-            {isOutdated ? (
-              <span
-                className="badge badge-warning"
-                style={{ fontSize: '0.6875rem', fontWeight: 600 }}
-              >
-                Update available: v{targetVersion}
-              </span>
-            ) : latestVersion ? (
-              <span className="badge badge-success" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
-                Up to date
-              </span>
+            {targetVersion ? (
+              isOutdated ? (
+                <span
+                  className="badge badge-warning"
+                  style={{ fontSize: '0.6875rem', fontWeight: 600 }}
+                >
+                  ⚠️ Update available: Behind v{localVer} → v{targetVersion}
+                </span>
+              ) : isExactMatch ? (
+                <span className="badge badge-success" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
+                  ✅ Up to date (v{targetVersion})
+                </span>
+              ) : isAhead ? (
+                <span className="badge badge-neutral" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
+                  ⚡ Ahead of release (v{localVer} &gt; v{targetVersion})
+                </span>
+              ) : null
             ) : null}
           </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             {agent.hostname && <span>Host: {agent.hostname}</span>}
             <span>Capabilities: {agent.capabilities?.join(', ') || 'door management'}</span>
           </div>
+        </div>
 
         {/* Update action / status controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', flexWrap: 'wrap' }}>
@@ -426,9 +467,20 @@ function AgentStatusRow({
               onClick={handleApprove}
               disabled={approving}
             >
-              {approving ? 'Approving…' : `🚀 Approve & Deploy v${targetVersion}`}
+              {approving ? 'Approving…' : `🚀 Deploy v${targetVersion}`}
             </button>
           )}
+
+          {/* Restart Docker Container Button */}
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+            onClick={handleRestart}
+            disabled={restarting}
+            title="Reboot the local Docker agent container"
+          >
+            {restarting ? 'Rebooting…' : '🔄 Restart Container'}
+          </button>
 
           {/* Auto-deploy toggle */}
           <label

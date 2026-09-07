@@ -8,12 +8,29 @@ import cors from 'cors';
 import multer from 'multer';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { logger, getRecentLogs } from '../logger';
 import { getConfigurationStatus, saveConfig, isServiceAccountPresent } from '../config';
 import axios from 'axios';
 import { scanSubnet } from './scanner';
 import { UnifiAccessClient } from '../unifi/access';
 import { getUpdateState, checkForUpdate, applyPendingUpdate } from '../firebase/updateChecker';
+
+function getLocalIp(): string | null {
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      const iface = interfaces[name];
+      if (!iface) continue;
+      for (const alias of iface) {
+        if (alias.family === 'IPv4' && !alias.internal) {
+          return alias.address;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
 
 export interface AgentBridgeState {
   status: 'unconfigured' | 'starting' | 'running' | 'error';
@@ -71,6 +88,9 @@ export function startWebServer(
       doorCount: state.doorCount,
       lastSync: state.lastSync ? state.lastSync.toISOString() : null,
       error: state.errorMessage,
+      localIp: getLocalIp(),
+      hostname: os.hostname(),
+      platform: `${os.type()} ${os.release()}`,
       ...(() => {
         const upd = getUpdateState();
         return {

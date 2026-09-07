@@ -1014,7 +1014,7 @@ SKIP_TLS_VERIFY=true`}</pre>
             {/* Version Overview Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(14rem, 1fr))', gap: '0.75rem' }}>
               <div style={{ padding: '0.75rem 1rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>Dashboard Version</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>Dashboard Web Version</div>
                 <div style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: '0.9375rem' }}>
                   v{process.env.NEXT_PUBLIC_APP_VERSION || '1.0.0'}
                 </div>
@@ -1035,7 +1035,7 @@ SKIP_TLS_VERIFY=true`}</pre>
                     Refresh
                   </button>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                   {latestRelease ? (
                     <span className="badge badge-success" style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
                       v{latestRelease.version}
@@ -1050,11 +1050,32 @@ SKIP_TLS_VERIFY=true`}</pre>
                   )}
                 </div>
               </div>
+
+              {/* Local Agent IP & Version Card */}
+              <div style={{ padding: '0.75rem 1rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>Local Agent LAN IP</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  {agents.length > 0 && agents[0].local_ip ? (
+                    <span className="badge badge-neutral" style={{ fontFamily: 'monospace', fontSize: '0.875rem', color: '#38bdf8' }}>
+                      📍 {agents[0].local_ip}
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                      {agents.length > 0 ? 'IP detecting on next heartbeat…' : 'No agent connected'}
+                    </span>
+                  )}
+                  {agents.length > 0 && agents[0].version && (
+                    <span className="badge badge-neutral" style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                      (Local v{agents[0].version})
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
 
             {latestRelease?.changelog && (
               <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', padding: '0.5rem 0.75rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
-                <strong>Latest Changelog:</strong> {latestRelease.changelog}
+                <strong>Latest Release Notes:</strong> {latestRelease.changelog}
               </div>
             )}
 
@@ -1075,7 +1096,10 @@ SKIP_TLS_VERIFY=true`}</pre>
                   {agents.map((agent) => {
                     const isOnline = agent.status === 'online';
                     const targetVersion = latestRelease?.version;
-                    const isOutdated = Boolean(targetVersion && agent.version && targetVersion !== agent.version);
+                    const localVer = agent.version;
+                    const isOutdated = Boolean(targetVersion && localVer && targetVersion !== localVer);
+                    const isAhead = Boolean(targetVersion && localVer && localVer > targetVersion);
+                    const isExactMatch = Boolean(targetVersion && localVer && targetVersion === localVer);
 
                     return (
                       <div
@@ -1100,12 +1124,12 @@ SKIP_TLS_VERIFY=true`}</pre>
                                 {isOnline ? '🟢 Online' : '⚪ Offline'}
                               </span>
                               {agent.local_ip ? (
-                                <span className="badge badge-neutral" style={{ fontSize: '0.75rem', fontFamily: 'monospace', gap: '0.25rem' }}>
+                                <span className="badge badge-neutral" style={{ fontSize: '0.75rem', fontFamily: 'monospace', gap: '0.25rem', color: '#38bdf8' }}>
                                   📍 IP: {agent.local_ip}
                                 </span>
                               ) : (
                                 <span className="badge badge-neutral" style={{ fontSize: '0.6875rem', opacity: 0.75 }}>
-                                  IP: Unknown
+                                  📍 IP: Detecting…
                                 </span>
                               )}
                               {agent.hostname && (
@@ -1125,51 +1149,68 @@ SKIP_TLS_VERIFY=true`}</pre>
                               className="btn btn-secondary btn-sm"
                               onClick={handleRestartAgent}
                               disabled={restartingAgent}
-                              style={{ fontSize: '0.75rem' }}
+                              style={{ fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                              title="Send restart signal to reboot the Docker agent image"
                             >
-                              {restartingAgent ? 'Rebooting…' : '🔄 Restart Agent'}
+                              {restartingAgent ? 'Rebooting…' : '🔄 Restart Docker Image'}
                             </button>
                           </div>
                         </div>
 
-                        {/* Version Comparison Box */}
+                        {/* Version Comparison / Diff Box */}
                         <div
                           style={{
-                            padding: '0.625rem 0.875rem',
+                            padding: '0.75rem 1rem',
                             background: 'var(--color-bg-base)',
                             borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--color-border)',
+                            border: isOutdated ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid var(--color-border)',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
-                            gap: '0.75rem',
+                            gap: '1rem',
                             flexWrap: 'wrap',
                           }}
                         >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.8125rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', fontSize: '0.8125rem' }}>
                             <div>
-                              <span style={{ color: 'var(--color-text-muted)' }}>Agent Local Version: </span>
-                              <strong style={{ fontFamily: 'monospace' }}>v{agent.version || 'Unknown'}</strong>
+                              <span style={{ color: 'var(--color-text-muted)' }}>Local Agent Version: </span>
+                              <strong style={{ fontFamily: 'monospace' }}>v{localVer || 'Unknown'}</strong>
                             </div>
+                            {agent.local_ip && (
+                              <div>
+                                <span style={{ color: 'var(--color-text-muted)' }}>Local Agent IP: </span>
+                                <strong style={{ fontFamily: 'monospace', color: '#38bdf8' }}>{agent.local_ip}</strong>
+                              </div>
+                            )}
                             <div>
                               <span style={{ color: 'var(--color-text-muted)' }}>Latest Cloud Release: </span>
                               <strong style={{ fontFamily: 'monospace' }}>
                                 {targetVersion ? `v${targetVersion}` : 'None published'}
                               </strong>
                             </div>
+
+                            {/* Difference Status Badge */}
                             {targetVersion ? (
                               isOutdated ? (
                                 <span className="badge badge-warning" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
-                                  ⚠️ Update Available (Behind: v{agent.version} → v{targetVersion})
+                                  ⚠️ Update Available (Behind: v{localVer} → v{targetVersion})
+                                </span>
+                              ) : isExactMatch ? (
+                                <span className="badge badge-success" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
+                                  ✅ Up to date with latest release (v{targetVersion})
+                                </span>
+                              ) : isAhead ? (
+                                <span className="badge badge-neutral" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
+                                  ⚡ Ahead of cloud release (Local v{localVer} &gt; Cloud v{targetVersion})
                                 </span>
                               ) : (
-                                <span className="badge badge-success" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
-                                  ✅ Up to date with latest release
+                                <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
+                                  Running local build v{localVer}
                                 </span>
                               )
                             ) : (
                               <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
-                                Running local build v{agent.version}
+                                Running local build v{localVer}
                               </span>
                             )}
                           </div>

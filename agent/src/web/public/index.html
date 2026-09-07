@@ -381,14 +381,15 @@
           <p>On-Premises UniFi Access & Cloud Bridge</p>
         </div>
       </div>
-      <div style="display: flex; align-items: center; gap: 0.75rem;">
+      <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
         <span id="versionBadge" style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace; background: var(--bg-surface); border: 1px solid var(--border); padding: 0.2rem 0.6rem; border-radius: 6px;">v—</span>
+        <span id="ipBadge" style="font-size: 0.75rem; color: #38bdf8; font-family: monospace; background: var(--bg-surface); border: 1px solid var(--border); padding: 0.2rem 0.6rem; border-radius: 6px;">📍 IP: —</span>
         <div id="statusBadge" class="badge badge-unconfigured">
           <span class="badge-dot"></span>
           <span id="statusText">Checking...</span>
         </div>
-        <button id="btnHeaderRestart" class="btn btn-secondary btn-sm" onclick="confirmRestartAgent()" title="Restart Docker Agent Container">
-          🔄 Restart
+        <button id="btnHeaderRestart" class="btn btn-secondary btn-sm" onclick="confirmRestartAgent()" title="Restart Docker Agent Image">
+          🔄 Restart Docker Image
         </button>
       </div>
     </header>
@@ -414,16 +415,19 @@
       </div>
     </div>
 
-    <!-- Software Update Section -->
+    <!-- Software Update / Version Comparison Section -->
     <div id="updateSection" class="section" style="display: none; border-color: var(--warning); background: var(--warning-bg);">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
         <div>
           <h2 class="section-title" style="color: var(--warning); margin-bottom: 0.25rem;">⬆️ Software Update Available</h2>
           <p style="font-size: 0.8125rem; color: var(--text-secondary); margin: 0;">
-            Current: <span id="updateCurrentVer" style="font-family: monospace;">—</span>
+            Local Version: <span id="updateCurrentVer" style="font-family: monospace; font-weight: 600;">—</span>
+            &nbsp;·&nbsp;
+            Local IP: <span id="updateLocalIp" style="font-family: monospace; color: #38bdf8;">—</span>
             &nbsp;→&nbsp;
-            Latest: <span id="updateLatestVer" style="font-family: monospace; color: var(--warning); font-weight: 600;">—</span>
+            Latest Release: <span id="updateLatestVer" style="font-family: monospace; color: var(--warning); font-weight: 600;">—</span>
           </p>
+          <div id="updateDiffBadge" style="margin-top: 0.35rem; font-size: 0.75rem;"></div>
           <p id="updateChangelog" style="font-size: 0.8125rem; color: var(--text-muted); margin-top: 0.5rem;"></p>
         </div>
         <div style="display: flex; gap: 0.5rem;">
@@ -631,19 +635,29 @@
           }
         }
 
-        // Version badge
+        // Version and IP badge
         if (data.version) {
           document.getElementById('versionBadge').innerText = `v${data.version}`;
         }
+        if (data.localIp) {
+          document.getElementById('ipBadge').innerText = `📍 IP: ${data.localIp}`;
+          document.getElementById('ipBadge').style.display = 'inline-flex';
+        } else {
+          document.getElementById('ipBadge').innerText = `📍 IP: Detecting...`;
+        }
 
-        // Update banner
+        // Update banner & version diff comparison
+        const updateSec = document.getElementById('updateSection');
+        const diffBadge = document.getElementById('updateDiffBadge');
         if (data.updateAvailable && data.latestVersion) {
-          document.getElementById('updateSection').style.display = 'block';
-          document.getElementById('updateCurrentVer').innerText = `v${data.version}`;
+          updateSec.style.display = 'block';
+          document.getElementById('updateCurrentVer').innerText = `v${data.version || '1.0.0'}`;
+          document.getElementById('updateLocalIp').innerText = data.localIp || 'Unknown';
           document.getElementById('updateLatestVer').innerText = `v${data.latestVersion}`;
+          diffBadge.innerHTML = `<span class="badge badge-warning" style="font-size: 0.75rem;">⚠️ Behind Latest Release (v${data.version} → v${data.latestVersion})</span>`;
           document.getElementById('updateChangelog').innerText = data.updateChangelog || '';
         } else {
-          document.getElementById('updateSection').style.display = 'none';
+          updateSec.style.display = 'none';
         }
 
         // Cards
