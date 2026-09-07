@@ -219,6 +219,9 @@ export interface Agent {
   last_heartbeat: string;
   version: string;
   capabilities: string[];
+  local_ip?: string;
+  hostname?: string;
+  platform?: string;
   update_available?: boolean;
   latest_version?: string;
   update_changelog?: string;

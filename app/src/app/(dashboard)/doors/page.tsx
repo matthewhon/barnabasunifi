@@ -342,27 +342,35 @@ function AgentStatusRow({
             boxShadow: isOnline ? '0 0 0 3px rgba(34,197,94,0.25)' : undefined,
           }}
         />
-        <div style={{ flex: 1, minWidth: '200px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
             <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
               {agent.label}
             </span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+            <span className="badge badge-neutral" style={{ fontSize: '0.75rem', fontFamily: 'monospace' }}>
               v{agent.version}
             </span>
-            {isOutdated && (
+            {agent.local_ip && (
+              <span className="badge badge-neutral" style={{ fontSize: '0.6875rem', fontFamily: 'monospace', gap: '0.25rem' }}>
+                🌐 {agent.local_ip}
+              </span>
+            )}
+            {isOutdated ? (
               <span
                 className="badge badge-warning"
                 style={{ fontSize: '0.6875rem', fontWeight: 600 }}
               >
-                Update: v{targetVersion}
+                Update available: v{targetVersion}
               </span>
-            )}
+            ) : latestVersion ? (
+              <span className="badge badge-success" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
+                Up to date
+              </span>
+            ) : null}
           </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>
-            Capabilities: {agent.capabilities?.join(', ') || 'door management'}
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {agent.hostname && <span>Host: {agent.hostname}</span>}
+            <span>Capabilities: {agent.capabilities?.join(', ') || 'door management'}</span>
           </div>
-        </div>
 
         {/* Update action / status controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', flexWrap: 'wrap' }}>

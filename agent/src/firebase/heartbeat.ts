@@ -9,6 +9,7 @@
  */
 
 import * as admin from 'firebase-admin';
+import * as os from 'os';
 import { getDb } from '../firebase';
 import { logger } from '../logger';
 
@@ -25,6 +26,9 @@ export interface AgentHeartbeat {
   last_heartbeat: FirebaseFirestore.Timestamp;
   version: string;
   capabilities: string[];
+  local_ip?: string;
+  hostname?: string;
+  platform?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -37,6 +41,22 @@ const AGENT_CAPABILITIES = ['unlock', 'lock', 'door_sync'] as const;
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+function getLocalIp(): string | null {
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      const iface = interfaces[name];
+      if (!iface) continue;
+      for (const alias of iface) {
+        if (alias.family === 'IPv4' && !alias.internal) {
+          return alias.address;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
 async function writeHeartbeat(
   agentId: string,
   orgId: string,
@@ -45,6 +65,7 @@ async function writeHeartbeat(
   status: AgentStatus
 ): Promise<void> {
   const db = getDb();
+  const localIp = getLocalIp();
   const payload: AgentHeartbeat = {
     org_id: orgId,
     label: agentLabel,
@@ -52,6 +73,9 @@ async function writeHeartbeat(
     last_heartbeat: admin.firestore.Timestamp.now(),
     version,
     capabilities: [...AGENT_CAPABILITIES],
+    ...(localIp ? { local_ip: localIp } : {}),
+    hostname: os.hostname(),
+    platform: os.platform(),
   };
 
   await db.doc(`agents/${agentId}`).set(payload, { merge: true });

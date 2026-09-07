@@ -205,6 +205,9 @@ export interface Agent {
   last_heartbeat: string;
   version: string;
   capabilities: string[];
+  local_ip?: string;
+  hostname?: string;
+  platform?: string;
 }
 
 // ─── PCO API ──────────────────────────────────────────────────────────────────

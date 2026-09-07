@@ -4,9 +4,10 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
-import { getOrgSettings, updateOrgSettings, getLatestAgentRelease, createDoorCommand } from '@/lib/firestore';
-import type { OrgSettings, AgentRelease } from '@/lib/types';
+import { getOrgSettings, updateOrgSettings, getLatestAgentRelease, createDoorCommand, subscribeToAgents, approveAgentUpdate } from '@/lib/firestore';
+import type { OrgSettings, AgentRelease, Agent } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
+import { safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -133,6 +134,9 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Connected agents state
+  const [agents, setAgents] = useState<Agent[]>([]);
+
   // Agent release state
   const [latestRelease, setLatestRelease] = useState<AgentRelease | null>(null);
   const [publishVersion, setPublishVersion] = useState('');
@@ -236,8 +240,14 @@ export default function SettingsPage() {
       if (isMounted) setLatestRelease(r);
     }).catch(() => {});
 
+    // Subscribe to connected agents
+    const unsubAgents = subscribeToAgents(orgId, (a) => {
+      if (isMounted) setAgents(a);
+    });
+
     return () => {
       isMounted = false;
+      unsubAgents();
     };
   }, [orgId, showToast]);
 
@@ -999,55 +1009,193 @@ SKIP_TLS_VERIFY=true`}</pre>
         </SectionCard>
 
         {/* ── 4. Agent Software ── */}
-        <SectionCard title="4. Agent Software">
+        <SectionCard title="4. Agent Software & Network Status">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {/* Dashboard version */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>Dashboard Version:</span>
-              <span className="badge badge-neutral" style={{ fontFamily: 'monospace' }}>
-                v{process.env.NEXT_PUBLIC_APP_VERSION || '1.0.0'}
-              </span>
-            </div>
+            {/* Version Overview Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(14rem, 1fr))', gap: '0.75rem' }}>
+              <div style={{ padding: '0.75rem 1rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>Dashboard Version</div>
+                <div style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: '0.9375rem' }}>
+                  v{process.env.NEXT_PUBLIC_APP_VERSION || '1.0.0'}
+                </div>
+              </div>
 
-            {/* Latest published agent release */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>Latest Agent Release:</span>
-              {latestRelease ? (
-                <span className="badge badge-success" style={{ fontFamily: 'monospace' }}>
-                  v{latestRelease.version}
-                </span>
-              ) : (
-                <span className="badge badge-neutral">No releases published</span>
-              )}
-              <button
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: '0.75rem' }}
-                onClick={async () => {
-                  const r = await getLatestAgentRelease();
-                  setLatestRelease(r);
-                  showToast(r ? `Latest: v${r.version}` : 'No releases found', 'info');
-                }}
-              >
-                Refresh
-              </button>
+              <div style={{ padding: '0.75rem 1rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>Latest Published Release</div>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: '0.6875rem', padding: '0.1rem 0.35rem' }}
+                    onClick={async () => {
+                      const r = await getLatestAgentRelease();
+                      setLatestRelease(r);
+                      showToast(r ? `Latest: v${r.version}` : 'No releases found', 'info');
+                    }}
+                  >
+                    Refresh
+                  </button>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {latestRelease ? (
+                    <span className="badge badge-success" style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
+                      v{latestRelease.version}
+                    </span>
+                  ) : (
+                    <span className="badge badge-neutral" style={{ fontSize: '0.75rem' }}>No cloud releases</span>
+                  )}
+                  {latestRelease?.published_at && (
+                    <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
+                      Published {safeFormat(latestRelease.published_at, 'MMM d, yyyy')}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
 
             {latestRelease?.changelog && (
               <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', padding: '0.5rem 0.75rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
-                <strong>Changelog:</strong> {latestRelease.changelog}
+                <strong>Latest Changelog:</strong> {latestRelease.changelog}
               </div>
             )}
 
-            {/* Quick Agent Actions */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', borderTop: '1px solid var(--color-border)', paddingTop: '1rem' }}>
-              <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>Agent Container:</span>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={handleRestartAgent}
-                disabled={restartingAgent}
-              >
-                {restartingAgent ? 'Rebooting…' : '🔄 Restart Remote Agent'}
-              </button>
+            {/* Connected Local Agents */}
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                <h3 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                  Connected Local Agent(s) ({agents.length})
+                </h3>
+              </div>
+
+              {agents.length === 0 ? (
+                <div style={{ padding: '1rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--color-border)', color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
+                  No local agents connected yet. Connect your agent container using the registration token above.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {agents.map((agent) => {
+                    const isOnline = agent.status === 'online';
+                    const targetVersion = latestRelease?.version;
+                    const isOutdated = Boolean(targetVersion && agent.version && targetVersion !== agent.version);
+
+                    return (
+                      <div
+                        key={agent.id}
+                        style={{
+                          padding: '1rem',
+                          background: 'var(--color-bg-surface)',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--color-border)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.75rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                              <span style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--color-text-primary)' }}>
+                                {agent.label || agent.id}
+                              </span>
+                              <span className={`badge ${isOnline ? 'badge-success' : 'badge-neutral'}`} style={{ fontSize: '0.6875rem' }}>
+                                {isOnline ? '🟢 Online' : '⚪ Offline'}
+                              </span>
+                              {agent.local_ip ? (
+                                <span className="badge badge-neutral" style={{ fontSize: '0.75rem', fontFamily: 'monospace', gap: '0.25rem' }}>
+                                  📍 IP: {agent.local_ip}
+                                </span>
+                              ) : (
+                                <span className="badge badge-neutral" style={{ fontSize: '0.6875rem', opacity: 0.75 }}>
+                                  IP: Unknown
+                                </span>
+                              )}
+                              {agent.hostname && (
+                                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                                  ({agent.hostname})
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
+                              Last heartbeat: {agent.last_heartbeat ? safeFormatDistanceToNow(agent.last_heartbeat) : 'Never'}
+                              {agent.platform && <span> · OS: {agent.platform}</span>}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={handleRestartAgent}
+                              disabled={restartingAgent}
+                              style={{ fontSize: '0.75rem' }}
+                            >
+                              {restartingAgent ? 'Rebooting…' : '🔄 Restart Agent'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Version Comparison Box */}
+                        <div
+                          style={{
+                            padding: '0.625rem 0.875rem',
+                            background: 'var(--color-bg-base)',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--color-border)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '0.75rem',
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.8125rem' }}>
+                            <div>
+                              <span style={{ color: 'var(--color-text-muted)' }}>Agent Local Version: </span>
+                              <strong style={{ fontFamily: 'monospace' }}>v{agent.version || 'Unknown'}</strong>
+                            </div>
+                            <div>
+                              <span style={{ color: 'var(--color-text-muted)' }}>Latest Cloud Release: </span>
+                              <strong style={{ fontFamily: 'monospace' }}>
+                                {targetVersion ? `v${targetVersion}` : 'None published'}
+                              </strong>
+                            </div>
+                            {targetVersion ? (
+                              isOutdated ? (
+                                <span className="badge badge-warning" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
+                                  ⚠️ Update Available (Behind: v{agent.version} → v{targetVersion})
+                                </span>
+                              ) : (
+                                <span className="badge badge-success" style={{ fontSize: '0.6875rem', fontWeight: 600 }}>
+                                  ✅ Up to date with latest release
+                                </span>
+                              )
+                            ) : (
+                              <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
+                                Running local build v{agent.version}
+                              </span>
+                            )}
+                          </div>
+
+                          {isOutdated && targetVersion && (
+                            <button
+                              className="btn btn-primary btn-sm"
+                              style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
+                              onClick={async () => {
+                                try {
+                                  await approveAgentUpdate(agent.id, targetVersion, orgId || undefined);
+                                  showToast(`Approved update v${targetVersion} for deployment!`, 'success');
+                                } catch (err: any) {
+                                  showToast(err.message || 'Failed to approve update', 'error');
+                                }
+                              }}
+                            >
+                              🚀 Deploy v{targetVersion}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Publish new release (super admin only) */}
