@@ -132,9 +132,18 @@ export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
           if (Array.isArray(rawSlots) && rawSlots.length > 0) {
             dayEntry.active = item.active !== false;
             for (const s of rawSlots) {
-              const start = parseTimeHHMM(s.start_time || s.start || s.from || s.start_at, '08:00');
-              const end = parseTimeHHMM(s.end_time || s.end || s.to || s.end_at, '17:00');
-              dayEntry.slots.push({ start_time: start, end_time: end });
+              if (typeof s === 'string') {
+                const parts = s.split(/[-–]/);
+                if (parts.length >= 2) {
+                  const start = parseTimeHHMM(parts[0].trim(), '08:00');
+                  const end = parseTimeHHMM(parts[1].trim(), '17:00');
+                  dayEntry.slots.push({ start_time: start, end_time: end });
+                }
+              } else if (s && typeof s === 'object') {
+                const start = parseTimeHHMM(s.start_time || s.start || s.from || s.start_at || s.begin, '08:00');
+                const end = parseTimeHHMM(s.end_time || s.end || s.to || s.end_at || s.stop, '17:00');
+                dayEntry.slots.push({ start_time: start, end_time: end });
+              }
             }
           } else if (item.start_time || item.start || item.from) {
             dayEntry.active = item.active !== false;
@@ -156,9 +165,16 @@ export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
         if (Array.isArray(dayData) && dayData.length > 0) {
           dayEntry.active = true;
           for (const s of dayData) {
-            if (s && typeof s === 'object') {
-              const start = parseTimeHHMM(s.start_time || s.start || s.from, '08:00');
-              const end = parseTimeHHMM(s.end_time || s.end || s.to, '17:00');
+            if (typeof s === 'string') {
+              const parts = s.split(/[-–]/);
+              if (parts.length >= 2) {
+                const start = parseTimeHHMM(parts[0].trim(), '08:00');
+                const end = parseTimeHHMM(parts[1].trim(), '17:00');
+                dayEntry.slots.push({ start_time: start, end_time: end });
+              }
+            } else if (s && typeof s === 'object') {
+              const start = parseTimeHHMM(s.start_time || s.start || s.from || s.start_at || s.begin, '08:00');
+              const end = parseTimeHHMM(s.end_time || s.end || s.to || s.end_at || s.stop, '17:00');
               dayEntry.slots.push({ start_time: start, end_time: end });
             }
           }
@@ -167,10 +183,19 @@ export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
           dayEntry.active = dObj.active !== false;
           if (Array.isArray(dObj.slots) && dObj.slots.length > 0) {
             for (const s of dObj.slots) {
-              dayEntry.slots.push({
-                start_time: parseTimeHHMM(s.start_time || s.start, '08:00'),
-                end_time: parseTimeHHMM(s.end_time || s.end, '17:00'),
-              });
+              if (typeof s === 'string') {
+                const parts = s.split(/[-–]/);
+                if (parts.length >= 2) {
+                  const start = parseTimeHHMM(parts[0].trim(), '08:00');
+                  const end = parseTimeHHMM(parts[1].trim(), '17:00');
+                  dayEntry.slots.push({ start_time: start, end_time: end });
+                }
+              } else {
+                dayEntry.slots.push({
+                  start_time: parseTimeHHMM(s.start_time || s.start, '08:00'),
+                  end_time: parseTimeHHMM(s.end_time || s.end, '17:00'),
+                });
+              }
             }
           } else {
             dayEntry.slots.push({
