@@ -2070,19 +2070,19 @@ export class UnifiAccessClient {
   private getVisitorEndpoints(subpath = ''): string[] {
     const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
     return [
-      `/proxy/access/api/v2/visitors${cleanSub}`,
       ...this.getDeveloperEndpoints('visitors', subpath),
+      `/proxy/access/api/v2/visitors${cleanSub}`,
     ];
   }
 
   private getScheduleEndpoints(subpath = ''): string[] {
     const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
     return [
-      `/proxy/access/api/v2/schedules${cleanSub}`,
       ...this.getDeveloperEndpoints('schedules', subpath),
       ...this.getDeveloperEndpoints('access_policies/schedules', subpath),
       ...this.getDeveloperEndpoints('door_unlock_rules', subpath),
       ...this.getDeveloperEndpoints('work_times', subpath),
+      `/proxy/access/api/v2/schedules${cleanSub}`,
     ];
   }
 
