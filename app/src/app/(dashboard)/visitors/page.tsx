@@ -248,7 +248,7 @@ export default function VisitorsPage() {
 
   // Quick Copy Access Info
   const handleCopyAccessInfo = (visitor: UnifiVisitor) => {
-    const doorNames = visitor.door_labels?.join(', ') || 'assigned doors';
+    const doorNames = (Array.isArray(visitor.door_labels) ? visitor.door_labels : []).join(', ') || 'assigned doors';
     const validUntilFormatted = formatVisitorTime(visitor.end_time, timezone);
     const validFromFormatted = formatVisitorTime(visitor.start_time, timezone);
     const text = `Hi ${visitor.first_name}, here is your UniFi Access door PIN: ${visitor.pin_code}. It is valid for ${doorNames} from ${validFromFormatted} to ${validUntilFormatted}.`;
@@ -275,16 +275,16 @@ export default function VisitorsPage() {
       if (tab !== 'all' && v.status !== tab) return false;
 
       // Door filter
-      if (doorFilter !== 'all' && !(v.door_ids || []).includes(doorFilter)) return false;
+      if (doorFilter !== 'all' && !(Array.isArray(v.door_ids) ? v.door_ids : []).includes(doorFilter)) return false;
 
       // Search
       if (search.trim()) {
         const q = search.toLowerCase();
-        const fullName = `${v.first_name} ${v.last_name || ''}`.toLowerCase();
+        const fullName = `${v.first_name || ''} ${v.last_name || ''}`.toLowerCase();
         const purpose = (v.purpose || '').toLowerCase();
         const phone = (v.mobile_phone || '').toLowerCase();
         const email = (v.email || '').toLowerCase();
-        const doorNames = (v.door_labels || []).join(' ').toLowerCase();
+        const doorNames = (Array.isArray(v.door_labels) ? v.door_labels : []).join(' ').toLowerCase();
 
         return (
           fullName.includes(q) ||
@@ -613,8 +613,8 @@ export default function VisitorsPage() {
 
                   {/* Doors assigned */}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.5rem' }}>
-                    {(visitor.door_labels || []).length > 0 ? (
-                      visitor.door_labels?.map((label, idx) => (
+                    {Array.isArray(visitor.door_labels) && visitor.door_labels.length > 0 ? (
+                      visitor.door_labels.map((label, idx) => (
                         <span
                           key={idx}
                           style={{

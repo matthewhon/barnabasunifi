@@ -15,12 +15,43 @@ export function parseSafeDate(val: unknown): Date | null {
       return null;
     }
   }
-  if (typeof val === 'object' && val !== null && 'seconds' in (val as any)) {
-    const d = new Date((val as any).seconds * 1000);
+  if (typeof val === 'object' && val !== null) {
+    if ('_seconds' in (val as any) && typeof (val as any)._seconds === 'number') {
+      const d = new Date((val as any)._seconds * 1000);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    if ('seconds' in (val as any) && typeof (val as any).seconds === 'number') {
+      const d = new Date((val as any).seconds * 1000);
+      return isNaN(d.getTime()) ? null : d;
+    }
+  }
+  if (typeof val === 'number') {
+    const ms = val < 100000000000 ? val * 1000 : val;
+    const d = new Date(ms);
     return isNaN(d.getTime()) ? null : d;
   }
-  const d = new Date(val as string | number);
-  return isNaN(d.getTime()) ? null : d;
+  if (typeof val === 'string') {
+    if (/^\d{10}$/.test(val)) {
+      const d = new Date(parseInt(val, 10) * 1000);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    if (/^\d{13}$/.test(val)) {
+      const d = new Date(parseInt(val, 10));
+      return isNaN(d.getTime()) ? null : d;
+    }
+    try {
+      const d = new Date(val);
+      return isNaN(d.getTime()) ? null : d;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const d = new Date(val as any);
+    return isNaN(d.getTime()) ? null : d;
+  } catch {
+    return null;
+  }
 }
 
 /**
