@@ -173,6 +173,9 @@ export type CommandAction =
   | 'update_user'
   | 'assign_policies'
   | 'sync_policies'
+  | 'create_policy'
+  | 'update_policy'
+  | 'delete_policy'
   | 'sync_access_logs'
   | 'apply_update'
   | 'upgrade_agent'
@@ -192,6 +195,8 @@ export interface DoorCommand {
   user_id?: string;
   unifi_user_id?: string;
   user_data?: Record<string, unknown>;
+  policy_id?: string;
+  policy_data?: Record<string, unknown>;
   policy_ids?: string[];
   action: CommandAction;
   execute_at: string;         // ISO8601
@@ -343,9 +348,15 @@ export interface UnifiAccessPolicy {
   door_labels?: string[];
   schedule_id?: string;
   schedule_name?: string;
+  description?: string;
+  holiday_group_id?: string;
   user_count?: number;
+  sync_status?: 'synced' | 'pending' | 'error';
+  sync_error?: string | null;
   raw_data?: Record<string, unknown>;
   last_synced?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface UnifiDoor {

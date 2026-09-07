@@ -137,9 +137,12 @@ export interface Door {
   schedule_id?: string | null;
   schedule_name?: string | null;
   unlock_schedule_name?: string | null;
+  floor?: string | null;
+  building?: string | null;
   last_accessed_at?: string | null;
   last_accessed_by?: string | null;
   last_access_method?: AccessMethod | string | null;
+  last_access_method_label?: string | null;
   last_synced: string; // ISO8601
 }
 
@@ -184,6 +187,9 @@ export type CommandAction =
   | 'update_user'
   | 'assign_policies'
   | 'sync_policies'
+  | 'create_policy'
+  | 'update_policy'
+  | 'delete_policy'
   | 'sync_access_logs'
   | 'apply_update'
   | 'upgrade_agent'
@@ -204,6 +210,8 @@ export interface DoorCommand {
   user_id?: string;
   unifi_user_id?: string;
   user_data?: Record<string, unknown>;
+  policy_id?: string;
+  policy_data?: Record<string, unknown>;
   policy_ids?: string[];
   action: CommandAction;
   execute_at: string;         // ISO8601
@@ -358,9 +366,15 @@ export interface UnifiAccessPolicy {
   door_labels?: string[];
   schedule_id?: string;
   schedule_name?: string;
+  description?: string;
+  holiday_group_id?: string;
   user_count?: number;
+  sync_status?: 'synced' | 'pending' | 'error';
+  sync_error?: string | null;
   raw_data?: Record<string, unknown>;
   last_synced?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface UnifiDoor {

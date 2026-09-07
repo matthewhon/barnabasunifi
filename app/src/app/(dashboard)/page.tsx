@@ -109,11 +109,18 @@ function DoorStatusCard({ door }: { door: Door }) {
         </span>
       </div>
 
-      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
-        Synced{' '}
-        {door.last_synced
-          ? safeFormatDistanceToNow(door.last_synced)
-          : '—'}
+      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.25rem' }}>
+        <span>
+          Synced{' '}
+          {door.last_synced
+            ? safeFormatDistanceToNow(door.last_synced)
+            : '—'}
+        </span>
+        {door.last_accessed_at && (
+          <span>
+            Last: {safeFormat(door.last_accessed_at, 'MMM d, h:mm a')}
+          </span>
+        )}
       </div>
     </div>
   );

@@ -112,14 +112,14 @@ service cloud.firestore {
         allow write: if isOrgAdmin(orgId) || isAgentForOrg(orgId);
       }
 
-      // Access Policies & UniFi Users: members can read; admins and agents can write
+      // Access Policies & UniFi Users: members can read; managers, admins and agents can write
       match /access_policies/{policyId} {
         allow read: if isOrgMember(orgId);
-        allow write: if isOrgAdmin(orgId) || isAgentForOrg(orgId);
+        allow write: if isOrgManager(orgId) || isAgentForOrg(orgId);
       }
       match /unifi_users/{userId} {
         allow read: if isOrgMember(orgId);
-        allow write: if isOrgAdmin(orgId) || isAgentForOrg(orgId);
+        allow write: if isOrgManager(orgId) || isAgentForOrg(orgId);
       }
 
       // Door Commands: all members can read and create (manual overrides from UI)

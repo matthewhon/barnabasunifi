@@ -41,6 +41,9 @@ export type CommandAction =
   | 'update_user'
   | 'assign_policies'
   | 'sync_policies'
+  | 'create_policy'
+  | 'update_policy'
+  | 'delete_policy'
   | 'sync_access_logs'
   | 'apply_update'
   | 'upgrade_agent'
@@ -69,6 +72,9 @@ export interface DoorCommand {
   pco_person_id?: string;
   unifi_user_id?: string;
   user_data?: Record<string, unknown>;
+  policy_id?: string;
+  unifi_policy_id?: string;
+  policy_data?: Record<string, unknown>;
   policy_ids?: string[];
   status: CommandStatus;
   execute_at: FirebaseFirestore.Timestamp | string | Date;
@@ -150,6 +156,12 @@ async function writeAuditLog(
       action = 'policies_assigned';
     } else if (command.action === 'sync_policies') {
       action = 'policies_synced';
+    } else if (command.action === 'create_policy') {
+      action = 'policy_created';
+    } else if (command.action === 'update_policy') {
+      action = 'policy_updated';
+    } else if (command.action === 'delete_policy') {
+      action = 'policy_deleted';
     } else {
       action = command.action;
     }
@@ -532,6 +544,66 @@ export function startCommandListener(
 
           resultMessage = `User was not in UniFi; created new UniFi user (ID: ${created.id}) with ${policyIds.length} policy(ies).`;
         }
+      } else if (command.action === 'create_policy') {
+        const policyData = (command.policy_data as Record<string, any>) || {};
+        const created = await unifiClient.createAccessPolicy({
+          name: policyData.name || 'New Policy',
+          door_ids: policyData.door_ids || [],
+          schedule_id: policyData.schedule_id,
+          description: policyData.description,
+          holiday_group_id: policyData.holiday_group_id,
+        });
+
+        const firestorePolicyId = command.policy_id || created.id;
+        await db.doc(`organizations/${orgId}/access_policies/${firestorePolicyId}`).set(
+          {
+            ...created,
+            id: firestorePolicyId,
+            org_id: orgId,
+            sync_status: 'synced',
+            sync_error: null,
+            last_synced: new Date().toISOString(),
+            updated_at: nowTimestamp(),
+          },
+          { merge: true }
+        );
+
+        resultMessage = `Created UniFi access policy '${created.name}' (ID: ${created.id}).`;
+      } else if (command.action === 'update_policy') {
+        const policyId = command.policy_id || command.unifi_policy_id;
+        if (!policyId) throw new Error('Policy ID is required for update_policy');
+
+        const policyData = (command.policy_data as Record<string, any>) || {};
+        const updated = await unifiClient.updateAccessPolicy(policyId, {
+          name: policyData.name,
+          door_ids: policyData.door_ids,
+          schedule_id: policyData.schedule_id,
+          description: policyData.description,
+          holiday_group_id: policyData.holiday_group_id,
+        });
+
+        await db.doc(`organizations/${orgId}/access_policies/${policyId}`).set(
+          {
+            ...updated,
+            id: policyId,
+            org_id: orgId,
+            sync_status: 'synced',
+            sync_error: null,
+            last_synced: new Date().toISOString(),
+            updated_at: nowTimestamp(),
+          },
+          { merge: true }
+        );
+
+        resultMessage = `Updated UniFi access policy '${policyId}'.`;
+      } else if (command.action === 'delete_policy') {
+        const policyId = command.policy_id || command.unifi_policy_id;
+        if (!policyId) throw new Error('Policy ID is required for delete_policy');
+
+        await unifiClient.deleteAccessPolicy(policyId);
+        await db.doc(`organizations/${orgId}/access_policies/${policyId}`).delete();
+
+        resultMessage = `Deleted UniFi access policy '${policyId}'.`;
       } else if (command.action === 'apply_update' || command.action === 'upgrade_agent') {
         const updateState = await checkForUpdate();
         if (updateState.updateAvailable) {

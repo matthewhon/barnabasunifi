@@ -18,7 +18,7 @@ export { generateAgentToken, registerAgentWithToken } from './agent/agentRegistr
 export { syncUnifiDoors } from './unifi/doors';
 export { syncUnifiSchedules, saveUnifiSchedule, deleteUnifiSchedule } from './unifi/schedules';
 export { syncUnifiVisitors, saveUnifiVisitor, deleteUnifiVisitor } from './unifi/visitors';
-export { syncUnifiAccessPolicies } from './unifi/policies';
+export { syncUnifiAccessPolicies, saveUnifiAccessPolicy, deleteUnifiAccessPolicy } from './unifi/policies';
 export { triggerUserSync, getPcoLists } from './pco/userSync';
 export { syncUnifiAccessLogs } from './unifi/accessLogs';
 export { publishAgentRelease, getLatestAgentRelease, listAgentReleases, uploadAgentRelease, downloadAgentRelease } from './agent/releases';

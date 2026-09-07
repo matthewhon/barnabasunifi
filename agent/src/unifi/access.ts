@@ -2666,6 +2666,177 @@ export class UnifiAccessClient {
     }
   }
 
+  /**
+   * Create a new access policy in UniFi Access.
+   */
+  async createAccessPolicy(policyData: {
+    name: string;
+    door_ids?: string[];
+    schedule_id?: string;
+    description?: string;
+    holiday_group_id?: string;
+  }): Promise<any> {
+    const endpoints = [
+      ...this.getAccessPolicyEndpoints(),
+      '/proxy/access/api/v2/policies',
+      '/proxy/access/api/v2/policy',
+    ];
+
+    const doorIds = policyData.door_ids || [];
+    const payloadVariants = [
+      {
+        name: policyData.name,
+        resources: doorIds.map((id) => ({ type: 'door', id })),
+        door_ids: doorIds,
+        doors: doorIds,
+        schedule_id: policyData.schedule_id,
+        holiday_group_id: policyData.holiday_group_id,
+        description: policyData.description,
+      },
+      {
+        policy_name: policyData.name,
+        doors: doorIds,
+        schedule_id: policyData.schedule_id,
+      },
+    ];
+
+    let lastError: any = null;
+    for (const endpoint of endpoints) {
+      for (const payload of payloadVariants) {
+        try {
+          const res = await this.http.post<any>(endpoint, payload);
+          const data = res.data?.data || res.data;
+          if (data) {
+            logger.info(`[UniFi] Access policy '${policyData.name}' created via ${endpoint}`);
+            const createdId = String(data.id || data.unique_id || data._id || '');
+            return {
+              id: createdId,
+              unifi_policy_id: createdId,
+              name: policyData.name,
+              door_ids: doorIds,
+              schedule_id: policyData.schedule_id,
+              raw_data: data,
+            };
+          }
+        } catch (err: any) {
+          lastError = err;
+          logger.debug(`[UniFi] createAccessPolicy tried ${endpoint}: ${err.response?.status || err.message}`);
+        }
+      }
+    }
+
+    throw new Error(
+      lastError?.response?.data?.message ||
+      lastError?.response?.data?.error ||
+      lastError?.message ||
+      `Failed to create access policy '${policyData.name}' in UniFi Access.`
+    );
+  }
+
+  /**
+   * Update an existing access policy in UniFi Access.
+   */
+  async updateAccessPolicy(
+    policyId: string,
+    policyData: {
+      name?: string;
+      door_ids?: string[];
+      schedule_id?: string;
+      description?: string;
+      holiday_group_id?: string;
+    }
+  ): Promise<any> {
+    const endpoints = [
+      ...this.getAccessPolicyEndpoints(encodeURIComponent(policyId)),
+      `/proxy/access/api/v2/policies/${encodeURIComponent(policyId)}`,
+      `/proxy/access/api/v2/policy/${encodeURIComponent(policyId)}`,
+    ];
+
+    const doorIds = policyData.door_ids || [];
+    const payloadVariants = [
+      {
+        id: policyId,
+        name: policyData.name,
+        resources: doorIds.map((id) => ({ type: 'door', id })),
+        door_ids: doorIds,
+        doors: doorIds,
+        schedule_id: policyData.schedule_id,
+        holiday_group_id: policyData.holiday_group_id,
+        description: policyData.description,
+      },
+      {
+        id: policyId,
+        policy_name: policyData.name,
+        doors: doorIds,
+        schedule_id: policyData.schedule_id,
+      },
+    ];
+
+    let lastError: any = null;
+    for (const endpoint of endpoints) {
+      for (const payload of payloadVariants) {
+        try {
+          const res = await this.http.put<any>(endpoint, payload);
+          const data = res.data?.data || res.data;
+          if (data || res.status === 200 || res.status === 204) {
+            logger.info(`[UniFi] Access policy '${policyId}' updated via ${endpoint}`);
+            return {
+              id: policyId,
+              unifi_policy_id: policyId,
+              name: policyData.name || 'Policy',
+              door_ids: doorIds,
+              schedule_id: policyData.schedule_id,
+              raw_data: data,
+            };
+          }
+        } catch (err: any) {
+          lastError = err;
+          logger.debug(`[UniFi] updateAccessPolicy tried ${endpoint}: ${err.response?.status || err.message}`);
+        }
+      }
+    }
+
+    throw new Error(
+      lastError?.response?.data?.message ||
+      lastError?.response?.data?.error ||
+      lastError?.message ||
+      `Failed to update access policy '${policyId}' in UniFi Access.`
+    );
+  }
+
+  /**
+   * Delete an access policy from UniFi Access.
+   */
+  async deleteAccessPolicy(policyId: string): Promise<void> {
+    const endpoints = [
+      ...this.getAccessPolicyEndpoints(encodeURIComponent(policyId)),
+      `/proxy/access/integration/v1/developer/permission/api/developer/access_policies/${encodeURIComponent(policyId)}`,
+      `/proxy/access/api/v2/policies/${encodeURIComponent(policyId)}`,
+      `/proxy/access/api/v2/policy/${encodeURIComponent(policyId)}`,
+    ];
+
+    let lastError: any = null;
+    for (const endpoint of endpoints) {
+      try {
+        const res = await this.http.delete<any>(endpoint);
+        if (res.status === 200 || res.status === 204 || res.data?.code === 0 || res.data?.code === 'SUCCESS') {
+          logger.info(`[UniFi] Access policy '${policyId}' deleted via ${endpoint}`);
+          return;
+        }
+      } catch (err: any) {
+        lastError = err;
+        logger.debug(`[UniFi] deleteAccessPolicy tried ${endpoint}: ${err.response?.status || err.message}`);
+      }
+    }
+
+    throw new Error(
+      lastError?.response?.data?.message ||
+      lastError?.response?.data?.error ||
+      lastError?.message ||
+      `Failed to delete access policy '${policyId}' in UniFi Access.`
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // User Management
   // ---------------------------------------------------------------------------

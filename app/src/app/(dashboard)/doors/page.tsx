@@ -223,27 +223,33 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
           </Link>
         ) : null}
 
-        {door.last_accessed_by && (
+        {(door.last_accessed_by || door.last_accessed_at) && (
           <div
             style={{
               fontSize: '0.75rem',
               color: 'var(--color-text-muted)',
               display: 'flex',
               alignItems: 'center',
+              justifyContent: 'space-between',
               gap: '0.35rem',
               marginTop: '0.25rem',
               width: '100%',
+              flexWrap: 'wrap',
             }}
           >
-            <span>👤 Last: <strong style={{ color: 'var(--color-text-primary)' }}>{door.last_accessed_by}</strong></span>
-            {door.last_access_method && (
-              <span className="badge badge-neutral" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>
-                {door.last_access_method}
-              </span>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', minWidth: 0, flexWrap: 'wrap' }}>
+              {door.last_accessed_by && (
+                <span>👤 Last: <strong style={{ color: 'var(--color-text-primary)' }}>{door.last_accessed_by}</strong></span>
+              )}
+              {(door.last_access_method_label || door.last_access_method) && (
+                <span className="badge badge-neutral" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>
+                  {door.last_access_method_label || door.last_access_method}
+                </span>
+              )}
+            </div>
             {door.last_accessed_at && (
               <span style={{ marginLeft: 'auto', fontSize: '0.6875rem' }}>
-                {safeFormat(door.last_accessed_at, 'h:mm a')}
+                {safeFormat(door.last_accessed_at, 'MMM d, h:mm a')}
               </span>
             )}
           </div>

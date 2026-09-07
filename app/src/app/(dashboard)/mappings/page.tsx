@@ -19,6 +19,7 @@ import {
   deleteAccessPolicyMapping,
   subscribeToSyncedUsers,
   subscribeToAccessPolicies,
+  subscribeToUnifiSchedules,
 } from '@/lib/firestore';
 import type {
   Mapping,
@@ -34,9 +35,11 @@ import type {
   AccessPolicyMapping,
   SyncedUser,
   UnifiAccessPolicy,
+  UnifiSchedule,
   PcoList,
 } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
+import AccessPolicyModal from '@/components/policies/AccessPolicyModal';
 import { safeFormat, safeFormatDistanceToNow, parseSafeDate } from '@/lib/date-utils';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -100,9 +103,21 @@ function TagIcon() {
   );
 }
 
-function RefreshIcon() {
+function RefreshIcon({ spinning = false }: { spinning?: boolean } = {}) {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{
+        animation: spinning ? 'spin 1s linear infinite' : 'none',
+      }}
+    >
       <polyline points="23 4 23 10 17 10" />
       <polyline points="1 20 1 14 7 14" />
       <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
@@ -885,6 +900,7 @@ interface AddPolicyMappingModalProps {
   saving: boolean;
   onRefreshPolicies?: () => void;
   onRefreshLists?: () => void;
+  onCreateNewPolicy?: () => void;
 }
 
 function AddPolicyMappingModal({
@@ -897,6 +913,7 @@ function AddPolicyMappingModal({
   saving,
   onRefreshPolicies,
   onRefreshLists,
+  onCreateNewPolicy,
 }: AddPolicyMappingModalProps) {
   const [selectedListId, setSelectedListId] = useState('');
   const [selectedPolicyId, setSelectedPolicyId] = useState('');
@@ -1017,16 +1034,31 @@ function AddPolicyMappingModal({
             <label className="form-label" style={{ margin: 0, fontWeight: 600 }}>
               2. UniFi Access Policy
             </label>
-            {onRefreshPolicies && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
-                onClick={onRefreshPolicies}
-              >
-                <RefreshIcon /> Sync from UniFi
-              </button>
-            )}
+            <div style={{ display: 'flex', gap: '0.35rem' }}>
+              {onCreateNewPolicy && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem', color: 'var(--color-primary)' }}
+                  onClick={() => {
+                    handleClose();
+                    onCreateNewPolicy();
+                  }}
+                >
+                  <PlusIcon /> New Policy
+                </button>
+              )}
+              {onRefreshPolicies && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
+                  onClick={onRefreshPolicies}
+                >
+                  <RefreshIcon /> Sync from UniFi
+                </button>
+              )}
+            </div>
           </div>
 
           {accessPolicies.length === 0 ? (
@@ -1694,6 +1726,15 @@ export default function MappingsPage() {
   const [deletingPolicyLabel, setDeletingPolicyLabel] = useState('');
   const [deletingPolicy, setDeletingPolicy] = useState(false);
 
+  // Access Policy creation & management modals
+  const [schedules, setSchedules] = useState<UnifiSchedule[]>([]);
+  const [accessPolicyModalOpen, setAccessPolicyModalOpen] = useState(false);
+  const [editingPolicy, setEditingPolicy] = useState<UnifiAccessPolicy | null>(null);
+  const [deleteAccessPolicyModalOpen, setDeleteAccessPolicyModalOpen] = useState(false);
+  const [deletingAccessPolicyId, setDeletingAccessPolicyId] = useState<string | null>(null);
+  const [deletingAccessPolicyName, setDeletingAccessPolicyName] = useState('');
+  const [deletingAccessPolicy, setDeletingAccessPolicy] = useState(false);
+
   const [syncingUsers, setSyncingUsers] = useState(false);
   const [syncingPolicies, setSyncingPolicies] = useState(false);
   const [enablingSync, setEnablingSync] = useState(false);
@@ -1748,6 +1789,13 @@ export default function MappingsPage() {
   useEffect(() => {
     if (!orgId) return;
     const unsub = subscribeToAccessPolicies(orgId, (ap) => setAccessPolicies(ap));
+    return () => unsub();
+  }, [orgId]);
+
+  // Subscribe to UniFi schedules
+  useEffect(() => {
+    if (!orgId) return;
+    const unsub = subscribeToUnifiSchedules(orgId, (s) => setSchedules(s));
     return () => unsub();
   }, [orgId]);
 
@@ -2015,6 +2063,40 @@ export default function MappingsPage() {
     }
   }, [orgId]);
 
+  const handleOpenCreatePolicy = useCallback(() => {
+    setEditingPolicy(null);
+    setAccessPolicyModalOpen(true);
+  }, []);
+
+  const handleOpenEditPolicy = useCallback((policy: UnifiAccessPolicy) => {
+    setEditingPolicy(policy);
+    setAccessPolicyModalOpen(true);
+  }, []);
+
+  const handleOpenDeleteAccessPolicy = useCallback((id: string, name: string) => {
+    setDeletingAccessPolicyId(id);
+    setDeletingAccessPolicyName(name);
+    setDeleteAccessPolicyModalOpen(true);
+  }, []);
+
+  const handleDeleteAccessPolicyConfirm = useCallback(async () => {
+    if (!orgId || !deletingAccessPolicyId) return;
+    setDeletingAccessPolicy(true);
+    try {
+      const fn = httpsCallable<{ orgId: string; policyId: string; unifiPolicyId?: string }>(
+        functions,
+        'deleteUnifiAccessPolicy'
+      );
+      await fn({ orgId, policyId: deletingAccessPolicyId });
+      setDeleteAccessPolicyModalOpen(false);
+      showFeedback('Access policy deletion requested.', true);
+    } catch (err: any) {
+      showFeedback(err?.message || 'Failed to delete access policy.', false);
+    } finally {
+      setDeletingAccessPolicy(false);
+    }
+  }, [orgId, deletingAccessPolicyId]);
+
   // Filter synced users by query
   const filteredUsers = syncedUsers.filter((u) => {
     if (!userSearchQuery) return true;
@@ -2039,7 +2121,7 @@ export default function MappingsPage() {
               disabled={syncingPolicies}
               title="Sync access policy definitions from local UniFi console"
             >
-              <RefreshIcon /> {syncingPolicies ? 'Syncing…' : 'Fetch Policies'}
+              <RefreshIcon spinning={syncingPolicies} /> {syncingPolicies ? 'Syncing…' : 'Fetch Policies'}
             </button>
             <button
               className="btn btn-secondary btn-sm"
@@ -2047,7 +2129,14 @@ export default function MappingsPage() {
               disabled={syncingUsers}
               title="Reconcile Planning Center list members with UniFi Access Users"
             >
-              <RefreshIcon /> {syncingUsers ? 'Reconciling…' : 'Sync Users Now'}
+              <RefreshIcon spinning={syncingUsers} /> {syncingUsers ? 'Reconciling…' : 'Sync Users Now'}
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleOpenCreatePolicy}
+              title="Create a new UniFi Access Policy"
+            >
+              <PlusIcon /> Create Policy
             </button>
             <button className="btn btn-primary btn-sm" onClick={() => setPolicyModalOpen(true)}>
               <PlusIcon />
@@ -2125,6 +2214,168 @@ export default function MappingsPage() {
               </button>
             </div>
           )}
+
+          {/* Access Policies Section Card */}
+          <div className="card" style={{ padding: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div>
+                <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.9375rem' }}>
+                  UniFi Access Policies ({accessPolicies.length})
+                </div>
+                <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginTop: '0.15rem' }}>
+                  Access policies define door unlock permissions and weekly schedules for users and mapped lists.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={handleSyncPolicies}
+                  disabled={syncingPolicies}
+                  title="Refresh policies from UniFi Access"
+                >
+                  <RefreshIcon spinning={syncingPolicies} /> Refresh
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={handleOpenCreatePolicy}
+                >
+                  <PlusIcon /> Create Access Policy
+                </button>
+              </div>
+            </div>
+
+            {accessPolicies.length === 0 ? (
+              <div className="empty-state" style={{ padding: '2rem 0' }}>
+                <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
+                  No Access Policies found
+                </p>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginBottom: '1rem' }}>
+                  Create your first UniFi access policy or click &quot;Refresh&quot; to fetch existing policies from your UniFi console.
+                </p>
+                <button className="btn btn-primary btn-sm" onClick={handleOpenCreatePolicy}>
+                  <PlusIcon /> Create Policy
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
+                {accessPolicies.map((p) => {
+                  const polId = p.unifi_policy_id || p.id;
+                  const mappedListsCount = policyMappings.filter((pm) => pm.unifi_policy_id === polId || pm.unifi_policy_id === p.id).length;
+                  const matchingSchedule = schedules.find((s) => s.id === p.schedule_id || s.unifi_schedule_id === p.schedule_id);
+                  const scheduleLabel = p.schedule_name || matchingSchedule?.name || (p.schedule_id ? 'Custom Schedule' : '24/7 Always Access');
+
+                  const assignedDoors = (p.door_ids || []).map((dId) => {
+                    const found = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
+                    return {
+                      id: dId,
+                      label: (found?.label || '').trim() || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId),
+                      state: found?.current_state ?? 'unknown',
+                    };
+                  });
+
+                  return (
+                    <div
+                      key={p.id}
+                      style={{
+                        padding: '1rem',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--color-bg-elevated)',
+                        border: '1px solid var(--color-border)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.75rem',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                          <div style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--color-text-primary)' }}>
+                            {p.name}
+                          </div>
+                          {p.sync_status === 'pending' ? (
+                            <span className="badge badge-warning" style={{ fontSize: '0.625rem' }}>Pending Sync</span>
+                          ) : p.sync_status === 'error' ? (
+                            <span className="badge badge-danger" style={{ fontSize: '0.625rem' }}>Sync Error</span>
+                          ) : (
+                            <span className="badge badge-success" style={{ fontSize: '0.625rem' }}>Synced</span>
+                          )}
+                        </div>
+
+                        {p.description && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
+                            {p.description}
+                          </div>
+                        )}
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', fontSize: '0.75rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ color: 'var(--color-text-muted)', minWidth: '4.5rem' }}>Schedule:</span>
+                            <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
+                              🕒 {scheduleLabel}
+                            </span>
+                          </div>
+
+                          <div>
+                            <span style={{ color: 'var(--color-text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                              Doors ({assignedDoors.length}):
+                            </span>
+                            {assignedDoors.length === 0 ? (
+                              <span style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>No doors assigned</span>
+                            ) : (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', maxHeight: '4.5rem', overflowY: 'auto' }}>
+                                {assignedDoors.map((d, idx) => (
+                                  <span
+                                    key={idx}
+                                    className={`badge ${d.state === 'locked' ? 'badge-danger' : d.state === 'unlocked' ? 'badge-success' : 'badge-neutral'}`}
+                                    style={{ fontSize: '0.6875rem' }}
+                                  >
+                                    🚪 {d.label}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {mappedListsCount > 0 && (
+                            <div style={{ marginTop: '0.25rem', fontSize: '0.6875rem', color: 'var(--color-primary)' }}>
+                              🔗 Mapped to <strong>{mappedListsCount}</strong> PCO list{mappedListsCount > 1 ? 's' : ''}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'flex-end',
+                          gap: '0.5rem',
+                          borderTop: '1px solid var(--color-border)',
+                          paddingTop: '0.5rem',
+                        }}
+                      >
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                          onClick={() => handleOpenEditPolicy(p)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          style={{ color: 'var(--color-danger)', fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                          onClick={() => handleOpenDeleteAccessPolicy(p.id, p.name)}
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.9fr', gap: '1.5rem', alignItems: 'start' }}>
             {/* Left: Active List Mappings */}
@@ -2569,6 +2820,23 @@ export default function MappingsPage() {
         saving={savingPolicyMapping}
         onRefreshPolicies={handleSyncPolicies}
         onRefreshLists={fetchPcoLists}
+        onCreateNewPolicy={handleOpenCreatePolicy}
+      />
+
+      {/* Access Policy Modal (Create / Edit) */}
+      <AccessPolicyModal
+        isOpen={accessPolicyModalOpen}
+        onClose={() => {
+          setAccessPolicyModalOpen(false);
+          setEditingPolicy(null);
+        }}
+        orgId={orgId || ''}
+        policy={editingPolicy}
+        doors={doors}
+        schedules={schedules}
+        onSaved={() => {
+          showFeedback('Access policy saved successfully.', true);
+        }}
       />
 
       {/* Edit Timing Modal */}
@@ -2631,6 +2899,31 @@ export default function MappingsPage() {
         </p>
         <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginTop: '0.75rem' }}>
           Deleting this mapping will revoke this access policy from members of this list on the next reconciliation.
+        </p>
+      </Modal>
+
+      {/* Delete Access Policy Confirmation */}
+      <Modal
+        isOpen={deleteAccessPolicyModalOpen}
+        onClose={() => !deletingAccessPolicy && setDeleteAccessPolicyModalOpen(false)}
+        title="Delete UniFi Access Policy"
+        footer={
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => setDeleteAccessPolicyModalOpen(false)} disabled={deletingAccessPolicy}>
+              Cancel
+            </button>
+            <button className="btn btn-danger" onClick={handleDeleteAccessPolicyConfirm} disabled={deletingAccessPolicy}>
+              {deletingAccessPolicy ? 'Deleting…' : 'Delete Policy'}
+            </button>
+          </div>
+        }
+      >
+        <p style={{ color: 'var(--color-text-secondary)' }}>
+          Are you sure you want to delete access policy{' '}
+          <strong style={{ color: 'var(--color-text-primary)' }}>{deletingAccessPolicyName}</strong> from UniFi Access?
+        </p>
+        <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginTop: '0.75rem' }}>
+          This will remove the policy from UniFi Access and clear it from any mapped lists or users.
         </p>
       </Modal>
 

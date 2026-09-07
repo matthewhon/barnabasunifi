@@ -180,6 +180,15 @@ export function subscribeToAccessPolicies(
   });
 }
 
+export async function getAccessPolicies(orgId: string): Promise<UnifiAccessPolicy[]> {
+  const snap = await getDocs(collection(db, 'organizations', orgId, 'access_policies'));
+  return snap.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
+    last_synced: normalizeTimestamp(d.data().last_synced),
+  } as UnifiAccessPolicy));
+}
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
