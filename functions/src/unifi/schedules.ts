@@ -415,7 +415,7 @@ export const syncUnifiSchedules = onCall<{ orgId: string }>(
           rawDoors = Array.isArray(res.data?.data) ? res.data.data : [];
         } catch {
           try {
-            const res = await client.get('/proxy/access/api/v2/doors');
+            const res = await client.get('/proxy/access/api/v2/locations');
             rawDoors = Array.isArray(res.data?.data) ? res.data.data : [];
           } catch {}
         }

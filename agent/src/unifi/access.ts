@@ -1026,22 +1026,6 @@ export class UnifiAccessClient {
     } catch (err: any) {
       logger.debug(`[UniFi] Failed to populate door to hub map from devices: ${err.message}`);
     }
-
-    // Strategy 3: v2 doors API
-    try {
-      const doorsRes = await this.http.get<{
-        data?: Array<any>;
-      }>('/proxy/access/api/v2/doors');
-      const doorsData = doorsRes.data?.data || [];
-      for (const dr of doorsData) {
-        const doorId = dr.id || dr.unique_id;
-        const hubId = dr.hub_id || dr.connected_uah_id || dr.uah_id || dr.device_id;
-        if (doorId && hubId && !this.doorToHubMap.has(doorId)) {
-          this.doorToHubMap.set(doorId, hubId);
-          logger.info(`[UniFi] Mapped Hub ${hubId} to door ${doorId} via /doors`);
-        }
-      }
-    } catch {}
   }
 
   /**
@@ -1198,10 +1182,9 @@ export class UnifiAccessClient {
       }
     }
 
-    // Pass 3: Enrich doors with schedules/rules from v2 doors, locations, and door_unlock_rules API
+    // Pass 3: Enrich doors with schedules/rules from v2 locations and door_unlock_rules API
     try {
       const endpoints = [
-        '/proxy/access/api/v2/doors',
         '/proxy/access/api/v2/locations',
         '/proxy/access/api/v2/door_unlock_rules',
         '/proxy/access/api/v2/settings/door_unlock_rules',
