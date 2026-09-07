@@ -167,16 +167,30 @@ export function normalizeUnifiVisitor(raw: any, orgId = ''): UnifiVisitor {
 
   const doorIds: string[] = [];
   const doorLabels: string[] = [];
-  const rawDoors = raw.doors || raw.door_ids || raw.device_ids || raw.resources;
+  const rawDoors = raw.doors || raw.door_ids || raw.device_ids || raw.resources || raw.resource;
   if (Array.isArray(rawDoors)) {
     for (const d of rawDoors) {
       if (typeof d === 'string') {
-        doorIds.push(d);
+        if (!doorIds.includes(d)) doorIds.push(d);
       } else if (d && typeof d === 'object') {
-        const dId = d.id || d.unique_id || d.door_id;
-        const dLabel = d.name || d.label;
-        if (dId) doorIds.push(String(dId));
-        if (dLabel) doorLabels.push(String(dLabel));
+        const dId = d.id || d.unique_id || d.door_id || d.resource_id;
+        const dLabel = d.name || d.label || d.resource_name;
+        if (dId && !doorIds.includes(String(dId))) doorIds.push(String(dId));
+        if (dLabel && !doorLabels.includes(String(dLabel))) doorLabels.push(String(dLabel));
+
+        if (d.group_info && Array.isArray(d.group_info.group_resources)) {
+          for (const gr of d.group_info.group_resources) {
+            if (Array.isArray(gr.resources)) {
+              for (const r of gr.resources) {
+                const subDoor = r.resource_extras?.device?.door || r.device?.door || r.door;
+                const rId = subDoor?.unique_id || subDoor?.id || r.id || r.unique_id;
+                const rLabel = subDoor?.name || r.name || r.label;
+                if (rId && !doorIds.includes(String(rId))) doorIds.push(String(rId));
+                if (rLabel && !doorLabels.includes(String(rLabel))) doorLabels.push(String(rLabel));
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -600,6 +614,12 @@ export function normalizeUnifiSchedule(raw: any, orgId = ''): UnifiSchedule {
           }
         }
       }
+    }
+  } else if (isDefault || name.toLowerCase().includes('always')) {
+    // UniFi Access returns week_schedule: null for 24/7 default schedules (Always Access)
+    for (const dayEntry of weeklySchedule) {
+      dayEntry.active = true;
+      dayEntry.slots = [{ start_time: '00:00', end_time: '23:59' }];
     }
   }
 
@@ -2025,11 +2045,17 @@ export class UnifiAccessClient {
   }
 
   private getVisitorEndpoints(subpath = ''): string[] {
-    return this.getDeveloperEndpoints('visitors', subpath);
+    const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
+    return [
+      `/proxy/access/api/v2/visitors${cleanSub}`,
+      ...this.getDeveloperEndpoints('visitors', subpath),
+    ];
   }
 
   private getScheduleEndpoints(subpath = ''): string[] {
+    const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
     return [
+      `/proxy/access/api/v2/schedules${cleanSub}`,
       ...this.getDeveloperEndpoints('schedules', subpath),
       ...this.getDeveloperEndpoints('access_policies/schedules', subpath),
       ...this.getDeveloperEndpoints('door_unlock_rules', subpath),

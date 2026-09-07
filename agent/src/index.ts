@@ -280,11 +280,11 @@ async function startBridgeWorker(): Promise<void> {
     logger.error(`[ScheduleSync] Initial sync error: ${err.message}`);
   }
 
-  // 9. Recurring schedule sync (every 15 minutes)
+  // 9. Recurring schedule sync (every 60 seconds)
   const stopScheduleSync = startScheduleSyncInterval(
     config.orgId,
     unifiClient,
-    15 * 60 * 1000
+    60 * 1000
   );
 
   // 10. Initial visitor sync
@@ -296,11 +296,11 @@ async function startBridgeWorker(): Promise<void> {
     logger.error(`[VisitorSync] Initial sync error: ${err.message}`);
   }
 
-  // 11. Recurring visitor sync (every 15 minutes)
+  // 11. Recurring visitor sync (every 60 seconds)
   const stopVisitorSync = startVisitorSyncInterval(
     config.orgId,
     unifiClient,
-    15 * 60 * 1000
+    60 * 1000
   );
 
   // 12. Initial access log sync
