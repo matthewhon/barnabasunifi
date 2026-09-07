@@ -39,6 +39,7 @@ export async function syncVisitors(
 
   const batch = db.batch();
   const now = admin.firestore.Timestamp.now();
+  const matchedDocIds = new Set<string>();
 
   for (const visitor of visitors) {
     const unifiId = visitor.unifi_visitor_id || visitor.id;
@@ -93,7 +94,28 @@ export async function syncVisitors(
       } catch {}
     }
 
+    matchedDocIds.add(targetDocId);
     batch.set(visitorRef, record, { merge: true });
+  }
+
+  // Check for stale pending visitors (older than 2 minutes that were not found in UniFi)
+  const twoMinutesAgoMs = Date.now() - 2 * 60 * 1000;
+  for (const doc of existingDocs) {
+    if (matchedDocIds.has(doc.id)) continue;
+    const data = doc.data();
+    if (data.sync_status === 'pending') {
+      const updatedAtMs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+      if (updatedAtMs < twoMinutesAgoMs) {
+        batch.set(
+          doc.ref,
+          {
+            sync_status: 'failed',
+            sync_error: 'Visitor creation timed out or failed to sync with UniFi Access. Please edit and save to retry.',
+          },
+          { merge: true }
+        );
+      }
+    }
   }
 
   try {

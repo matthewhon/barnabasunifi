@@ -622,6 +622,15 @@ export default function VisitorsPage() {
                         Syncing…
                       </span>
                     )}
+                    {visitor.sync_status === 'failed' && (
+                      <span
+                        className="badge badge-danger"
+                        title={visitor.sync_error || 'Failed to sync with UniFi Access — click Edit to retry'}
+                        style={{ cursor: 'help' }}
+                      >
+                        Sync Failed
+                      </span>
+                    )}
                   </div>
 
                   {purpose && (

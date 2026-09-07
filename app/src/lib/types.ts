@@ -331,7 +331,7 @@ export interface UnifiSchedule {
   holiday_group_id?: string;
   raw_data?: Record<string, unknown>;
   last_synced?: string; // ISO8601
-  sync_status?: 'synced' | 'pending' | 'error';
+  sync_status?: 'synced' | 'pending' | 'error' | 'failed';
   sync_error?: string;
   created_at?: string;
   updated_at?: string;
@@ -357,7 +357,7 @@ export interface UnifiVisitor {
   door_labels?: string[];          // Human-readable door names
   status: VisitorStatus;
   purpose?: string;                // e.g. "Contractor", "Guest Speaker"
-  sync_status?: 'synced' | 'pending' | 'error';
+  sync_status?: 'synced' | 'pending' | 'error' | 'failed';
   sync_error?: string;
   raw_data?: Record<string, unknown>;
   last_synced?: string;            // ISO8601
