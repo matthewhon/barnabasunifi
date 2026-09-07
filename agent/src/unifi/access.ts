@@ -1852,29 +1852,19 @@ export class UnifiAccessClient {
     return allSchedules;
   }
 
-  /**
-   * Fetch detailed door configuration from developer and proxy endpoints.
-   */
   async getDoorDetails(doorId: string): Promise<any> {
-    const endpoints = [
-      ...this.getDeveloperEndpoints('doors', encodeURIComponent(doorId)),
-      `/proxy/access/api/v2/door/${encodeURIComponent(doorId)}`,
-      `/proxy/access/api/v2/doors/${encodeURIComponent(doorId)}`,
-      `/proxy/access/api/v2/location/${encodeURIComponent(doorId)}`,
-      `/proxy/access/api/v2/locations/${encodeURIComponent(doorId)}`,
-      `/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(doorId)}`,
-      `/proxy/access/api/v2/device/${encodeURIComponent(doorId)}`,
-      `/proxy/access/api/v2/devices/${encodeURIComponent(doorId)}`,
-    ];
-
-    for (const endpoint of endpoints) {
-      try {
-        const res = await this.http.get<any>(endpoint);
-        const data = res.data?.data || res.data;
-        if (data && typeof data === 'object') {
-          return data;
+    // Look up door in cached device list or extensions
+    if (this.deviceCache && this.deviceCache.length > 0) {
+      for (const d of this.deviceCache) {
+        if (d.unique_id === doorId || d.id === doorId) return d;
+        if (d.door?.unique_id === doorId || d.door?.id === doorId) return d.door;
+        const exts = d.extra?.extensions || d.extensions || [];
+        for (const ext of exts) {
+          if (ext.target_value === doorId || ext.target_id === doorId) {
+            return ext;
+          }
         }
-      } catch {}
+      }
     }
     return null;
   }

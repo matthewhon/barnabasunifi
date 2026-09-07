@@ -515,11 +515,20 @@ export default function SchedulePage() {
                           </>
                         ) : (
                           <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--color-border)' }}>
-                            <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>
-                              No unlock schedule active
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.25rem' }}>
+                              <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
+                                🔒 No static UniFi unlock schedule
+                              </span>
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                style={{ fontSize: '0.6875rem', padding: '0.1rem 0.35rem', color: 'var(--color-accent)' }}
+                                onClick={() => setViewMode('pco')}
+                              >
+                                View PCO Windows ➔
+                              </button>
                             </div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
-                              Door remains locked 24/7 (opens only via card, PIN, mobile tap, or PCO window).
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginTop: '0.35rem', lineHeight: 1.4 }}>
+                              Door stays secured and unlocks automatically during scheduled Planning Center events &amp; services.
                             </div>
                           </div>
                         )}
