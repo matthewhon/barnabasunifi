@@ -6,6 +6,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
 import type { UnifiVisitor, Door } from '@/lib/types';
 import { format, addHours, addDays, endOfDay, setMinutes, setSeconds, setMilliseconds } from 'date-fns';
+import { parseSafeDate } from '@/lib/date-utils';
 
 interface VisitorModalProps {
   isOpen: boolean;
@@ -29,7 +30,8 @@ function generateRandomPin(length = 6): string {
   return pin;
 }
 
-function toLocalDatetimeInputString(date: Date): string {
+function toLocalDatetimeInputString(inputDate: unknown): string {
+  const date = parseSafeDate(inputDate) || new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
   const yyyy = date.getFullYear();
   const MM = pad(date.getMonth() + 1);
@@ -74,8 +76,8 @@ export default function VisitorModal({
       setPinCode(visitor.pin_code || '');
       setSelectedDoorIds(visitor.door_ids || []);
 
-      const sDate = visitor.start_time ? new Date(visitor.start_time) : new Date();
-      const eDate = visitor.end_time ? new Date(visitor.end_time) : addHours(new Date(), 2);
+      const sDate = parseSafeDate(visitor.start_time) || new Date();
+      const eDate = parseSafeDate(visitor.end_time) || addHours(sDate, 2);
       setStartTime(toLocalDatetimeInputString(sDate));
       setEndTime(toLocalDatetimeInputString(eDate));
     } else {

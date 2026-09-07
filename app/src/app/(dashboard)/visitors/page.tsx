@@ -11,8 +11,9 @@ import {
 } from '@/lib/firestore';
 import type { UnifiVisitor, Door, VisitorStatus } from '@/lib/types';
 import VisitorModal from '@/components/visitors/VisitorModal';
-import { format, isPast, isFuture, formatDistanceToNow } from 'date-fns';
+import { format, isFuture } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
+import { parseSafeDate, safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -107,12 +108,14 @@ function statusBadgeClass(status: VisitorStatus): string {
   }
 }
 
-function formatVisitorTime(iso: string, tz: string): string {
+function formatVisitorTime(iso: unknown, tz: string): string {
+  const d = parseSafeDate(iso);
+  if (!d) return '—';
   try {
-    const zoned = toZonedTime(new Date(iso), tz);
+    const zoned = toZonedTime(d, tz);
     return format(zoned, 'MMM d, yyyy · h:mm a');
   } catch {
-    return format(new Date(iso), 'MMM d, yyyy · h:mm a');
+    return safeFormat(d, 'MMM d, yyyy · h:mm a');
   }
 }
 
@@ -121,26 +124,36 @@ function getValidityNotice(visitor: UnifiVisitor): { text: string; color: string
     return { text: 'Access Revoked', color: 'var(--color-danger, #ef4444)' };
   }
 
-  const now = new Date();
-  const start = new Date(visitor.start_time);
-  const end = new Date(visitor.end_time);
+  const start = parseSafeDate(visitor.start_time);
+  const end = parseSafeDate(visitor.end_time);
 
-  if (isFuture(start)) {
+  if (!start && !end) {
+    return { text: 'No validity window', color: 'var(--color-text-secondary)' };
+  }
+
+  if (start && isFuture(start)) {
     return {
-      text: `Starts in ${formatDistanceToNow(start)}`,
+      text: `Starts ${safeFormatDistanceToNow(start)}`,
       color: 'var(--color-info, #3b82f6)',
     };
   }
 
-  if (isPast(end)) {
+  if (end && safeIsPast(end)) {
     return {
-      text: `Expired ${formatDistanceToNow(end)} ago`,
+      text: `Expired ${safeFormatDistanceToNow(end)}`,
       color: 'var(--color-text-secondary)',
     };
   }
 
+  if (end) {
+    return {
+      text: `Valid now · Ends ${safeFormatDistanceToNow(end)}`,
+      color: 'var(--color-success, #22c55e)',
+    };
+  }
+
   return {
-    text: `Valid now · Ends in ${formatDistanceToNow(end)}`,
+    text: 'Active',
     color: 'var(--color-success, #22c55e)',
   };
 }
@@ -262,7 +275,7 @@ export default function VisitorsPage() {
       if (tab !== 'all' && v.status !== tab) return false;
 
       // Door filter
-      if (doorFilter !== 'all' && !v.door_ids.includes(doorFilter)) return false;
+      if (doorFilter !== 'all' && !(v.door_ids || []).includes(doorFilter)) return false;
 
       // Search
       if (search.trim()) {

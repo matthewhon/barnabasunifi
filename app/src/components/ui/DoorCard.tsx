@@ -2,7 +2,7 @@
 
 import React from 'react';
 import type { Door } from '@/lib/types';
-import { formatDistanceToNow } from 'date-fns';
+import { safeFormatDistanceToNow } from '@/lib/date-utils';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
     : 'var(--color-success)';
 
   const lastSyncedText = door.last_synced
-    ? `Synced ${formatDistanceToNow(new Date(door.last_synced), { addSuffix: true })}`
+    ? `Synced ${safeFormatDistanceToNow(door.last_synced)}`
     : 'Never synced';
 
   return (

@@ -6,7 +6,7 @@ import { functions } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
 import { useRouter } from 'next/navigation';
 import Modal from '@/components/ui/Modal';
-import { formatDistanceToNow } from 'date-fns';
+import { safeFormatDistanceToNow } from '@/lib/date-utils';
 
 interface PlatformConfigDisplay {
   exists: boolean;
@@ -474,7 +474,7 @@ export default function AdminPlatformPage() {
                         <td>
                           <span style={{ fontWeight: 500, color: 'var(--color-text-primary)', fontSize: '0.8125rem' }}>
                             {u.last_sign_in_time
-                              ? formatDistanceToNow(new Date(u.last_sign_in_time), { addSuffix: true })
+                              ? safeFormatDistanceToNow(u.last_sign_in_time)
                               : 'Never signed in'}
                           </span>
                         </td>
