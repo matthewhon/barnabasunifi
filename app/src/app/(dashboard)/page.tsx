@@ -4,15 +4,18 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
+import Link from 'next/link';
 import {
   subscribeToDoors,
   subscribeToScheduleWindows,
   subscribeToUnifiSchedules,
   subscribeToAuditLog,
+  subscribeToAccessLogs,
 } from '@/lib/firestore';
-import type { Door, ScheduleWindow, UnifiSchedule, AuditLogEntry } from '@/lib/types';
+import type { Door, ScheduleWindow, UnifiSchedule, AuditLogEntry, AccessLogEntry } from '@/lib/types';
 import { safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
 import { getDoorUnlockStatus } from '@/lib/door-status-utils';
+import { Sparkline } from '@/components/analytics/Sparkline';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -303,6 +306,8 @@ export default function DashboardPage() {
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
   const [auditLoading, setAuditLoading] = useState(true);
 
+  const [accessLogs, setAccessLogs] = useState<AccessLogEntry[]>([]);
+
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
@@ -338,11 +343,16 @@ export default function DashboardPage() {
       setAuditLoading(false);
     }, 10);
 
+    const unsubLogs = subscribeToAccessLogs(orgId, (l) => {
+      setAccessLogs(l);
+    }, 200);
+
     return () => {
       unsubDoors();
       unsubWindows();
       unsubSchedules();
       unsubAudit();
+      unsubLogs();
     };
   }, [orgId]);
 
@@ -376,6 +386,24 @@ export default function DashboardPage() {
     const status = getDoorUnlockStatus(d, schedules, scheduleWindows);
     return status.isOutsidePolicy;
   });
+
+  // 7-day trend calculation for dashboard widget
+  const weeklyTrendData = (() => {
+    const dayCounts: Record<string, number> = {};
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+      dayCounts[d.toISOString().split('T')[0]] = 0;
+    }
+    accessLogs.forEach((l) => {
+      const key = l.timestamp.split('T')[0];
+      if (dayCounts[key] !== undefined) dayCounts[key]++;
+    });
+    return Object.values(dayCounts);
+  })();
+
+  const totalWeekLogs = accessLogs.length;
+  const grantedWeekLogs = accessLogs.filter((l) => l.event_result === 'success' || l.event_type === 'door_unlock').length;
+  const grantRatePct = totalWeekLogs > 0 ? Math.round((grantedWeekLogs / totalWeekLogs) * 100) : 100;
 
   // Upcoming: future windows, sorted asc, top 5
   const upcoming = scheduleWindows
@@ -439,6 +467,70 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Quick Analytics & Insights Widget */}
+      <section
+        className="card"
+        style={{
+          marginBottom: '1.5rem',
+          padding: '1rem 1.25rem',
+          background: 'linear-gradient(135deg, rgba(36, 101, 245, 0.08) 0%, rgba(16, 185, 129, 0.04) 100%)',
+          border: '1px solid rgba(36, 101, 245, 0.2)',
+          borderRadius: 'var(--radius-lg)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '1rem',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Traffic & Activity (Past 7 Days)
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginTop: '0.15rem' }}>
+              <span style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                {totalWeekLogs.toLocaleString()}
+              </span>
+              <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                entries
+              </span>
+              <span
+                style={{
+                  fontSize: '0.6875rem',
+                  fontWeight: 600,
+                  color: '#10b981',
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  padding: '0.1rem 0.4rem',
+                  borderRadius: '999px',
+                }}
+              >
+                {grantRatePct}% granted
+              </span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Sparkline data={weeklyTrendData} width={100} height={28} color="#2465F5" />
+          </div>
+        </div>
+
+        <Link
+          href="/analytics"
+          className="btn btn-secondary btn-sm"
+          style={{
+            fontSize: '0.8125rem',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.35rem',
+          }}
+        >
+          <span>View Access Analytics</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </Link>
+      </section>
 
       {/* Door Status Grid */}
       <section className="section">
