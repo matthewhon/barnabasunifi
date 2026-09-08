@@ -58,6 +58,33 @@ export async function syncAccessPolicies(
 }
 
 /**
+ * Start a recurring access policy sync on a fixed interval.
+ * Returns a cleanup function that stops the interval.
+ */
+export function startPolicySyncInterval(
+  orgId: string,
+  unifiClient: UnifiAccessClient,
+  intervalMs: number
+): () => void {
+  logger.info(
+    `[PolicySync] Starting access policy sync interval — every ${intervalMs / 1000}s for org: ${orgId}`
+  );
+
+  const handle = setInterval(() => {
+    syncAccessPolicies(orgId, unifiClient).catch((err) => {
+      logger.error(`[PolicySync] Unhandled error in policy sync interval: ${String(err)}`);
+    });
+  }, intervalMs);
+
+  if (handle.unref) handle.unref();
+
+  return () => {
+    clearInterval(handle);
+    logger.info('[PolicySync] Access policy sync interval stopped.');
+  };
+}
+
+/**
  * Fetch all users from UniFi Access and upsert into Firestore unifi_users.
  */
 export async function syncUsers(

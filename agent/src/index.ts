@@ -19,7 +19,7 @@ import { syncDoors, startDoorSyncInterval } from './firebase/doorSync';
 import { syncSchedules, startScheduleSyncInterval } from './firebase/scheduleSync';
 import { syncVisitors, startVisitorSyncInterval } from './firebase/visitorSync';
 import { syncAccessLogs, startAccessLogSyncInterval } from './firebase/accessLogSync';
-import { syncAccessPolicies } from './firebase/userSync';
+import { syncAccessPolicies, startPolicySyncInterval } from './firebase/userSync';
 import { startCommandListener } from './firebase/commandListener';
 import { startUpdateChecker } from './firebase/updateChecker';
 import { startWebServer, AgentBridgeState } from './web/server';
@@ -299,6 +299,13 @@ async function startBridgeWorker(): Promise<void> {
     logger.error(`[PolicySync] Initial sync error: ${err.message}`);
   }
 
+  // 9c. Recurring access policy sync (every 60 seconds)
+  const stopPolicySync = startPolicySyncInterval(
+    config.orgId,
+    unifiClient,
+    60 * 1000
+  );
+
   // 10. Initial visitor sync
   logger.info('Running initial visitor sync…');
   try {
@@ -418,6 +425,7 @@ async function startBridgeWorker(): Promise<void> {
     stopCommandListener();
     stopAccessLogSync();
     stopVisitorSync();
+    stopPolicySync();
     stopScheduleSync();
     stopDoorSync();
     stopHeartbeat();

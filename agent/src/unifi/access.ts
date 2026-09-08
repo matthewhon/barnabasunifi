@@ -2282,10 +2282,6 @@ export class UnifiAccessClient {
     ];
   }
 
-  private getAccessPolicyEndpoints(subpath = ''): string[] {
-    return this.getDeveloperEndpoints('access_policies', subpath);
-  }
-
   /**
    * Fetch all visitors from UniFi Access.
    */
@@ -2605,12 +2601,17 @@ export class UnifiAccessClient {
   // Access Policies Management
   // ---------------------------------------------------------------------------
 
-  private getUserEndpoints(subpath = ''): string[] {
+  private getAccessPolicyEndpoints(subpath = ''): string[] {
     const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
     return [
-      ...this.getDeveloperEndpoints('users', subpath),
-      `/proxy/access/api/v2/users${cleanSub}`,
-      `/proxy/access/api/v1/developer/users${cleanSub}`,
+      ...this.getDeveloperEndpoints('access_policies', subpath),
+      ...this.getDeveloperEndpoints('policies', subpath),
+      ...this.getDeveloperEndpoints('permission/access_policies', subpath),
+      ...this.getDeveloperEndpoints('permission/policies', subpath),
+      `/proxy/access/api/v2/policies${cleanSub}`,
+      `/proxy/access/api/v2/access_policies${cleanSub}`,
+      `/proxy/access/api/v2/permission/access_policies${cleanSub}`,
+      `/proxy/access/api/v2/permission/policies${cleanSub}`,
     ];
   }
 
@@ -2627,43 +2628,53 @@ export class UnifiAccessClient {
           ? res.data.data
           : Array.isArray(res.data?.data?.access_policies)
           ? res.data.data.access_policies
+          : Array.isArray(res.data?.data?.policies)
+          ? res.data.data.policies
+          : Array.isArray(res.data?.data?.list)
+          ? res.data.data.list
+          : Array.isArray(res.data?.list)
+          ? res.data.list
+          : Array.isArray(res.data?.access_policies)
+          ? res.data.access_policies
+          : Array.isArray(res.data?.policies)
+          ? res.data.policies
           : Array.isArray(res.data)
           ? res.data
           : null;
 
-        if (rawList) {
+        if (rawList && rawList.length > 0) {
           logger.info(`[UniFi] Fetched ${rawList.length} access policy(ies) via ${endpoint}`);
-          return rawList.map((p: any) => ({
-            id: String(p.id || p.unique_id || p._id || ''),
-            unifi_policy_id: String(p.id || p.unique_id || p._id || ''),
-            name: String(p.name || p.policy_name || 'Policy'),
-            door_ids: Array.isArray(p.doors || p.door_ids || p.resources)
-              ? (p.doors || p.door_ids || p.resources).map((d: any) => typeof d === 'string' ? d : String(d.id || d.unique_id))
-              : [],
-            schedule_id: p.schedule_id || p.schedule?.id,
-            schedule_name: p.schedule_name || p.schedule?.name,
-            raw_data: p,
-          }));
+          return rawList.map((p: any) => {
+            const doorIds: string[] = [];
+            const rawDoors = p.doors || p.door_ids || p.resources || p.locations || p.configs || p.elements;
+            if (Array.isArray(rawDoors)) {
+              for (const d of rawDoors) {
+                if (typeof d === 'string') {
+                  doorIds.push(d);
+                } else if (d && typeof d === 'object') {
+                  const dId = d.id || d.unique_id || d.door_id || d.location_id || d.resource_id;
+                  if (dId) doorIds.push(String(dId));
+                }
+              }
+            }
+
+            return {
+              id: String(p.id || p.unique_id || p.policy_id || p._id || ''),
+              unifi_policy_id: String(p.id || p.unique_id || p.policy_id || p._id || ''),
+              name: String(p.name || p.policy_name || 'Policy'),
+              door_ids: Array.from(new Set(doorIds)),
+              schedule_id: p.schedule_id || p.scheduleId || p.schedule?.id || p.work_time_id || undefined,
+              schedule_name: p.schedule_name || p.schedule?.name || undefined,
+              raw_data: p,
+            };
+          });
         }
       } catch (err: any) {
         logger.debug(`[UniFi] getAccessPolicies tried ${endpoint}: ${err.response?.status || err.message}`);
       }
     }
 
-    // Fallback: v2 policies
-    try {
-      const res = await this.http.get<any>('/proxy/access/api/v2/policies');
-      const rawList = Array.isArray(res.data?.data) ? res.data.data : Array.isArray(res.data) ? res.data : [];
-      return rawList.map((p: any) => ({
-        id: String(p.id || p.unique_id || ''),
-        unifi_policy_id: String(p.id || p.unique_id || ''),
-        name: String(p.name || 'Policy'),
-        door_ids: Array.isArray(p.doors || p.door_ids) ? (p.doors || p.door_ids) : [],
-        raw_data: p,
-      }));
-    } catch {
-      return [];
-    }
+    return [];
   }
 
   /**
@@ -2840,6 +2851,15 @@ export class UnifiAccessClient {
   // ---------------------------------------------------------------------------
   // User Management
   // ---------------------------------------------------------------------------
+
+  private getUserEndpoints(subpath = ''): string[] {
+    const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
+    return [
+      ...this.getDeveloperEndpoints('users', subpath),
+      `/proxy/access/api/v2/users${cleanSub}`,
+      `/proxy/access/api/v1/developer/users${cleanSub}`,
+    ];
+  }
 
   /**
    * Fetch all users from UniFi Access.
