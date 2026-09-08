@@ -1,5 +1,5 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import axios from 'axios';
 import * as https from 'https';
 import { UnifiAccessPolicy } from '../types';
@@ -159,18 +159,21 @@ export const syncUnifiAccessPolicies = onCall<SyncPoliciesRequest, Promise<{ suc
     }
 
     // Agent mode
-    const commandsRef = db.collection('organizations').doc(targetOrgId).collection('door_commands');
-    await commandsRef.add({
+    const nowIso = new Date().toISOString();
+    const commandRef = await db.collection(`organizations/${targetOrgId}/door_commands`).add({
       action: 'sync_policies',
       status: 'queued',
-      execute_at: Timestamp.fromDate(new Date()),
+      execute_at: nowIso,
       triggered_by: 'manual',
       actor_uid: request.auth?.uid ?? null,
-      created_at: FieldValue.serverTimestamp(),
+      created_at: nowIso,
+      org_id: targetOrgId,
     });
 
     return {
       success: true,
+      mode: 'agent',
+      commandId: commandRef.id,
       message: 'Access policy synchronization command queued for local agent.',
     };
   }
