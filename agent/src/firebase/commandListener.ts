@@ -639,9 +639,19 @@ export function startCommandListener(
             last_synced: nowTimestamp(),
           };
           if (command.action === 'unlock') {
+            const durationMin = command.duration_min ?? 60;
+            const expiresAtMs = Date.now() + durationMin * 60 * 1000;
             updateData.last_unlocked_at = nowTimestamp();
+            updateData.unlock_duration_min = durationMin;
+            updateData.hold_unlock_expires_at = admin.firestore.Timestamp.fromMillis(expiresAtMs);
+            updateData.is_held_unlocked = true;
+            updateData.unlock_trigger = command.triggered_by || 'manual';
+            updateData.unlocked_by_user_id = command.actor_uid || null;
           } else {
             updateData.last_locked_at = nowTimestamp();
+            updateData.is_held_unlocked = false;
+            updateData.hold_unlock_expires_at = null;
+            updateData.unlock_duration_min = null;
           }
           await db.doc(`organizations/${orgId}/doors/${targetDoorId}`).set(updateData, { merge: true });
         } catch (doorUpdateErr) {

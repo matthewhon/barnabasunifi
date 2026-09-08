@@ -1,8 +1,9 @@
 'use client';
 
-import React from 'react';
-import type { Door } from '@/lib/types';
-import { safeFormatDistanceToNow } from '@/lib/date-utils';
+import React, { useEffect, useState } from 'react';
+import type { Door, UnifiSchedule, ScheduleWindow } from '@/lib/types';
+import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
+import { getDoorUnlockStatus } from '@/lib/door-status-utils';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -38,26 +39,50 @@ function QuestionIcon({ size = 24 }: { size?: number }) {
 
 interface DoorCardProps {
   door: Door;
+  schedules?: UnifiSchedule[];
+  scheduleWindows?: ScheduleWindow[];
   onUnlock: (door: Door) => void;
   onLock: (door: Door) => void;
   loading?: boolean;
 }
 
-export default function DoorCard({ door, onUnlock, onLock, loading = false }: DoorCardProps) {
+export default function DoorCard({
+  door,
+  schedules = [],
+  scheduleWindows = [],
+  onUnlock,
+  onLock,
+  loading = false,
+}: DoorCardProps) {
+  const [, setTick] = useState(0);
+
+  // Live tick every 30 seconds to update remaining/elapsed countdowns
+  useEffect(() => {
+    if (door.current_state !== 'unlocked') return;
+    const interval = setInterval(() => setTick((t) => t + 1), 30000);
+    return () => clearInterval(interval);
+  }, [door.current_state]);
+
   const isLocked = door.current_state === 'locked';
   const isUnlocked = door.current_state === 'unlocked';
   const isUnknown = door.current_state === 'unknown';
+
+  const statusInfo = getDoorUnlockStatus(door, schedules, scheduleWindows, new Date());
 
   const borderColor = isUnknown
     ? 'var(--color-border)'
     : isLocked
     ? 'rgba(239, 68, 68, 0.4)'
+    : statusInfo.isOutsidePolicy
+    ? 'rgba(245, 158, 11, 0.5)'
     : 'rgba(34, 197, 94, 0.4)';
 
   const bgGlow = isUnknown
     ? 'transparent'
     : isLocked
     ? 'rgba(239, 68, 68, 0.04)'
+    : statusInfo.isOutsidePolicy
+    ? 'rgba(245, 158, 11, 0.06)'
     : 'rgba(34, 197, 94, 0.04)';
 
   const stateIcon = isUnknown ? (
@@ -65,13 +90,15 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
   ) : isLocked ? (
     <LockIcon color="var(--color-danger)" size={28} />
   ) : (
-    <UnlockIcon color="var(--color-success)" size={28} />
+    <UnlockIcon color={statusInfo.isOutsidePolicy ? 'var(--color-warning)' : 'var(--color-success)'} size={28} />
   );
 
   const stateColor = isUnknown
     ? 'var(--color-text-muted)'
     : isLocked
     ? 'var(--color-danger)'
+    : statusInfo.isOutsidePolicy
+    ? 'var(--color-warning)'
     : 'var(--color-success)';
 
   const lastSyncedText = door.last_synced
@@ -86,7 +113,7 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
         background: `linear-gradient(to bottom, ${bgGlow}, var(--color-bg-surface))`,
         display: 'flex',
         flexDirection: 'column',
-        gap: '1rem',
+        gap: '0.875rem',
         transition: 'border-color 0.3s ease, box-shadow 0.3s ease',
       }}
     >
@@ -101,6 +128,8 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
               ? 'var(--color-bg-elevated)'
               : isLocked
               ? 'rgba(239, 68, 68, 0.12)'
+              : statusInfo.isOutsidePolicy
+              ? 'rgba(245, 158, 11, 0.14)'
               : 'rgba(34, 197, 94, 0.12)',
             display: 'flex',
             alignItems: 'center',
@@ -131,11 +160,17 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
         </div>
       </div>
 
-      {/* State badge */}
+      {/* State & Duration badges */}
       <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', alignItems: 'center' }}>
         <span
           className={`badge ${
-            isUnknown ? 'badge-neutral' : isLocked ? 'badge-danger' : 'badge-success'
+            isUnknown
+              ? 'badge-neutral'
+              : isLocked
+              ? 'badge-danger'
+              : statusInfo.isOutsidePolicy
+              ? 'badge-warning'
+              : 'badge-success'
           }`}
           style={{ fontSize: '0.75rem' }}
         >
@@ -163,15 +198,85 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
           </span>
         )}
 
-        {door.is_held_unlocked && (
-          <span className="badge badge-warning" style={{ fontSize: '0.75rem' }}>
+        {isUnlocked && statusInfo.isOutsidePolicy && (
+          <span
+            className="badge badge-warning"
+            style={{ fontSize: '0.75rem', fontWeight: 600, border: '1px solid rgba(245, 158, 11, 0.4)' }}
+            title="This door is currently unlocked outside of any scheduled unlock policy or PCO event window."
+          >
+            ⚠️ Outside Policy
+          </span>
+        )}
+
+        {door.is_held_unlocked && !statusInfo.isOutsidePolicy && (
+          <span className="badge badge-neutral" style={{ fontSize: '0.75rem' }}>
             ⏱️ Hold Open
           </span>
         )}
       </div>
 
+      {/* Unlock Duration & Policy Timing Banner */}
+      {isUnlocked && statusInfo.durationLabel && (
+        <div
+          style={{
+            padding: '0.5rem 0.625rem',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.75rem',
+            lineHeight: 1.35,
+            background: statusInfo.isOutsidePolicy
+              ? 'rgba(245, 158, 11, 0.1)'
+              : 'rgba(34, 197, 94, 0.08)',
+            border: `1px solid ${
+              statusInfo.isOutsidePolicy ? 'rgba(245, 158, 11, 0.25)' : 'rgba(34, 197, 94, 0.2)'
+            }`,
+            color: statusInfo.isOutsidePolicy ? 'var(--color-warning)' : 'var(--color-success)',
+          }}
+        >
+          <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <span>{statusInfo.isOutsidePolicy ? '⏱️' : '🕒'}</span>
+            <span>{statusInfo.durationLabel}</span>
+          </div>
+          {statusInfo.policyLabel && (
+            <div style={{ fontSize: '0.6875rem', opacity: 0.85, marginTop: '0.15rem' }}>
+              Policy: {statusInfo.policyLabel}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Last accessed metadata */}
+      {(door.last_accessed_by || door.last_accessed_at) && (
+        <div
+          style={{
+            fontSize: '0.75rem',
+            color: 'var(--color-text-muted)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.35rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', minWidth: 0, flexWrap: 'wrap' }}>
+            {door.last_accessed_by && (
+              <span>👤 Last: <strong style={{ color: 'var(--color-text-primary)' }}>{door.last_accessed_by}</strong></span>
+            )}
+            {(door.last_access_method_label || door.last_access_method) && (
+              <span className="badge badge-neutral" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>
+                {door.last_access_method_label || door.last_access_method}
+              </span>
+            )}
+          </div>
+          {door.last_accessed_at && (
+            <span style={{ marginLeft: 'auto', fontSize: '0.6875rem' }}>
+              {safeFormat(door.last_accessed_at, 'MMM d, h:mm a')}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Action buttons */}
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto' }}>
         <button
           className="btn btn-success btn-sm"
           style={{
@@ -183,7 +288,7 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
           title="Temporarily unlock this door"
         >
           <UnlockIcon size={14} color="#fff" />
-          Unlock Now
+          Unlock
         </button>
         <button
           className="btn btn-danger btn-sm"
@@ -196,9 +301,10 @@ export default function DoorCard({ door, onUnlock, onLock, loading = false }: Do
           title="Lock this door immediately"
         >
           <LockIcon size={14} />
-          Lock Now
+          Lock
         </button>
       </div>
     </div>
   );
 }
+

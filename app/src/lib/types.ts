@@ -134,6 +134,11 @@ export interface Door {
   door_position_status?: 'open' | 'close' | null;
   is_held_unlocked?: boolean;
   hold_unlock_expires_at?: string | null;
+  unlock_duration_min?: number | null;
+  last_unlocked_at?: string | null;
+  last_locked_at?: string | null;
+  unlock_trigger?: 'scheduler' | 'manual' | 'agent' | string | null;
+  unlocked_by_user_id?: string | null;
   schedule_id?: string | null;
   schedule_name?: string | null;
   unlock_schedule_name?: string | null;

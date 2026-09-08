@@ -9,13 +9,15 @@ import {
   subscribeToDoors,
   subscribeToAgents,
   subscribeToUnifiSchedules,
+  subscribeToScheduleWindows,
   createDoorCommand,
   getLatestAgentRelease,
   approveAgentUpdate,
   setAgentAutoUpdate,
 } from '@/lib/firestore';
-import type { Door, Agent, UnifiSchedule, AgentRelease } from '@/lib/types';
+import type { Door, Agent, UnifiSchedule, ScheduleWindow, AgentRelease } from '@/lib/types';
 import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
+import { getDoorUnlockStatus } from '@/lib/door-status-utils';
 import Modal from '@/components/ui/Modal';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -76,6 +78,7 @@ function RefreshIcon({ spinning = false }: { spinning?: boolean }) {
 interface DoorCardProps {
   door: Door;
   schedules?: UnifiSchedule[];
+  scheduleWindows?: ScheduleWindow[];
   onUnlock: (door: Door) => void;
   onLock: (door: Door) => void;
   actionLoading: boolean;
@@ -94,9 +97,28 @@ function getFriendlyScheduleName(name?: string | null, fallbackDoorLabel?: strin
   return trimmed;
 }
 
-function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: DoorCardProps) {
+function DoorCard({
+  door,
+  schedules = [],
+  scheduleWindows = [],
+  onUnlock,
+  onLock,
+  actionLoading,
+}: DoorCardProps) {
+  const [, setTick] = useState(0);
+
+  // Live timer tick every 30s to update countdowns
+  useEffect(() => {
+    if (door.current_state !== 'unlocked') return;
+    const interval = setInterval(() => setTick((t) => t + 1), 30000);
+    return () => clearInterval(interval);
+  }, [door.current_state]);
+
   const isLocked = door.current_state === 'locked';
+  const isUnlocked = door.current_state === 'unlocked';
   const isUnknown = door.current_state === 'unknown';
+
+  const statusInfo = getDoorUnlockStatus(door, schedules, scheduleWindows, new Date());
 
   const assignedSchedules = schedules.filter((s) => {
     const doorId = door.id;
@@ -111,13 +133,24 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
     ? 'var(--color-border)'
     : isLocked
     ? 'rgba(239,68,68,0.35)'
+    : statusInfo.isOutsidePolicy
+    ? 'rgba(245,158,11,0.5)'
     : 'rgba(34,197,94,0.35)';
+
+  const bgGlow = isUnknown
+    ? 'transparent'
+    : isLocked
+    ? 'rgba(239,68,68,0.03)'
+    : statusInfo.isOutsidePolicy
+    ? 'rgba(245,158,11,0.05)'
+    : 'rgba(34,197,94,0.03)';
 
   return (
     <div
       className="card"
       style={{
         borderColor,
+        background: `linear-gradient(to bottom, ${bgGlow}, var(--color-bg-surface))`,
         display: 'flex',
         flexDirection: 'column',
         gap: '0.875rem',
@@ -150,7 +183,7 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
           ) : isLocked ? (
             <LockIcon color="var(--color-danger)" />
           ) : (
-            <UnlockIcon color="var(--color-success)" />
+            <UnlockIcon color={statusInfo.isOutsidePolicy ? 'var(--color-warning)' : 'var(--color-success)'} />
           )}
         </div>
       </div>
@@ -159,7 +192,13 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
       <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', alignItems: 'center' }}>
         <span
           className={`badge ${
-            isUnknown ? 'badge-neutral' : isLocked ? 'badge-danger' : 'badge-success'
+            isUnknown
+              ? 'badge-neutral'
+              : isLocked
+              ? 'badge-danger'
+              : statusInfo.isOutsidePolicy
+              ? 'badge-warning'
+              : 'badge-success'
           }`}
         >
           {isUnknown ? 'Unknown' : isLocked ? 'Locked' : 'Unlocked'}
@@ -176,7 +215,17 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
           </span>
         )}
 
-        {door.is_held_unlocked && (
+        {isUnlocked && statusInfo.isOutsidePolicy && (
+          <span
+            className="badge badge-warning"
+            style={{ fontSize: '0.6875rem', fontWeight: 600, border: '1px solid rgba(245,158,11,0.4)' }}
+            title="This door is currently unlocked outside active scheduled policies or event windows."
+          >
+            ⚠️ Outside Policy
+          </span>
+        )}
+
+        {door.is_held_unlocked && !statusInfo.isOutsidePolicy && (
           <span className="badge badge-warning" style={{ fontSize: '0.6875rem' }}>
             ⏱️ Hold Open
           </span>
@@ -222,42 +271,72 @@ function DoorCard({ door, schedules = [], onUnlock, onLock, actionLoading }: Doo
             </span>
           </Link>
         ) : null}
+      </div>
 
-        {(door.last_accessed_by || door.last_accessed_at) && (
-          <div
-            style={{
-              fontSize: '0.75rem',
-              color: 'var(--color-text-muted)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '0.35rem',
-              marginTop: '0.25rem',
-              width: '100%',
-              flexWrap: 'wrap',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', minWidth: 0, flexWrap: 'wrap' }}>
-              {door.last_accessed_by && (
-                <span>👤 Last: <strong style={{ color: 'var(--color-text-primary)' }}>{door.last_accessed_by}</strong></span>
-              )}
-              {(door.last_access_method_label || door.last_access_method) && (
-                <span className="badge badge-neutral" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>
-                  {door.last_access_method_label || door.last_access_method}
-                </span>
-              )}
+      {/* Unlock Duration & Policy Timing Banner */}
+      {isUnlocked && statusInfo.durationLabel && (
+        <div
+          style={{
+            padding: '0.45rem 0.6rem',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.75rem',
+            lineHeight: 1.35,
+            background: statusInfo.isOutsidePolicy
+              ? 'rgba(245, 158, 11, 0.1)'
+              : 'rgba(34, 197, 94, 0.08)',
+            border: `1px solid ${
+              statusInfo.isOutsidePolicy ? 'rgba(245, 158, 11, 0.25)' : 'rgba(34, 197, 94, 0.2)'
+            }`,
+            color: statusInfo.isOutsidePolicy ? 'var(--color-warning)' : 'var(--color-success)',
+          }}
+        >
+          <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <span>{statusInfo.isOutsidePolicy ? '⏱️' : '🕒'}</span>
+            <span>{statusInfo.durationLabel}</span>
+          </div>
+          {statusInfo.policyLabel && (
+            <div style={{ fontSize: '0.6875rem', opacity: 0.85, marginTop: '0.15rem' }}>
+              Policy: {statusInfo.policyLabel}
             </div>
-            {door.last_accessed_at && (
-              <span style={{ marginLeft: 'auto', fontSize: '0.6875rem' }}>
-                {safeFormat(door.last_accessed_at, 'MMM d, h:mm a')}
+          )}
+        </div>
+      )}
+
+      {/* Last accessed metadata */}
+      {(door.last_accessed_by || door.last_accessed_at) && (
+        <div
+          style={{
+            fontSize: '0.75rem',
+            color: 'var(--color-text-muted)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.35rem',
+            marginTop: '0.15rem',
+            width: '100%',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', minWidth: 0, flexWrap: 'wrap' }}>
+            {door.last_accessed_by && (
+              <span>👤 Last: <strong style={{ color: 'var(--color-text-primary)' }}>{door.last_accessed_by}</strong></span>
+            )}
+            {(door.last_access_method_label || door.last_access_method) && (
+              <span className="badge badge-neutral" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>
+                {door.last_access_method_label || door.last_access_method}
               </span>
             )}
           </div>
-        )}
-      </div>
+          {door.last_accessed_at && (
+            <span style={{ marginLeft: 'auto', fontSize: '0.6875rem' }}>
+              {safeFormat(door.last_accessed_at, 'MMM d, h:mm a')}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Actions */}
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto' }}>
         <button
           className="btn btn-success btn-sm"
           style={{ flex: 1 }}
@@ -577,6 +656,7 @@ export default function DoorsPage() {
   const [doors, setDoors] = useState<Door[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [schedules, setSchedules] = useState<UnifiSchedule[]>([]);
+  const [scheduleWindows, setScheduleWindows] = useState<ScheduleWindow[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [latestRelease, setLatestRelease] = useState<AgentRelease | null>(null);
@@ -608,6 +688,10 @@ export default function DoorsPage() {
       setSchedules(s);
     });
 
+    const unsubWindows = subscribeToScheduleWindows(orgId, (w) => {
+      setScheduleWindows(w);
+    });
+
     // Fetch latest release for version comparison
     getLatestAgentRelease().then((r) => setLatestRelease(r)).catch(() => {});
 
@@ -615,6 +699,7 @@ export default function DoorsPage() {
       unsubDoors();
       unsubAgents();
       unsubSchedules();
+      unsubWindows();
     };
   }, [orgId]);
 
@@ -713,6 +798,11 @@ export default function DoorsPage() {
     return true;
   });
 
+  const outsidePolicyDoors = validDoors.filter((d) => {
+    const status = getDoorUnlockStatus(d, schedules, scheduleWindows);
+    return status.isOutsidePolicy;
+  });
+
   return (
     <div>
       {/* Page Header */}
@@ -743,6 +833,35 @@ export default function DoorsPage() {
           <span>{syncingDoors ? 'Scanning UniFi…' : 'Scan for New Doors'}</span>
         </button>
       </div>
+
+      {/* Outside Policy Warning Banner */}
+      {outsidePolicyDoors.length > 0 && (
+        <div
+          className="alert alert-warning"
+          style={{
+            marginBottom: '1.25rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '0.75rem',
+            border: '1px solid rgba(245, 158, 11, 0.4)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '1.25rem' }}>⚠️</span>
+            <div>
+              <strong>
+                {outsidePolicyDoors.length} door{outsidePolicyDoors.length !== 1 ? 's are' : ' is'} currently unlocked outside scheduled policy:
+              </strong>{' '}
+              {outsidePolicyDoors.map((d) => {
+                const s = getDoorUnlockStatus(d, schedules, scheduleWindows);
+                return `${d.label} (${s.durationLabel || 'unlocked'})`;
+              }).join(' · ')}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Feedback */}
       {feedback && (
@@ -784,6 +903,7 @@ export default function DoorsPage() {
               key={door.id}
               door={door}
               schedules={schedules}
+              scheduleWindows={scheduleWindows}
               onUnlock={openUnlockModal}
               onLock={openLockModal}
               actionLoading={actionLoading}

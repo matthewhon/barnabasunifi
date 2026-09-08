@@ -95,19 +95,28 @@ export async function syncDoors(
 
     const doorRef = db.doc(`organizations/${orgId}/doors/${door.id}`);
 
+    const normalizedState = normalizeDoorState(door.door_lock_relay_status);
+    const holdExpiresAt = typeof door.hold_unlock_end_time === 'number'
+      ? admin.firestore.Timestamp.fromMillis(door.hold_unlock_end_time * 1000)
+      : null;
+
     const record: Record<string, any> = {
       unifi_door_id: door.id,
       label,
-      current_state: normalizeDoorState(door.door_lock_relay_status),
+      current_state: normalizedState,
       door_position_status: door.door_position_status ?? null,
       device_state: door.device_state ?? null,
-      is_held_unlocked: Boolean(door.is_held_unlocked),
-      hold_unlock_expires_at: typeof door.hold_unlock_end_time === 'number'
-        ? admin.firestore.Timestamp.fromMillis(door.hold_unlock_end_time * 1000)
-        : null,
+      is_held_unlocked: Boolean(door.is_held_unlocked || holdExpiresAt),
+      hold_unlock_expires_at: holdExpiresAt,
       last_synced: now,
       org_id: orgId,
     };
+
+    if (normalizedState === 'locked') {
+      record.is_held_unlocked = false;
+      record.hold_unlock_expires_at = null;
+      record.unlock_duration_min = null;
+    }
 
     const schedId = door.unlock_schedule_id || door.schedule_id;
     if (schedId) {
