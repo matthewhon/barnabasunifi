@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore } from 'firebase-admin/firestore';
 import { PcoClient, PcoResource } from './client';
+import { normalizePlanTimeType } from './sync';
 
 type ResourceType = 'services' | 'groups' | 'service' | 'group';
 
@@ -111,13 +112,13 @@ export const getPcoResources = onCall<
 
               const planTimes = await client.getPlanTimes(item.id, nextPlan.id);
               upcomingTimes = planTimes.map((pt) => {
-                const attrs = pt.attributes as { starts_at?: string; ends_at?: string; time_type?: string; name?: string };
+                const attrs = pt.attributes as { starts_at?: string; ends_at?: string; time_type?: string | number; name?: string };
                 return {
                   id: pt.id,
                   name: attrs.name,
                   starts_at: attrs.starts_at || '',
                   ends_at: attrs.ends_at,
-                  time_type: attrs.time_type,
+                  time_type: normalizePlanTimeType(attrs.time_type, attrs.name),
                 };
               }).filter((t) => !!t.starts_at);
             }

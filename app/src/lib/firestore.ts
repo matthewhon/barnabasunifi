@@ -73,6 +73,30 @@ export async function disconnectPco(orgId: string): Promise<void> {
   });
 }
 
+// ─── Helpers for Firestore Payload Sanitization ──────────────────────────────
+
+function cleanAddPayload<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const clean: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      clean[key] = value;
+    }
+  }
+  return clean;
+}
+
+function cleanUpdatePayload<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const clean: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined) {
+      clean[key] = deleteField();
+    } else {
+      clean[key] = value;
+    }
+  }
+  return clean;
+}
+
 // ─── Mappings ─────────────────────────────────────────────────────────────────
 
 export async function getMappings(orgId: string): Promise<Mapping[]> {
@@ -84,12 +108,13 @@ export async function createMapping(
   orgId: string,
   mapping: Omit<Mapping, 'id' | 'org_id' | 'created_at' | 'updated_at'>,
 ): Promise<string> {
-  const ref = await addDoc(collection(db, 'organizations', orgId, 'mappings'), {
+  const data = cleanAddPayload({
     ...mapping,
     org_id: orgId,
     created_at: serverTimestamp(),
     updated_at: serverTimestamp(),
   });
+  const ref = await addDoc(collection(db, 'organizations', orgId, 'mappings'), data);
   return ref.id;
 }
 
@@ -98,10 +123,11 @@ export async function updateMapping(
   mappingId: string,
   updates: Partial<Mapping>,
 ): Promise<void> {
-  await updateDoc(doc(db, 'organizations', orgId, 'mappings', mappingId), {
+  const data = cleanUpdatePayload({
     ...updates,
     updated_at: serverTimestamp(),
   });
+  await updateDoc(doc(db, 'organizations', orgId, 'mappings', mappingId), data);
 }
 
 export async function deleteMapping(orgId: string, mappingId: string): Promise<void> {
@@ -140,12 +166,13 @@ export async function createAccessPolicyMapping(
   orgId: string,
   mapping: Omit<AccessPolicyMapping, 'id' | 'org_id' | 'created_at' | 'updated_at'>
 ): Promise<string> {
-  const ref = await addDoc(collection(db, 'organizations', orgId, 'access_policy_mappings'), {
+  const data = cleanAddPayload({
     ...mapping,
     org_id: orgId,
     created_at: serverTimestamp(),
     updated_at: serverTimestamp(),
   });
+  const ref = await addDoc(collection(db, 'organizations', orgId, 'access_policy_mappings'), data);
   return ref.id;
 }
 
@@ -154,10 +181,11 @@ export async function updateAccessPolicyMapping(
   mappingId: string,
   updates: Partial<AccessPolicyMapping>
 ): Promise<void> {
-  await updateDoc(doc(db, 'organizations', orgId, 'access_policy_mappings', mappingId), {
+  const data = cleanUpdatePayload({
     ...updates,
     updated_at: serverTimestamp(),
   });
+  await updateDoc(doc(db, 'organizations', orgId, 'access_policy_mappings', mappingId), data);
 }
 
 export async function deleteAccessPolicyMapping(orgId: string, mappingId: string): Promise<void> {

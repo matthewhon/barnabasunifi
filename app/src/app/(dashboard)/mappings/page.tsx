@@ -152,6 +152,42 @@ function formatIsoTimeOnly(isoStr: string): string {
   return d ? safeFormat(d, 'h:mm a') : '';
 }
 
+function normalizePlanTimeType(rawType: unknown, name?: string): 'service' | 'rehearsal' | 'other' {
+  if (rawType !== undefined && rawType !== null) {
+    const s = String(rawType).toLowerCase().trim();
+    if (s === '0' || s === 'service' || s === 'service_time' || s.includes('service')) return 'service';
+    if (
+      s === '1' ||
+      s === 'rehearsal' ||
+      s === 'rehearsal_time' ||
+      s.includes('rehearsal') ||
+      s.includes('practice') ||
+      s.includes('sound check') ||
+      s.includes('soundcheck') ||
+      s.includes('warmup') ||
+      s.includes('warm-up')
+    ) {
+      return 'rehearsal';
+    }
+    if (s === '2' || s === 'other' || s === 'other_time' || s.includes('other')) return 'other';
+  }
+  if (name) {
+    const s = name.toLowerCase().trim();
+    if (
+      s.includes('rehearsal') ||
+      s.includes('practice') ||
+      s.includes('sound check') ||
+      s.includes('soundcheck') ||
+      s.includes('warmup') ||
+      s.includes('warm-up')
+    ) {
+      return 'rehearsal';
+    }
+    if (s.includes('service') || s.includes('worship')) return 'service';
+  }
+  return 'service';
+}
+
 function timeTypeBadgeStyle(timeType?: string): { bg: string; color: string; border: string } {
   const t = (timeType || '').toLowerCase();
   if (t === 'service') {
@@ -370,18 +406,21 @@ function ActiveMappingCard({
               {upcomingTimes
                 .slice()
                 .sort((a, b) => {
+                  const aNorm = normalizePlanTimeType(a.time_type, a.name);
+                  const bNorm = normalizePlanTimeType(b.time_type, b.name);
                   const aEnabled = !mapping.time_types || mapping.time_types.length === 0 ||
-                    mapping.time_types.map((tt) => tt.toLowerCase()).includes((a.time_type || 'service').toLowerCase());
+                    mapping.time_types.map((tt) => normalizePlanTimeType(tt)).includes(aNorm);
                   const bEnabled = !mapping.time_types || mapping.time_types.length === 0 ||
-                    mapping.time_types.map((tt) => tt.toLowerCase()).includes((b.time_type || 'service').toLowerCase());
+                    mapping.time_types.map((tt) => normalizePlanTimeType(tt)).includes(bNorm);
                   if (aEnabled && !bEnabled) return -1;
                   if (!aEnabled && bEnabled) return 1;
                   return new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime();
                 })
                 .map((t) => {
+                  const normType = normalizePlanTimeType(t.time_type, t.name);
                   const isEnabled = !mapping.time_types || mapping.time_types.length === 0 ||
-                    mapping.time_types.map((tt) => tt.toLowerCase()).includes((t.time_type || 'service').toLowerCase());
-                  const style = isEnabled ? timeTypeBadgeStyle(t.time_type) : { bg: 'var(--color-bg-surface)', color: 'var(--color-text-muted)', border: 'var(--color-border)' };
+                    mapping.time_types.map((tt) => normalizePlanTimeType(tt)).includes(normType);
+                  const style = isEnabled ? timeTypeBadgeStyle(normType) : { bg: 'var(--color-bg-surface)', color: 'var(--color-text-muted)', border: 'var(--color-border)' };
                   const timeLabel = formatIsoTimeRange(t.starts_at, t.ends_at);
 
                   return (
@@ -405,7 +444,7 @@ function ActiveMappingCard({
                       <ClockIcon />
                       <span>{timeLabel}</span>
                       <span style={{ opacity: 0.85, textTransform: 'capitalize', fontSize: '0.6875rem' }}>
-                        ({t.name ? `${t.name} · ` : ''}{t.time_type || 'service'}{!isEnabled ? ' — Excluded' : ' — Active'})
+                        ({t.name ? `${t.name} · ` : ''}{normType}{!isEnabled ? ' — Excluded' : ' — Active'})
                       </span>
                     </span>
                   );
@@ -1305,18 +1344,22 @@ function AddMappingModal({
 
     const selectedDoors = validDoors.filter((d) => selectedDoorIds.includes(d.id));
 
-    await onSave({
-      pco_resource_id: selectedResourceId,
-      pco_resource_label: selectedResource?.name ?? selectedResourceId,
-      door_ids: selectedDoorIds,
-      door_labels: selectedDoors.map((d) => d.label),
-      time_types: sourceType === 'service' ? timeTypes : [],
-      lock_timing_mode: timingChoice === 'default' ? undefined : timingChoice,
-      lock_offset_min: timingChoice === 'default' ? undefined : customLockMin,
-      unlock_offset_min: timingChoice === 'default' ? undefined : customUnlockMin,
-      enabled,
-    });
-    reset();
+    try {
+      await onSave({
+        pco_resource_id: selectedResourceId,
+        pco_resource_label: selectedResource?.name ?? selectedResourceId,
+        door_ids: selectedDoorIds,
+        door_labels: selectedDoors.map((d) => d.label),
+        time_types: sourceType === 'service' ? timeTypes : [],
+        lock_timing_mode: timingChoice === 'default' ? undefined : timingChoice,
+        lock_offset_min: timingChoice === 'default' ? undefined : customLockMin,
+        unlock_offset_min: timingChoice === 'default' ? undefined : customUnlockMin,
+        enabled,
+      });
+      reset();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save mapping.');
+    }
   }
 
   const totalSteps = sourceType === 'service' ? 4 : 3;
@@ -2137,8 +2180,10 @@ export default function MappingsPage() {
         setMappings((prev) => [...prev, newMapping]);
         setModalOpen(false);
         showFeedback('Mapping created successfully.', true);
-      } catch {
-        showFeedback('Failed to save mapping.', false);
+      } catch (err: any) {
+        console.error('Failed to save mapping:', err);
+        showFeedback(`Failed to save mapping: ${err?.message || 'Unknown error'}`, false);
+        throw err;
       } finally {
         setSaving(false);
       }

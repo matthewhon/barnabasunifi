@@ -46,6 +46,42 @@ interface TriggerPcoSyncResponse {
   windowsUpdated: number;
 }
 
+export function normalizePlanTimeType(rawType: unknown, name?: string): 'service' | 'rehearsal' | 'other' {
+  if (rawType !== undefined && rawType !== null) {
+    const s = String(rawType).toLowerCase().trim();
+    if (s === '0' || s === 'service' || s === 'service_time' || s.includes('service')) return 'service';
+    if (
+      s === '1' ||
+      s === 'rehearsal' ||
+      s === 'rehearsal_time' ||
+      s.includes('rehearsal') ||
+      s.includes('practice') ||
+      s.includes('sound check') ||
+      s.includes('soundcheck') ||
+      s.includes('warmup') ||
+      s.includes('warm-up')
+    ) {
+      return 'rehearsal';
+    }
+    if (s === '2' || s === 'other' || s === 'other_time' || s.includes('other')) return 'other';
+  }
+  if (name) {
+    const s = name.toLowerCase().trim();
+    if (
+      s.includes('rehearsal') ||
+      s.includes('practice') ||
+      s.includes('sound check') ||
+      s.includes('soundcheck') ||
+      s.includes('warmup') ||
+      s.includes('warm-up')
+    ) {
+      return 'rehearsal';
+    }
+    if (s.includes('service') || s.includes('worship')) return 'service';
+  }
+  return 'service';
+}
+
 // ---------------------------------------------------------------------------
 // Core sync logic
 // ---------------------------------------------------------------------------
@@ -274,14 +310,16 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
           const attrs = planTime.attributes as {
             starts_at?: string;
             ends_at?: string;
-            time_type?: string;
+            time_type?: string | number;
+            name?: string;
           };
 
-          // Filter by enabled time_types if specified on mapping
+          const normalizedType = normalizePlanTimeType(attrs.time_type, attrs.name);
+
+          // Filter by enabled time_types if specified on mapping (e.g. rehearsal, service, other)
           if (enabledTimeTypes && enabledTimeTypes.length > 0) {
-            const rawType = (attrs.time_type || 'service').toLowerCase();
-            const allowed = enabledTimeTypes.map((t) => t.toLowerCase());
-            if (!allowed.includes(rawType)) {
+            const allowed = enabledTimeTypes.map((t) => normalizePlanTimeType(t));
+            if (!allowed.includes(normalizedType)) {
               continue;
             }
           }
@@ -295,7 +333,8 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
           const idempotencyKey = `service:${serviceTypeId}:plan:${planId}:time:${planTime.id}`;
           const planDetail = (plan.attributes?.title ?? plan.attributes?.series_title ?? plan.attributes?.dates) as string | undefined;
-          const planTitle = planDetail ? `${serviceTypeName}: ${planDetail}` : serviceTypeName;
+          const timeTypeLabel = attrs.name || (normalizedType === 'rehearsal' ? 'Rehearsal' : normalizedType === 'service' ? 'Service' : 'Other');
+          const planTitle = planDetail ? `${serviceTypeName}: ${planDetail} (${timeTypeLabel})` : `${serviceTypeName} (${timeTypeLabel})`;
 
           await upsertWindow(
             idempotencyKey,
@@ -305,6 +344,8 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
               source: 'pco_service',
               source_type: 'service',
               source_label: planTitle,
+              time_type: normalizedType,
+              time_type_name: attrs.name || null,
               pco_plan_id: planId,
               pco_plan_time_id: planTime.id,
               pco_service_type_id: serviceTypeId,

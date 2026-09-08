@@ -323,9 +323,42 @@ export function startCommandListener(
         syncDoors(orgId, unifiClient).catch(() => {});
       } else if (command.action === 'lock') {
         if (!command.unifi_door_id) throw new Error('Missing unifi_door_id for lock action');
-        await unifiClient.lockDoor(command.unifi_door_id);
-        resultMessage = 'Door locked successfully.';
-        syncDoors(orgId, unifiClient).catch(() => {});
+
+        // Guard against premature lock if another schedule window is currently active for this door
+        let skipLock = false;
+        if (command.triggered_by !== 'manual') {
+          try {
+            const activeWindowsSnap = await db
+              .collection(`organizations/${orgId}/schedule_windows`)
+              .where('door_ids', 'array-contains', command.unifi_door_id)
+              .get();
+
+            const now = Date.now();
+            const hasActiveOverlappingWindow = activeWindowsSnap.docs.some((wDoc) => {
+              if (wDoc.id === command.schedule_window_id) return false;
+              const d = wDoc.data();
+              const unlockAt = d.unlock_at?.toMillis ? d.unlock_at.toMillis() : new Date(d.unlock_at).getTime();
+              const lockAt = d.lock_at?.toMillis ? d.lock_at.toMillis() : new Date(d.lock_at).getTime();
+              return !isNaN(unlockAt) && !isNaN(lockAt) && unlockAt <= now && lockAt > now;
+            });
+
+            if (hasActiveOverlappingWindow) {
+              logger.info(
+                `[CommandListener] Suppressing lock command ${commandId} for door ${command.unifi_door_id}: another scheduled window is actively keeping this door unlocked.`
+              );
+              resultMessage = 'Lock deferred: another scheduled window is actively keeping this door unlocked.';
+              skipLock = true;
+            }
+          } catch (guardErr) {
+            logger.warn(`[CommandListener] Active window check notice: ${String(guardErr)}`);
+          }
+        }
+
+        if (!skipLock) {
+          await unifiClient.lockDoor(command.unifi_door_id);
+          resultMessage = 'Door locked successfully.';
+          syncDoors(orgId, unifiClient).catch(() => {});
+        }
       } else if (command.action === 'sync_doors') {
         const synced = await syncDoors(orgId, unifiClient);
         resultMessage = `Discovered and synced ${synced.length} door(s) from UniFi Access.`;
