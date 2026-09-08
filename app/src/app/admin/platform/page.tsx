@@ -203,6 +203,10 @@ export default function SoftwareAdminPage() {
     if (!isSuperAdmin && role !== 'super_admin') return;
     setFetchingOverview(true);
     try {
+      // Force token refresh to make sure latest custom claims are sent
+      if (currentUser) {
+        await currentUser.getIdToken(true);
+      }
       const fn = httpsCallable<unknown, {
         tenants: TenantItem[];
         users: UserItem[];
@@ -217,26 +221,32 @@ export default function SoftwareAdminPage() {
       setRecentLogs(data.recent_logs || []);
     } catch (err: unknown) {
       console.error('Failed to load platform overview:', err);
-      showToast('Failed to load software platform data.', 'error');
+      const errMsg = err instanceof Error ? err.message : 'Failed to load software platform data.';
+      showToast(errMsg, 'error');
     } finally {
       setFetchingOverview(false);
     }
-  }, [isSuperAdmin, role]);
+  }, [isSuperAdmin, role, currentUser]);
 
   // Load PCO Config
-  const loadConfig = useCallback(() => {
+  const loadConfig = useCallback(async () => {
     if (!isSuperAdmin && role !== 'super_admin') return;
     setFetchingConfig(true);
-    const fn = httpsCallable<unknown, PlatformConfigDisplay>(functions, 'getPlatformConfigCallable');
-    fn({})
-      .then(({ data }) => {
-        setConfig(data);
-        if (data.pco_client_id) setClientId(data.pco_client_id);
-        if (data.redirect_uri) setRedirectUri(data.redirect_uri);
-      })
-      .catch(() => setConfig({ exists: false }))
-      .finally(() => setFetchingConfig(false));
-  }, [isSuperAdmin, role]);
+    try {
+      if (currentUser) {
+        await currentUser.getIdToken(true);
+      }
+      const fn = httpsCallable<unknown, PlatformConfigDisplay>(functions, 'getPlatformConfigCallable');
+      const { data } = await fn({});
+      setConfig(data);
+      if (data.pco_client_id) setClientId(data.pco_client_id);
+      if (data.redirect_uri) setRedirectUri(data.redirect_uri);
+    } catch {
+      setConfig({ exists: false });
+    } finally {
+      setFetchingConfig(false);
+    }
+  }, [isSuperAdmin, role, currentUser]);
 
   useEffect(() => {
     loadOverview();
