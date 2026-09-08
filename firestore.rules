@@ -122,6 +122,12 @@ service cloud.firestore {
         allow write: if isOrgManager(orgId) || isAgentForOrg(orgId);
       }
 
+      // Access Logs: members can read; admins, managers and agents can write
+      match /access_logs/{logId} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isOrgManager(orgId) || isAgentForOrg(orgId);
+      }
+
       // Door Commands: all members can read and create (manual overrides from UI)
       // Only the agent can update (to mark done/failed)
       match /door_commands/{commandId} {
