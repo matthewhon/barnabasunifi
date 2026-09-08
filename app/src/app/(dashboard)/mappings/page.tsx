@@ -152,6 +152,11 @@ function formatIsoTimeOnly(isoStr: string): string {
   return d ? safeFormat(d, 'h:mm a') : '';
 }
 
+function formatIsoDateOnly(isoStr: string): string {
+  const d = parseSafeDate(isoStr);
+  return d ? safeFormat(d, 'EEE, MMM d, yyyy') : '';
+}
+
 function normalizePlanTimeType(rawType: unknown, name?: string): 'service' | 'rehearsal' | 'other' {
   if (rawType !== undefined && rawType !== null) {
     const s = String(rawType).toLowerCase().trim();
@@ -277,13 +282,19 @@ function ActiveMappingCard({
   });
 
   // Find upcoming schedule windows linked to this mapping / service / group
+  const now = Date.now();
   const matchingWindows = scheduleWindows
     .filter((w) => {
       if (w.source_type !== mapping.source_type) return false;
-      if (w.source_label && w.source_label.toLowerCase().includes(mapping.pco_resource_label.toLowerCase())) return true;
-      if ((w as any).pco_service_type_id === mapping.pco_resource_id) return true;
-      if ((w as any).service_mapping_id === mapping.id) return true;
-      return false;
+      const isMatch =
+        (w.source_label && w.source_label.toLowerCase().includes(mapping.pco_resource_label.toLowerCase())) ||
+        (w as any).pco_service_type_id === mapping.pco_resource_id ||
+        (w as any).service_mapping_id === mapping.id;
+      if (!isMatch) return false;
+
+      // Exclude windows that have already concluded in the past
+      const lockTime = new Date(w.lock_at || w.ends_at).getTime();
+      return !isNaN(lockTime) && lockTime >= now;
     })
     .sort((a, b) => new Date(a.unlock_at).getTime() - new Date(b.unlock_at).getTime());
 
@@ -626,8 +637,8 @@ function ActiveMappingCard({
           style={{
             padding: '0.625rem 0.75rem',
             borderRadius: 'var(--radius-md)',
-            background: 'rgba(36, 101, 245, 0.05)',
-            border: '1px solid rgba(36, 101, 245, 0.2)',
+            background: new Date(nextWindow.unlock_at).getTime() <= now ? 'rgba(16, 185, 129, 0.08)' : 'rgba(36, 101, 245, 0.05)',
+            border: `1px solid ${new Date(nextWindow.unlock_at).getTime() <= now ? 'rgba(16, 185, 129, 0.3)' : 'rgba(36, 101, 245, 0.2)'}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -636,14 +647,22 @@ function ActiveMappingCard({
           }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-            <span style={{ fontSize: '0.6875rem', fontWeight: 700, color: 'var(--color-accent)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Next Scheduled Door Window
+            <span
+              style={{
+                fontSize: '0.6875rem',
+                fontWeight: 700,
+                color: new Date(nextWindow.unlock_at).getTime() <= now ? 'var(--color-success, #10b981)' : 'var(--color-accent)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              {new Date(nextWindow.unlock_at).getTime() <= now ? '🟢 Currently Active Window' : 'Next Scheduled Door Window'}
             </span>
             <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-primary)', fontWeight: 600 }}>
               {nextWindow.source_label || mapping.pco_resource_label}
             </span>
             <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-              Unlock: {formatIsoTimeOnly(nextWindow.unlock_at)} → Lock: {formatIsoTimeOnly(nextWindow.lock_at)}
+              {formatIsoDateOnly(nextWindow.starts_at || nextWindow.unlock_at)} · Unlock: {formatIsoTimeOnly(nextWindow.unlock_at)} → Lock: {formatIsoTimeOnly(nextWindow.lock_at)}
             </span>
           </div>
 
