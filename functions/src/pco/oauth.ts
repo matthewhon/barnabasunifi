@@ -138,7 +138,7 @@ export const pcoOAuthStart = onRequest(async (req, res) => {
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
-      scope: 'services groups',
+      scope: 'people services groups calendar check_ins',
       state: orgId,
     });
 
