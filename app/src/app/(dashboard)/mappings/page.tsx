@@ -2117,26 +2117,11 @@ export default function MappingsPage() {
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <button
               className="btn btn-secondary btn-sm"
-              onClick={handleSyncPolicies}
-              disabled={syncingPolicies}
-              title="Sync access policy definitions from local UniFi console"
-            >
-              <RefreshIcon spinning={syncingPolicies} /> {syncingPolicies ? 'Syncing…' : 'Fetch Policies'}
-            </button>
-            <button
-              className="btn btn-secondary btn-sm"
               onClick={handleTriggerUserSync}
               disabled={syncingUsers}
               title="Reconcile Planning Center list members with UniFi Access Users"
             >
               <RefreshIcon spinning={syncingUsers} /> {syncingUsers ? 'Reconciling…' : 'Sync Users Now'}
-            </button>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handleOpenCreatePolicy}
-              title="Create a new UniFi Access Policy"
-            >
-              <PlusIcon /> Create Policy
             </button>
             <button className="btn btn-primary btn-sm" onClick={() => setPolicyModalOpen(true)}>
               <PlusIcon />
@@ -2175,11 +2160,11 @@ export default function MappingsPage() {
           className={`tab ${tab === 'user_policy' ? 'active' : ''}`}
           onClick={() => setTab('user_policy')}
         >
-          Access Policies & Lists
+          Lists & Users
         </button>
       </div>
 
-      {/* ─── TAB: Access Policies & Lists ─── */}
+      {/* ─── TAB: Lists & Users ─── */}
       {tab === 'user_policy' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {/* Feature Disabled Banner */}
@@ -2215,166 +2200,30 @@ export default function MappingsPage() {
             </div>
           )}
 
-          {/* Access Policies Section Card */}
-          <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-              <div>
-                <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.9375rem' }}>
-                  UniFi Access Policies ({accessPolicies.length})
-                </div>
-                <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginTop: '0.15rem' }}>
-                  Access policies define door unlock permissions and weekly schedules for users and mapped lists.
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={handleSyncPolicies}
-                  disabled={syncingPolicies}
-                  title="Refresh policies from UniFi Access"
-                >
-                  <RefreshIcon spinning={syncingPolicies} /> Refresh
-                </button>
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={handleOpenCreatePolicy}
-                >
-                  <PlusIcon /> Create Access Policy
-                </button>
-              </div>
+          {/* Info Banner pointing to Schedule page */}
+          <div
+            style={{
+              padding: '0.875rem 1.25rem',
+              background: 'var(--color-bg-elevated)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-lg)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '0.75rem',
+            }}
+          >
+            <div style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
+              🔒 <strong>UniFi Access Policies & Schedules:</strong> Access policies define door permissions and weekly schedules for users and mapped lists.
             </div>
-
-            {accessPolicies.length === 0 ? (
-              <div className="empty-state" style={{ padding: '2rem 0' }}>
-                <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
-                  No Access Policies found
-                </p>
-                <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginBottom: '1rem' }}>
-                  Create your first UniFi access policy or click &quot;Refresh&quot; to fetch existing policies from your UniFi console.
-                </p>
-                <button className="btn btn-primary btn-sm" onClick={handleOpenCreatePolicy}>
-                  <PlusIcon /> Create Policy
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
-                {accessPolicies.map((p) => {
-                  const polId = p.unifi_policy_id || p.id;
-                  const mappedListsCount = policyMappings.filter((pm) => pm.unifi_policy_id === polId || pm.unifi_policy_id === p.id).length;
-                  const matchingSchedule = schedules.find((s) => s.id === p.schedule_id || s.unifi_schedule_id === p.schedule_id);
-                  const scheduleLabel = p.schedule_name || matchingSchedule?.name || (p.schedule_id ? 'Custom Schedule' : '24/7 Always Access');
-
-                  const assignedDoors = (p.door_ids || []).map((dId) => {
-                    const found = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
-                    return {
-                      id: dId,
-                      label: (found?.label || '').trim() || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId),
-                      state: found?.current_state ?? 'unknown',
-                    };
-                  });
-
-                  return (
-                    <div
-                      key={p.id}
-                      style={{
-                        padding: '1rem',
-                        borderRadius: 'var(--radius-md)',
-                        background: 'var(--color-bg-elevated)',
-                        border: '1px solid var(--color-border)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.75rem',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.35rem' }}>
-                          <div style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--color-text-primary)' }}>
-                            {p.name}
-                          </div>
-                          {p.sync_status === 'pending' ? (
-                            <span className="badge badge-warning" style={{ fontSize: '0.625rem' }}>Pending Sync</span>
-                          ) : p.sync_status === 'error' ? (
-                            <span className="badge badge-danger" style={{ fontSize: '0.625rem' }}>Sync Error</span>
-                          ) : (
-                            <span className="badge badge-success" style={{ fontSize: '0.625rem' }}>Synced</span>
-                          )}
-                        </div>
-
-                        {p.description && (
-                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
-                            {p.description}
-                          </div>
-                        )}
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', fontSize: '0.75rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{ color: 'var(--color-text-muted)', minWidth: '4.5rem' }}>Schedule:</span>
-                            <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
-                              🕒 {scheduleLabel}
-                            </span>
-                          </div>
-
-                          <div>
-                            <span style={{ color: 'var(--color-text-muted)', display: 'block', marginBottom: '0.25rem' }}>
-                              Doors ({assignedDoors.length}):
-                            </span>
-                            {assignedDoors.length === 0 ? (
-                              <span style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>No doors assigned</span>
-                            ) : (
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', maxHeight: '4.5rem', overflowY: 'auto' }}>
-                                {assignedDoors.map((d, idx) => (
-                                  <span
-                                    key={idx}
-                                    className={`badge ${d.state === 'locked' ? 'badge-danger' : d.state === 'unlocked' ? 'badge-success' : 'badge-neutral'}`}
-                                    style={{ fontSize: '0.6875rem' }}
-                                  >
-                                    🚪 {d.label}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-
-                          {mappedListsCount > 0 && (
-                            <div style={{ marginTop: '0.25rem', fontSize: '0.6875rem', color: 'var(--color-primary)' }}>
-                              🔗 Mapped to <strong>{mappedListsCount}</strong> PCO list{mappedListsCount > 1 ? 's' : ''}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'flex-end',
-                          gap: '0.5rem',
-                          borderTop: '1px solid var(--color-border)',
-                          paddingTop: '0.5rem',
-                        }}
-                      >
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
-                          onClick={() => handleOpenEditPolicy(p)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          style={{ color: 'var(--color-danger)', fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
-                          onClick={() => handleOpenDeleteAccessPolicy(p.id, p.name)}
-                        >
-                          <TrashIcon />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            <a
+              href="/schedule?tab=policies"
+              className="btn btn-secondary btn-sm"
+              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              Manage Access Policies in Schedules →
+            </a>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.9fr', gap: '1.5rem', alignItems: 'start' }}>
