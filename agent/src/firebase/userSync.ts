@@ -8,6 +8,25 @@ import { UnifiAccessClient } from '../unifi/access';
 import { logger } from '../logger';
 import * as admin from 'firebase-admin';
 
+function cleanFirestoreRecord<T extends Record<string, any>>(obj: T): T {
+  const clean = (val: any): any => {
+    if (val === undefined) return null;
+    if (val === null || typeof val !== 'object') return val;
+    if (val instanceof Date) return val.toISOString();
+    if (Array.isArray(val)) {
+      return val.filter((item) => item !== undefined).map(clean);
+    }
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (v !== undefined) {
+        res[k] = clean(v);
+      }
+    }
+    return res;
+  };
+  return clean(obj);
+}
+
 /**
  * Fetch all access policies from UniFi Access and upsert into Firestore.
  */
@@ -37,12 +56,12 @@ export async function syncAccessPolicies(
     if (!policy.id) continue;
     const policyRef = db.doc(`organizations/${orgId}/access_policies/${policy.id}`);
 
-    const record = {
+    const record = cleanFirestoreRecord({
       ...policy,
       org_id: orgId,
       last_synced: now,
       updated_at: now,
-    };
+    });
 
     batch.set(policyRef, record, { merge: true });
   }
@@ -113,12 +132,12 @@ export async function syncUsers(
     if (!user.id) continue;
     const userRef = db.doc(`organizations/${orgId}/unifi_users/${user.id}`);
 
-    const record = {
+    const record = cleanFirestoreRecord({
       ...user,
       org_id: orgId,
       last_synced: now,
       updated_at: now,
-    };
+    });
 
     batch.set(userRef, record, { merge: true });
   }
