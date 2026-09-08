@@ -235,6 +235,8 @@ function ActiveMappingCard({
       state: found?.current_state ?? 'unknown',
       isHeld: found?.is_held_unlocked ?? false,
       position: found?.door_position_status,
+      campusName: found?.campus_name,
+      locationName: found?.location_name,
     };
   });
 
@@ -450,14 +452,50 @@ function ActiveMappingCard({
                     fontSize: '0.8125rem',
                   }}
                 >
-                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                    {door.label}
-                  </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                      {door.label}
+                    </span>
+                    {(door.campusName || door.locationName) && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+                        {door.campusName && (
+                          <span
+                            style={{
+                              fontSize: '0.625rem',
+                              padding: '0.05rem 0.3rem',
+                              borderRadius: '4px',
+                              background: 'rgba(36, 101, 245, 0.1)',
+                              color: 'var(--color-accent, #2465f5)',
+                              border: '1px solid rgba(36, 101, 245, 0.2)',
+                              fontWeight: 500,
+                            }}
+                          >
+                            🏫 {door.campusName}
+                          </span>
+                        )}
+                        {door.locationName && (
+                          <span
+                            style={{
+                              fontSize: '0.625rem',
+                              padding: '0.05rem 0.3rem',
+                              borderRadius: '4px',
+                              background: 'rgba(168, 85, 247, 0.1)',
+                              color: '#9333ea',
+                              border: '1px solid rgba(168, 85, 247, 0.2)',
+                              fontWeight: 500,
+                            }}
+                          >
+                            📍 {door.locationName}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   <span
                     className={`badge ${
                       isUnlocked ? 'badge-success' : isLocked ? 'badge-danger' : 'badge-neutral'
                     }`}
-                    style={{ fontSize: '0.6875rem' }}
+                    style={{ fontSize: '0.6875rem', marginLeft: 'auto' }}
                   >
                     {door.isHeld ? 'Held Open' : door.state}
                   </span>
@@ -1172,6 +1210,8 @@ function AddMappingModal({
   const [customLockMin, setCustomLockMin] = useState(15);
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [doorSearch, setDoorSearch] = useState('');
+  const [selectedCampusFilter, setSelectedCampusFilter] = useState<string>('all');
 
   const isUuid = (str: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
@@ -1183,6 +1223,32 @@ function AddMappingModal({
     return true;
   });
 
+  const campusOptions = React.useMemo(() => {
+    const set = new Set<string>();
+    validDoors.forEach((d) => {
+      if (d.campus_name) set.add(d.campus_name);
+    });
+    return Array.from(set).sort();
+  }, [validDoors]);
+
+  const filteredDoors = validDoors.filter((d) => {
+    if (selectedCampusFilter === 'unassigned') {
+      if (d.campus_name || d.campus_id) return false;
+    } else if (selectedCampusFilter !== 'all') {
+      if (d.campus_name !== selectedCampusFilter && d.campus_id !== selectedCampusFilter) return false;
+    }
+
+    if (!doorSearch.trim()) return true;
+    const q = doorSearch.toLowerCase();
+    return (
+      (d.label && d.label.toLowerCase().includes(q)) ||
+      (d.campus_name && d.campus_name.toLowerCase().includes(q)) ||
+      (d.location_name && d.location_name.toLowerCase().includes(q)) ||
+      (d.floor && d.floor.toLowerCase().includes(q)) ||
+      (d.building && d.building.toLowerCase().includes(q))
+    );
+  });
+
   function reset() {
     setStep(1);
     setSelectedResourceId('');
@@ -1192,7 +1258,24 @@ function AddMappingModal({
     setCustomUnlockMin(orgSettings?.unlock_buffer_before_min ?? 15);
     setCustomLockMin(15);
     setEnabled(true);
+    setDoorSearch('');
+    setSelectedCampusFilter('all');
     setError(null);
+  }
+
+  function handleSelectAllDoors() {
+    setSelectedDoorIds(validDoors.map((d) => d.id));
+  }
+
+  function handleSelectCampusDoors(campusName: string) {
+    const campusDoorIds = validDoors
+      .filter((d) => (campusName === 'unassigned' ? !d.campus_name && !d.campus_id : d.campus_name === campusName || d.campus_id === campusName))
+      .map((d) => d.id);
+    setSelectedDoorIds((prev) => Array.from(new Set([...prev, ...campusDoorIds])));
+  }
+
+  function handleDeselectAllDoors() {
+    setSelectedDoorIds([]);
   }
 
   function handleClose() {
@@ -1444,16 +1527,110 @@ function AddMappingModal({
       {/* Step 2: Door selection */}
       {step === 2 && (
         <div>
-          <label className="form-label" style={{ marginBottom: '0.75rem', display: 'block' }}>
-            Select UniFi Doors ({selectedDoorIds.length} selected)
-          </label>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '0.5rem',
+              flexWrap: 'wrap',
+              gap: '0.5rem',
+            }}
+          >
+            <label className="form-label" style={{ marginBottom: 0, display: 'block', fontWeight: 600 }}>
+              Select UniFi Doors ({selectedDoorIds.length} of {validDoors.length} selected)
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {campusOptions.length > 0 && selectedCampusFilter !== 'all' && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', height: 'auto', color: 'var(--color-accent)' }}
+                  onClick={() => handleSelectCampusDoors(selectedCampusFilter)}
+                  title={`Select all doors in ${selectedCampusFilter}`}
+                >
+                  Select All {selectedCampusFilter === 'unassigned' ? 'Unassigned' : selectedCampusFilter}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', height: 'auto' }}
+                onClick={handleSelectAllDoors}
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', height: 'auto' }}
+                onClick={handleDeselectAllDoors}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
+          {/* Campus Filter Chips */}
+          {campusOptions.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+              <button
+                type="button"
+                className={`btn btn-sm ${selectedCampusFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', height: 'auto' }}
+                onClick={() => setSelectedCampusFilter('all')}
+              >
+                All Campuses ({validDoors.length})
+              </button>
+              {campusOptions.map((c) => {
+                const count = validDoors.filter((d) => d.campus_name === c || d.campus_id === c).length;
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`btn btn-sm ${selectedCampusFilter === c ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', height: 'auto' }}
+                    onClick={() => setSelectedCampusFilter(c)}
+                  >
+                    🏫 {c} ({count})
+                  </button>
+                );
+              })}
+              {validDoors.some((d) => !d.campus_name && !d.campus_id) && (
+                <button
+                  type="button"
+                  className={`btn btn-sm ${selectedCampusFilter === 'unassigned' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', height: 'auto' }}
+                  onClick={() => setSelectedCampusFilter('unassigned')}
+                >
+                  Unassigned ({validDoors.filter((d) => !d.campus_name && !d.campus_id).length})
+                </button>
+              )}
+            </div>
+          )}
+
+          {validDoors.length > 6 && (
+            <input
+              type="text"
+              className="input"
+              placeholder="Filter doors by name, campus, location, building…"
+              value={doorSearch}
+              onChange={(e) => setDoorSearch(e.target.value)}
+              style={{ marginBottom: '0.5rem', fontSize: '0.8125rem', padding: '0.375rem 0.625rem' }}
+            />
+          )}
+
           {validDoors.length === 0 ? (
             <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
               No doors available. Configure the local agent first.
             </p>
+          ) : filteredDoors.length === 0 ? (
+            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', padding: '0.75rem', textAlign: 'center' }}>
+              No doors match the selected filter.
+            </p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '16rem', overflowY: 'auto' }}>
-              {validDoors.map((door) => (
+              {filteredDoors.map((door) => (
                 <label
                   key={door.id}
                   style={{
@@ -1476,7 +1653,48 @@ function AddMappingModal({
                     checked={selectedDoorIds.includes(door.id)}
                     onChange={() => toggleDoor(door.id)}
                   />
-                  <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>{door.label}</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: '0.125rem' }}>
+                    <span style={{ color: 'var(--color-text-primary)', fontWeight: selectedDoorIds.includes(door.id) ? 600 : 500 }}>
+                      {door.label}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+                      {door.campus_name && (
+                        <span
+                          style={{
+                            fontSize: '0.6875rem',
+                            padding: '0.1rem 0.35rem',
+                            borderRadius: 'var(--radius-sm, 4px)',
+                            background: 'rgba(36, 101, 245, 0.1)',
+                            color: 'var(--color-accent, #2465f5)',
+                            border: '1px solid rgba(36, 101, 245, 0.2)',
+                            fontWeight: 500,
+                          }}
+                        >
+                          🏫 {door.campus_name}
+                        </span>
+                      )}
+                      {door.location_name && (
+                        <span
+                          style={{
+                            fontSize: '0.6875rem',
+                            padding: '0.1rem 0.35rem',
+                            borderRadius: 'var(--radius-sm, 4px)',
+                            background: 'rgba(168, 85, 247, 0.1)',
+                            color: '#9333ea',
+                            border: '1px solid rgba(168, 85, 247, 0.2)',
+                            fontWeight: 500,
+                          }}
+                        >
+                          📍 {door.location_name}
+                        </span>
+                      )}
+                      {(door.building || door.floor) && (
+                        <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
+                          {[door.building, door.floor].filter(Boolean).join(' · ')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                   <span
                     className={`badge ${
                       door.current_state === 'locked' ? 'badge-danger' :
