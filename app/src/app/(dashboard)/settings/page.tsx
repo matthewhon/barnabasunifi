@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
-import { getOrgSettings, updateOrgSettings, getLatestAgentRelease, createDoorCommand, subscribeToAgents, approveAgentUpdate } from '@/lib/firestore';
+import { getOrgSettings, updateOrgSettings, disconnectPco, getLatestAgentRelease, createDoorCommand, subscribeToAgents, approveAgentUpdate } from '@/lib/firestore';
 import type { OrgSettings, AgentRelease, Agent } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
 import { safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
@@ -293,13 +293,12 @@ export default function SettingsPage() {
   async function handleDisconnectPco() {
     if (!orgId) return;
     try {
-      await updateOrgSettings(orgId, {
-        pco_oauth: undefined,
-      } as Partial<OrgSettings>);
+      await disconnectPco(orgId);
       setSettings((prev) => (prev ? { ...prev, pco_oauth: undefined } : prev));
       showToast('Planning Center disconnected.', 'info');
-    } catch {
-      showToast('Failed to disconnect. Please try again.', 'error');
+    } catch (err: any) {
+      console.error('Failed to disconnect PCO:', err);
+      showToast(err?.message || 'Failed to disconnect. Please try again.', 'error');
     }
   }
 

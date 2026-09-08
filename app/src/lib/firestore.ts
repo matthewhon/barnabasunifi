@@ -7,6 +7,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  deleteField,
   query,
   where,
   orderBy,
@@ -50,11 +51,26 @@ export async function updateOrgSettings(
   orgId: string,
   settings: Partial<OrgSettings>,
 ): Promise<void> {
+  const cleanSettings: Record<string, any> = {};
+  for (const [key, value] of Object.entries(settings)) {
+    if (value === undefined) {
+      cleanSettings[key] = deleteField();
+    } else {
+      cleanSettings[key] = value;
+    }
+  }
   await setDoc(
     doc(db, 'organizations', orgId, 'settings', 'config'),
-    { ...settings, updated_at: serverTimestamp() },
+    { ...cleanSettings, updated_at: serverTimestamp() },
     { merge: true },
   );
+}
+
+export async function disconnectPco(orgId: string): Promise<void> {
+  await updateDoc(doc(db, 'organizations', orgId, 'settings', 'config'), {
+    pco_oauth: deleteField(),
+    updated_at: serverTimestamp(),
+  });
 }
 
 // ─── Mappings ─────────────────────────────────────────────────────────────────
