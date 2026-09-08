@@ -213,6 +213,26 @@ export default function DoorCard({
             ⏱️ Hold Open
           </span>
         )}
+
+        {door.campus_name && (
+          <span
+            className="badge badge-neutral"
+            style={{ fontSize: '0.6875rem', gap: '0.25rem', border: '1px solid var(--color-border)', background: 'rgba(36,101,245,0.06)' }}
+            title={`Campus: ${door.campus_name}`}
+          >
+            🏫 {door.campus_name}
+          </span>
+        )}
+
+        {door.location_name && (
+          <span
+            className="badge badge-neutral"
+            style={{ fontSize: '0.6875rem', gap: '0.25rem', border: '1px solid var(--color-border)', background: 'rgba(168,85,247,0.06)' }}
+            title={`Location / Room: ${door.location_name}`}
+          >
+            📍 {door.location_name}
+          </span>
+        )}
       </div>
 
       {/* Unlock Duration & Policy Timing Banner */}

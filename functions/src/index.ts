@@ -22,4 +22,5 @@ export { syncUnifiAccessPolicies, saveUnifiAccessPolicy, deleteUnifiAccessPolicy
 export { triggerUserSync, getPcoLists } from './pco/userSync';
 export { syncUnifiAccessLogs } from './unifi/accessLogs';
 export { publishAgentRelease, getLatestAgentRelease, listAgentReleases, uploadAgentRelease, downloadAgentRelease } from './agent/releases';
+export { getPcoCampusesAndLocations, assignDoorsToCampusLocation } from './pco/campuses';
 

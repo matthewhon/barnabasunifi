@@ -246,5 +246,85 @@ export class PcoClient {
 
     return { people: allPeople, included: allIncluded };
   }
+
+  // -------------------------------------------------------------------------
+  // Campuses & Locations / Rooms API
+  // -------------------------------------------------------------------------
+
+  /**
+   * Returns all campuses configured in Planning Center.
+   * Tries People API first, then Services, then Calendar/Check-ins.
+   */
+  async getCampuses(): Promise<PcoResource[]> {
+    const endpoints = [
+      '/people/v2/campuses',
+      '/services/v2/campuses',
+      '/calendar/v2/campuses',
+      '/check_ins/v2/campuses',
+    ];
+
+    for (const endpoint of endpoints) {
+      try {
+        const items = await this.getAll(endpoint);
+        if (items && items.length > 0) {
+          return items;
+        }
+      } catch {
+        // Try next endpoint in sequence
+      }
+    }
+
+    return [];
+  }
+
+  /**
+   * Returns all physical rooms and locations configured in Planning Center.
+   * Pulls from Calendar rooms/resources and Check-Ins locations.
+   */
+  async getLocations(): Promise<PcoResource[]> {
+    const allLocations: PcoResource[] = [];
+    const seenIds = new Set<string>();
+
+    // 1. Check Calendar Rooms
+    try {
+      const calendarRooms = await this.getAll('/calendar/v2/rooms');
+      for (const r of calendarRooms) {
+        if (!seenIds.has(r.id)) {
+          seenIds.add(r.id);
+          allLocations.push(r);
+        }
+      }
+    } catch {
+      // Calendar API may not be provisioned or scoped
+    }
+
+    // 2. Check Check-Ins Locations
+    try {
+      const checkinLocations = await this.getAll('/check_ins/v2/locations');
+      for (const l of checkinLocations) {
+        if (!seenIds.has(l.id)) {
+          seenIds.add(l.id);
+          allLocations.push(l);
+        }
+      }
+    } catch {
+      // Check-Ins API may not be provisioned or scoped
+    }
+
+    // 3. Check Calendar Resources (where kind is room or physical)
+    try {
+      const resources = await this.getAll('/calendar/v2/resources');
+      for (const res of resources) {
+        if (!seenIds.has(res.id)) {
+          seenIds.add(res.id);
+          allLocations.push(res);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return allLocations;
+  }
 }
 

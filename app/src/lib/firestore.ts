@@ -235,6 +235,62 @@ export function subscribeToDoors(orgId: string, callback: (doors: Door[]) => voi
   });
 }
 
+export async function updateDoorCampusLocation(
+  orgId: string,
+  doorId: string,
+  updates: {
+    campus_id?: string | null;
+    campus_name?: string | null;
+    location_id?: string | null;
+    location_name?: string | null;
+    building?: string | null;
+    floor?: string | null;
+  }
+): Promise<void> {
+  const doorRef = doc(db, 'organizations', orgId, 'doors', doorId);
+  await updateDoc(doorRef, {
+    ...updates,
+    updated_at: serverTimestamp(),
+  });
+}
+
+// ─── Campuses & Locations ───────────────────────────────────────────────────
+
+export function subscribeToCampuses(
+  orgId: string,
+  callback: (campuses: import('@/lib/types').PcoCampus[]) => void
+): Unsubscribe {
+  const q = collection(db, 'organizations', orgId, 'campuses');
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        created_at: normalizeTimestamp(d.data().created_at),
+        updated_at: normalizeTimestamp(d.data().updated_at),
+      } as import('@/lib/types').PcoCampus))
+    );
+  });
+}
+
+export function subscribeToLocations(
+  orgId: string,
+  callback: (locations: import('@/lib/types').PcoLocation[]) => void
+): Unsubscribe {
+  const q = collection(db, 'organizations', orgId, 'locations');
+  return onSnapshot(q, (snap) => {
+    callback(
+      snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        created_at: normalizeTimestamp(d.data().created_at),
+        updated_at: normalizeTimestamp(d.data().updated_at),
+      } as import('@/lib/types').PcoLocation))
+    );
+  });
+}
+
+
 // ─── Schedule Windows ─────────────────────────────────────────────────────────
 
 export function subscribeToScheduleWindows(

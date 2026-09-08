@@ -130,6 +130,12 @@ export interface Door {
   label: string;
   current_state: DoorState;
   door_position_status?: 'open' | 'close' | null;
+  campus_id?: string | null;
+  campus_name?: string | null;
+  location_id?: string | null;
+  location_name?: string | null;
+  building?: string | null;
+  floor?: string | null;
   is_held_unlocked?: boolean;
   hold_unlock_expires_at?: string | null;
   unlock_duration_min?: number | null;
@@ -350,6 +356,33 @@ export interface PcoPerson {
   phone_number?: string;
   avatar?: string;
   status?: string;
+}
+
+export interface PcoCampus {
+  id: string;
+  org_id?: string;
+  name: string;
+  description?: string;
+  street?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  time_zone?: string;
+  phone_number?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PcoLocation {
+  id: string;
+  org_id?: string;
+  name: string;
+  campus_id?: string | null;
+  campus_name?: string | null;
+  kind?: 'room' | 'resource' | 'building' | 'location' | string;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 // ─── UniFi API ────────────────────────────────────────────────────────────────
