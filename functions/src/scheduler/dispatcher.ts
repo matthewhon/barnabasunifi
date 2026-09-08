@@ -47,10 +47,27 @@ export const dispatchDoorCommands = onDocumentCreated(
     const db = getFirestore();
 
     const now = Date.now();
-    // Convert Firestore Timestamp → ms
-    const executeAtMs = command.execute_at instanceof Timestamp
-      ? command.execute_at.toMillis()
-      : Number(command.execute_at);
+    // Safely parse execute_at into milliseconds
+    let executeAtMs = now;
+    if (command.execute_at) {
+      if (command.execute_at instanceof Timestamp || typeof (command.execute_at as any).toMillis === 'function') {
+        executeAtMs = (command.execute_at as any).toMillis();
+      } else if (typeof (command.execute_at as any).toDate === 'function') {
+        executeAtMs = (command.execute_at as any).toDate().getTime();
+      } else if (typeof command.execute_at === 'object') {
+        const rawObj = command.execute_at as any;
+        const sec = rawObj._seconds ?? rawObj.seconds;
+        if (typeof sec === 'number') {
+          const nano = rawObj._nanoseconds ?? rawObj.nanoseconds ?? 0;
+          executeAtMs = sec * 1000 + Math.floor(nano / 1000000);
+        }
+      } else if (typeof command.execute_at === 'string') {
+        const parsed = Date.parse(command.execute_at);
+        if (!isNaN(parsed)) executeAtMs = parsed;
+      } else if (typeof command.execute_at === 'number' && !isNaN(command.execute_at)) {
+        executeAtMs = command.execute_at;
+      }
+    }
 
     // Window within which we treat the command as "now" (60 seconds)
     const IMMEDIATE_WINDOW_MS = 60 * 1000;
@@ -75,7 +92,7 @@ export const dispatchDoorCommands = onDocumentCreated(
       );
     } else {
       // Leave as 'pending'; log for observability
-      const executeAtDate = new Date(executeAtMs).toISOString();
+      const executeAtDate = !isNaN(executeAtMs) ? new Date(executeAtMs).toISOString() : 'pending';
       console.log(
         `dispatchDoorCommands: [org=${orgId}] command=${commandId} ` +
           `action=${command.action} → status=pending (execute_at=${executeAtDate})`
@@ -92,7 +109,7 @@ export const dispatchDoorCommands = onDocumentCreated(
         command_id: commandId,
         action: command.action,
         window_id: command.window_id ?? null,
-        execute_at: command.execute_at,
+        execute_at: command.execute_at ?? FieldValue.serverTimestamp(),
         initial_status: isImmediate ? 'queued' : 'pending',
         logged_at: FieldValue.serverTimestamp(),
       });
