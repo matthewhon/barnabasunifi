@@ -698,6 +698,40 @@ export const deleteUnifiSchedule = onCall<{ orgId: string; scheduleId: string }>
     const configData = configSnap.exists ? configSnap.data() : null;
     const unifiMode = configData?.unifi_mode ?? 'agent';
 
+    // 1. Fetch schedule doc to get door_ids and unifi_schedule_id
+    const schedDoc = await db.doc(`organizations/${orgId}/unifi_schedules/${scheduleId}`).get();
+    const schedData = schedDoc.data();
+    const unifiSchedId = schedData?.unifi_schedule_id || schedData?.id || scheduleId;
+    const doorIds: string[] = schedData?.door_ids || [];
+
+    // 2. Unlink from any door documents in Firestore
+    const doorsSnap = await db.collection(`organizations/${orgId}/doors`).get();
+    const batch = db.batch();
+    doorsSnap.docs.forEach((doc) => {
+      const d = doc.data();
+      if (
+        d.schedule_id === scheduleId ||
+        d.schedule_id === unifiSchedId ||
+        d.unlock_schedule_id === scheduleId ||
+        d.unlock_schedule_id === unifiSchedId ||
+        (schedData?.name && d.schedule_name === schedData.name)
+      ) {
+        batch.update(doc.ref, {
+          schedule_id: FieldValue.delete(),
+          unlock_schedule_id: FieldValue.delete(),
+          schedule_name: FieldValue.delete(),
+        });
+      }
+    });
+
+    // 3. Immediately delete from Firestore unifi_schedules
+    batch.delete(db.doc(`organizations/${orgId}/unifi_schedules/${scheduleId}`));
+    if (unifiSchedId && unifiSchedId !== scheduleId) {
+      batch.delete(db.doc(`organizations/${orgId}/unifi_schedules/${unifiSchedId}`));
+    }
+    await batch.commit();
+
+    // 4. Remote mode: Unbind from doors on controller and delete schedule
     if (unifiMode === 'remote') {
       const remoteConfig = configData?.unifi_remote;
       if (remoteConfig?.host && remoteConfig?.access_token) {
@@ -713,18 +747,31 @@ export const deleteUnifiSchedule = onCall<{ orgId: string; scheduleId: string }>
           timeout: 15000,
         });
 
+        // Clear unlock schedule from doors in UniFi
+        for (const dId of doorIds) {
+          try {
+            await client.put(`/proxy/access/api/v2/doors/${encodeURIComponent(dId)}`, {
+              unlock_schedule_id: null,
+            });
+          } catch {
+            try {
+              await client.put(`/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(dId)}/unlock_rule`, {
+                schedule_id: null,
+              });
+            } catch {}
+          }
+        }
+
         try {
-          await client.delete(`/proxy/access/integration/v1/developer/schedules/${encodeURIComponent(scheduleId)}`);
+          await client.delete(`/proxy/access/integration/v1/developer/schedules/${encodeURIComponent(unifiSchedId)}`);
         } catch {
           try {
-            await client.delete(`/proxy/access/api/v2/schedule/${encodeURIComponent(scheduleId)}`);
+            await client.delete(`/proxy/access/api/v2/schedule/${encodeURIComponent(unifiSchedId)}`);
           } catch (err) {
-            console.warn(`Could not delete schedule ${scheduleId} on remote host:`, err);
+            console.warn(`Could not delete schedule ${unifiSchedId} on remote host:`, err);
           }
         }
       }
-
-      await db.doc(`organizations/${orgId}/unifi_schedules/${scheduleId}`).delete();
 
       return {
         success: true,
@@ -732,11 +779,12 @@ export const deleteUnifiSchedule = onCall<{ orgId: string; scheduleId: string }>
       };
     }
 
-    // Agent mode: Queue command
+    // 5. Agent mode: Queue command with door_ids so local agent unbinds and deletes
     const nowIso = new Date().toISOString();
     const commandRef = await db.collection(`organizations/${orgId}/door_commands`).add({
       action: 'delete_schedule',
-      schedule_id: scheduleId,
+      schedule_id: unifiSchedId,
+      door_ids: doorIds,
       status: 'queued',
       execute_at: nowIso,
       triggered_by: 'manual',

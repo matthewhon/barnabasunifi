@@ -366,7 +366,8 @@ export function startCommandListener(
         resultMessage = `Schedule ${created.id} created successfully.`;
       } else if (command.action === 'delete_schedule') {
         if (!command.schedule_id) throw new Error('Missing schedule_id for delete_schedule');
-        await unifiClient.deleteSchedule(command.schedule_id);
+        const doorIds = (command as any).door_ids || [];
+        await unifiClient.deleteSchedule(command.schedule_id, doorIds);
         await db.doc(`organizations/${orgId}/unifi_schedules/${command.schedule_id}`).delete();
         resultMessage = `Schedule ${command.schedule_id} deleted successfully.`;
       } else if (command.action === 'sync_visitors') {

@@ -2218,7 +2218,39 @@ export class UnifiAccessClient {
   /**
    * Delete a schedule from UniFi Access.
    */
-  async deleteSchedule(scheduleId: string): Promise<void> {
+  async deleteSchedule(scheduleId: string, doorIds?: string[]): Promise<void> {
+    // 1. Unbind schedule from any specified doors first
+    if (doorIds && doorIds.length > 0) {
+      for (const dId of doorIds) {
+        try {
+          await this.http.put(`/proxy/access/api/v2/doors/${encodeURIComponent(dId)}`, {
+            unlock_schedule_id: null,
+          });
+        } catch {
+          try {
+            await this.http.put(`/proxy/access/api/v2/dashboard/locations/${encodeURIComponent(dId)}/unlock_rule`, {
+              schedule_id: null,
+            });
+          } catch {}
+        }
+      }
+    }
+
+    // 2. Also unbind from any doors that currently reference this schedule
+    try {
+      const doors = await this.getDoors();
+      for (const door of doors) {
+        if (door.unlock_schedule_id === scheduleId || door.schedule_id === scheduleId) {
+          try {
+            await this.http.put(`/proxy/access/api/v2/doors/${encodeURIComponent(door.id)}`, {
+              unlock_schedule_id: null,
+            });
+          } catch {}
+        }
+      }
+    } catch {}
+
+    // 3. Delete schedule from UniFi Access endpoints
     const endpoints = this.getScheduleEndpoints(encodeURIComponent(scheduleId));
 
     for (const ep of endpoints) {
