@@ -252,28 +252,61 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }
 
-  const navItems: NavItem[] = [
-    { href: '/', label: 'Dashboard', icon: <HouseIcon /> },
-    { href: '/doors', label: 'Doors', icon: <DoorIcon /> },
-    { href: '/activity', label: 'Activity Logs', icon: <ActivityIcon /> },
-    { href: '/visitors', label: 'Visitors', icon: <VisitorIcon /> },
-    { href: '/schedule', label: 'Schedule', icon: <CalendarIcon /> },
-    { href: '/mappings', label: 'Mappings', icon: <LinkIcon /> },
-    { href: '/audit', label: 'Audit Log', icon: <ListIcon /> },
-    { href: '/settings', label: 'Settings', icon: <GearIcon /> },
-    { href: '/users', label: 'Users', icon: <UsersIcon />, adminOnly: true },
+  interface NavSection {
+    title?: string;
+    items: NavItem[];
+  }
+
+  const navSections: NavSection[] = [
+    {
+      items: [
+        { href: '/', label: 'Dashboard', icon: <HouseIcon /> },
+      ],
+    },
+    {
+      title: 'Operations',
+      items: [
+        { href: '/doors', label: 'Doors & Campuses', icon: <DoorIcon /> },
+        { href: '/visitors', label: 'Visitor Access', icon: <VisitorIcon /> },
+      ],
+    },
+    {
+      title: 'Planning Center',
+      items: [
+        { href: '/schedule', label: 'Schedules & Windows', icon: <CalendarIcon /> },
+        { href: '/mappings', label: 'Mappings & Sync', icon: <LinkIcon /> },
+      ],
+    },
+    {
+      title: 'Monitoring & Logs',
+      items: [
+        { href: '/activity', label: 'Activity Stream', icon: <ActivityIcon /> },
+        { href: '/audit', label: 'Audit Trail', icon: <ListIcon /> },
+      ],
+    },
+    {
+      title: 'Management',
+      items: [
+        { href: '/users', label: 'Team Members', icon: <UsersIcon />, adminOnly: true },
+        { href: '/settings', label: 'Settings & Hardware', icon: <GearIcon /> },
+      ],
+    },
   ];
 
-  const superAdminItems: NavItem[] = [
-    { href: '/admin/platform', label: 'Platform Config', icon: <KeyIcon />, superAdminOnly: true },
-  ];
+  const superAdminSection: NavSection = {
+    title: 'Super Admin',
+    items: [
+      { href: '/admin/platform', label: 'Platform Config', icon: <KeyIcon />, superAdminOnly: true },
+    ],
+  };
 
-
-  const visibleNavItems = navItems.filter((item) => {
-    if (item.superAdminOnly) return isSuperAdmin;
-    if (item.adminOnly) return role === 'org_admin' || isSuperAdmin;
-    return true;
-  });
+  function filterSectionItems(items: NavItem[]): NavItem[] {
+    return items.filter((item) => {
+      if (item.superAdminOnly) return isSuperAdmin;
+      if (item.adminOnly) return role === 'org_admin' || isSuperAdmin;
+      return true;
+    });
+  }
 
   if (loading) {
     return (
@@ -445,43 +478,71 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           padding: '0.75rem 0.625rem',
           display: 'flex',
           flexDirection: 'column',
-          gap: '0.125rem',
+          gap: '0.25rem',
           overflowY: 'auto',
         }}
       >
-        {visibleNavItems.map((item) => (
-          <NavLink
-            key={item.href}
-            item={item}
-            pathname={pathname}
-            onClick={() => setSidebarOpen(false)}
-          />
-        ))}
+        {navSections.map((sec, secIdx) => {
+          const visibleItems = filterSectionItems(sec.items);
+          if (visibleItems.length === 0) return null;
+
+          return (
+            <div key={sec.title ?? `sec-${secIdx}`} style={{ marginBottom: sec.title ? '0.375rem' : '0.125rem' }}>
+              {sec.title && (
+                <div
+                  style={{
+                    fontSize: '0.6875rem',
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.07em',
+                    color: 'var(--color-text-muted)',
+                    padding: '0.625rem 0.75rem 0.25rem',
+                    opacity: 0.8,
+                  }}
+                >
+                  {sec.title}
+                </div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+                {visibleItems.map((item) => (
+                  <NavLink
+                    key={item.href}
+                    item={item}
+                    pathname={pathname}
+                    onClick={() => setSidebarOpen(false)}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
 
         {isSuperAdmin && (
-          <>
+          <div style={{ marginTop: '0.25rem', marginBottom: '0.375rem' }}>
             <div
               style={{
                 fontSize: '0.6875rem',
-                fontWeight: 600,
+                fontWeight: 700,
                 textTransform: 'uppercase',
-                letterSpacing: '0.06em',
+                letterSpacing: '0.07em',
                 color: 'var(--color-text-muted)',
-                padding: '0.75rem 0.75rem 0.25rem',
-                marginTop: '0.5rem',
+                padding: '0.625rem 0.75rem 0.25rem',
+                opacity: 0.8,
               }}
             >
-              Super Admin
+              {superAdminSection.title}
             </div>
-            {superAdminItems.map((item) => (
-              <NavLink
-                key={item.href}
-                item={item}
-                pathname={pathname}
-                onClick={() => setSidebarOpen(false)}
-              />
-            ))}
-          </>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+              {filterSectionItems(superAdminSection.items).map((item) => (
+                <NavLink
+                  key={item.href}
+                  item={item}
+                  pathname={pathname}
+                  onClick={() => setSidebarOpen(false)}
+                />
+              ))}
+            </div>
+          </div>
         )}
       </nav>
 
