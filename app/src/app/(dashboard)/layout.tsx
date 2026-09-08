@@ -206,7 +206,7 @@ function NavLink({ item, pathname, onClick }: { item: NavItem; pathname: string;
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, loading, orgId, role, isSuperAdmin, signOut, profile, refreshAuth } = useAuth();
+  const { user, loading, orgId, role, isSuperAdmin, signOut, profile, refreshAuth, impersonatedOrgId, setImpersonatedOrgId } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [org, setOrg] = useState<Organization | null>(null);
   const [signingOut, setSigningOut] = useState(false);
@@ -305,9 +305,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   ];
 
   const superAdminSection: NavSection = {
-    title: 'Super Admin',
+    title: 'Software Admin',
     items: [
-      { href: '/admin/platform', label: 'Platform Config', icon: <KeyIcon />, superAdminOnly: true },
+      { href: '/admin/platform', label: 'Platform & Tenants', icon: <ServerIcon />, superAdminOnly: true },
     ],
   };
 
@@ -766,6 +766,47 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Page content */}
         <main style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
+          {isSuperAdmin && impersonatedOrgId && (
+            <div
+              style={{
+                background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.15) 0%, rgba(245, 158, 11, 0.05) 100%)',
+                border: '1px solid rgba(245, 158, 11, 0.4)',
+                borderRadius: 'var(--radius-md)',
+                padding: '0.75rem 1rem',
+                marginBottom: '1.25rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '1rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+                <span style={{ fontSize: '1.1rem' }}>👁️</span>
+                <span style={{ fontSize: '0.875rem', color: 'var(--color-text-primary)', fontWeight: 500 }}>
+                  Viewing tenant as Super Admin: <strong>{org?.name || impersonatedOrgId}</strong>
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <Link
+                  href="/admin/platform"
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
+                >
+                  Software Admin
+                </Link>
+                <button
+                  onClick={() => {
+                    setImpersonatedOrgId(null);
+                    router.push('/admin/platform');
+                  }}
+                  className="btn btn-danger btn-sm"
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
+                >
+                  Exit Tenant View
+                </button>
+              </div>
+            </div>
+          )}
           {children}
         </main>
       </div>

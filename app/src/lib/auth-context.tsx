@@ -22,6 +22,8 @@ interface AuthContextValue {
   orgId: string | null;
   role: UserRole | null;
   isSuperAdmin: boolean;
+  impersonatedOrgId: string | null;
+  setImpersonatedOrgId: (orgId: string | null) => void;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -31,11 +33,32 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const DESIGNATED_SUPER_ADMIN_EMAILS = [
+  'matthew.hon@honventures.com',
+];
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [claims, setClaims] = useState<AuthClaims | null>(null);
   const [loading, setLoading] = useState(true);
+  const [impersonatedOrgId, setImpersonatedOrgId] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('admin_impersonate_org_id');
+    }
+    return null;
+  });
+
+  const handleSetImpersonatedOrgId = useCallback((id: string | null) => {
+    setImpersonatedOrgId(id);
+    if (typeof window !== 'undefined') {
+      if (id) {
+        sessionStorage.setItem('admin_impersonate_org_id', id);
+      } else {
+        sessionStorage.removeItem('admin_impersonate_org_id');
+      }
+    }
+  }, []);
 
   const refreshAuth = useCallback(async () => {
     const currentUser = auth.currentUser;
@@ -108,6 +131,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await firebaseSignOut(auth);
     setProfile(null);
     setClaims(null);
+    handleSetImpersonatedOrgId(null);
   };
 
   const registerWithEmail = async (
@@ -128,20 +152,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  const userEmail = user?.email?.toLowerCase().trim();
+  const isDesignatedSuperAdmin = !!userEmail && DESIGNATED_SUPER_ADMIN_EMAILS.includes(userEmail);
+
+  const profileRole = (profile as unknown as { role?: UserRole })?.role;
+  const isSuper = claims?.role === 'super_admin' || profileRole === 'super_admin' || isDesignatedSuperAdmin;
+
   const firstProfileOrgId = profile?.org_memberships
     ? (Array.isArray(profile.org_memberships)
         ? profile.org_memberships[0]?.org_id
         : Object.keys(profile.org_memberships)[0])
     : null;
 
-  const activeOrgId = claims?.orgId ?? firstProfileOrgId ?? null;
-
-  const profileRole = (profile as unknown as { role?: UserRole })?.role;
-  const isSuper = claims?.role === 'super_admin' || profileRole === 'super_admin';
+  const defaultOrgId = claims?.orgId ?? firstProfileOrgId ?? null;
+  const activeOrgId = (isSuper && impersonatedOrgId) ? impersonatedOrgId : defaultOrgId;
 
   const activeRole: UserRole | null =
-    claims?.role ??
     (isSuper ? 'super_admin' : null) ??
+    claims?.role ??
     (activeOrgId && profile?.org_memberships
       ? (Array.isArray(profile.org_memberships)
           ? (profile.org_memberships as Array<{ org_id: string; role: UserRole }>).find((m) => m.org_id === activeOrgId)?.role
@@ -157,6 +185,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     orgId: activeOrgId,
     role: activeRole,
     isSuperAdmin: isSuper,
+    impersonatedOrgId,
+    setImpersonatedOrgId: handleSetImpersonatedOrgId,
     signInWithEmail,
     signInWithGoogle,
     signOut,
