@@ -71,21 +71,24 @@ export const getPcoCampusesAndLocations = onCall<
 
     const [rawCampuses, rawLocations] = await Promise.all([
       client.getCampuses().catch((err) => {
+        if (err instanceof HttpsError) throw err;
         console.warn(`Could not load campuses from PCO for org ${orgId}:`, err);
         return [] as PcoResource[];
       }),
       client.getLocations().catch((err) => {
+        if (err instanceof HttpsError) throw err;
         console.warn(`Could not load locations from PCO for org ${orgId}:`, err);
         return [] as PcoResource[];
       }),
     ]);
 
-    const batch = db.batch();
     const now = new Date().toISOString();
 
     // Map & Cache Campuses
     const campuses: PcoCampus[] = [];
-    for (const item of rawCampuses) {
+    const validCampuses = (rawCampuses || []).filter((item) => item && typeof item.id === 'string' && item.id.trim() !== '');
+
+    for (const item of validCampuses) {
       const attrs = (item.attributes ?? {}) as Record<string, unknown>;
       const campus: PcoCampus = {
         id: item.id,
@@ -102,14 +105,13 @@ export const getPcoCampusesAndLocations = onCall<
         updated_at: now,
       };
       campuses.push(campus);
-
-      const campusDocRef = orgRef.collection('campuses').doc(campus.id);
-      batch.set(campusDocRef, campus, { merge: true });
     }
 
     // Map & Cache Locations / Rooms
     const locations: PcoLocation[] = [];
-    for (const item of rawLocations) {
+    const validLocations = (rawLocations || []).filter((item) => item && typeof item.id === 'string' && item.id.trim() !== '');
+
+    for (const item of validLocations) {
       const attrs = (item.attributes ?? {}) as Record<string, unknown>;
       const rels = (item.relationships ?? {}) as Record<string, any>;
       const campusRelId = rels.campus?.data?.id || (attrs.campus_id as string) || null;
@@ -127,13 +129,22 @@ export const getPcoCampusesAndLocations = onCall<
         updated_at: now,
       };
       locations.push(location);
-
-      const locDocRef = orgRef.collection('locations').doc(location.id);
-      batch.set(locDocRef, location, { merge: true });
     }
 
-    // Commit updates if any items were retrieved
-    if (campuses.length > 0 || locations.length > 0) {
+    // Batch commit updates in safe chunk sizes of up to 400
+    const ops: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }> = [];
+    for (const campus of campuses) {
+      ops.push({ ref: orgRef.collection('campuses').doc(campus.id), data: campus as any });
+    }
+    for (const location of locations) {
+      ops.push({ ref: orgRef.collection('locations').doc(location.id), data: location as any });
+    }
+
+    const BATCH_SIZE = 400;
+    for (let i = 0; i < ops.length; i += BATCH_SIZE) {
+      const chunk = ops.slice(i, i + BATCH_SIZE);
+      const batch = db.batch();
+      chunk.forEach((op) => batch.set(op.ref, op.data, { merge: true }));
       await batch.commit();
     }
 
@@ -162,7 +173,7 @@ export const getPcoCampusesAndLocations = onCall<
   } catch (err: any) {
     console.error(`getPcoCampusesAndLocations error for org ${orgId}:`, err);
     if (err instanceof HttpsError) throw err;
-    throw new HttpsError('internal', err?.message || 'Failed to fetch PCO campuses and locations.');
+    throw new HttpsError('failed-precondition', err?.message || 'Failed to fetch PCO campuses and locations.');
   }
 });
 

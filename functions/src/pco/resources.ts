@@ -187,6 +187,6 @@ export const getPcoResources = onCall<
   } catch (err: any) {
     console.error(`getPcoResources error for org ${targetOrgId}:`, err);
     if (err instanceof HttpsError) throw err;
-    throw new HttpsError('internal', err?.message || 'Failed to fetch PCO resources.');
+    throw new HttpsError('failed-precondition', err?.message || 'Failed to fetch PCO resources.');
   }
 });

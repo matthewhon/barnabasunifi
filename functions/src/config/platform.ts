@@ -1,4 +1,5 @@
 import { getFirestore } from 'firebase-admin/firestore';
+import { HttpsError } from 'firebase-functions/v2/https';
 
 export interface PlatformConfig {
   pco_client_id: string;
@@ -27,9 +28,9 @@ export async function getPlatformConfig(): Promise<PlatformConfig> {
   const snap = await db.collection('platform_config').doc('pco').get();
 
   if (!snap.exists) {
-    throw new Error(
-      'Platform PCO config not found in Firestore (platform_config/pco). ' +
-      'Please configure it in the Admin > Platform Config page.',
+    throw new HttpsError(
+      'failed-precondition',
+      'Platform PCO OAuth configuration not found in Firestore (platform_config/pco). Please configure PCO credentials in Admin Settings.'
     );
   }
 

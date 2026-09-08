@@ -1,4 +1,5 @@
 import { getFirestore } from 'firebase-admin/firestore';
+import { HttpsError } from 'firebase-functions/v2/https';
 import axios, { AxiosInstance } from 'axios';
 import { refreshPcoToken } from './oauth';
 
@@ -73,17 +74,23 @@ export class PcoClient {
       .get();
 
     if (!configSnap.exists) {
-      throw new Error(`No settings config found for org ${this.orgId}`);
+      throw new HttpsError(
+        'failed-precondition',
+        `No settings configuration found for organization ${this.orgId}. Please check Settings.`
+      );
     }
 
     const config = configSnap.data() as { pco_oauth?: PcoOAuthConfig };
     const oauth = config.pco_oauth;
 
-    if (!oauth) {
-      throw new Error(`PCO is not connected for org ${this.orgId}`);
+    if (!oauth || !oauth.access_token) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Planning Center is not connected. Please connect Planning Center in Settings.'
+      );
     }
 
-    const isExpired = oauth.expires_at - Date.now() < EXPIRY_BUFFER_MS;
+    const isExpired = !oauth.expires_at || oauth.expires_at - Date.now() < EXPIRY_BUFFER_MS;
 
     if (isExpired) {
       this.accessToken = await refreshPcoToken(this.orgId);
@@ -267,9 +274,15 @@ export class PcoClient {
       try {
         const items = await this.getAll(endpoint);
         if (items && items.length > 0) {
-          return items;
+          return items.filter((item) => item && typeof item.id === 'string' && item.id.length > 0);
         }
-      } catch {
+      } catch (err: any) {
+        if (err?.response?.status === 401) {
+          throw new HttpsError(
+            'unauthenticated',
+            'Planning Center authorization failed (401). Please reconnect Planning Center in Settings.'
+          );
+        }
         // Try next endpoint in sequence
       }
     }
@@ -285,16 +298,22 @@ export class PcoClient {
     const allLocations: PcoResource[] = [];
     const seenIds = new Set<string>();
 
-    // 1. Check Calendar Rooms
+    // 1. Check Calendar Resources (Rooms and resources)
     try {
-      const calendarRooms = await this.getAll('/calendar/v2/rooms');
-      for (const r of calendarRooms) {
-        if (!seenIds.has(r.id)) {
-          seenIds.add(r.id);
-          allLocations.push(r);
+      const resources = await this.getAll('/calendar/v2/resources');
+      for (const res of resources) {
+        if (res && res.id && !seenIds.has(res.id)) {
+          seenIds.add(res.id);
+          allLocations.push(res);
         }
       }
-    } catch {
+    } catch (err: any) {
+      if (err?.response?.status === 401) {
+        throw new HttpsError(
+          'unauthenticated',
+          'Planning Center authorization failed (401). Please reconnect Planning Center in Settings.'
+        );
+      }
       // Calendar API may not be provisioned or scoped
     }
 
@@ -302,26 +321,19 @@ export class PcoClient {
     try {
       const checkinLocations = await this.getAll('/check_ins/v2/locations');
       for (const l of checkinLocations) {
-        if (!seenIds.has(l.id)) {
+        if (l && l.id && !seenIds.has(l.id)) {
           seenIds.add(l.id);
           allLocations.push(l);
         }
       }
-    } catch {
-      // Check-Ins API may not be provisioned or scoped
-    }
-
-    // 3. Check Calendar Resources (where kind is room or physical)
-    try {
-      const resources = await this.getAll('/calendar/v2/resources');
-      for (const res of resources) {
-        if (!seenIds.has(res.id)) {
-          seenIds.add(res.id);
-          allLocations.push(res);
-        }
+    } catch (err: any) {
+      if (err?.response?.status === 401) {
+        throw new HttpsError(
+          'unauthenticated',
+          'Planning Center authorization failed (401). Please reconnect Planning Center in Settings.'
+        );
       }
-    } catch {
-      // ignore
+      // Check-Ins API may not be provisioned or scoped
     }
 
     return allLocations;

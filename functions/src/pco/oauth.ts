@@ -1,4 +1,4 @@
-import { onRequest } from 'firebase-functions/v2/https';
+import { onRequest, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import axios from 'axios';
 import { getPlatformConfig } from '../config/platform';
@@ -62,7 +62,7 @@ function getAppBaseUrl(req?: any): string {
 
 /**
  * Refreshes the PCO access token for a given org and writes the updated
- * tokens back to Firestore.  Returns the new access token.
+ * tokens back to Firestore. Returns the new access token.
  */
 export async function refreshPcoToken(orgId: string): Promise<string> {
   const db = getFirestore();
@@ -70,37 +70,49 @@ export async function refreshPcoToken(orgId: string): Promise<string> {
   const configSnap = await configRef.get();
 
   if (!configSnap.exists) {
-    throw new Error(`Settings config not found for org ${orgId}`);
+    throw new HttpsError('failed-precondition', `Organization settings configuration not found for organization ${orgId}.`);
   }
 
   const config = configSnap.data() as { pco_oauth?: PcoOAuthConfig };
   const oauth = config.pco_oauth;
 
   if (!oauth?.refresh_token) {
-    throw new Error(`No PCO refresh token found for org ${orgId}`);
+    throw new HttpsError('failed-precondition', 'Planning Center is not connected or refresh token is missing. Please connect Planning Center in Settings.');
   }
 
   const { clientId, clientSecret } = await getPcoCredentials();
+  if (!clientId || !clientSecret) {
+    throw new HttpsError('failed-precondition', 'Planning Center OAuth credentials are missing in platform config.');
+  }
 
-  const response = await axios.post<PcoTokenResponse>(
-    PCO_TOKEN_URL,
-    new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: oauth.refresh_token,
-      client_id: clientId,
-      client_secret: clientSecret,
-    }),
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-  );
+  try {
+    const response = await axios.post<PcoTokenResponse>(
+      PCO_TOKEN_URL,
+      new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: oauth.refresh_token,
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
 
-  const { access_token, refresh_token, expires_in } = response.data;
-  const expires_at = Date.now() + expires_in * 1000;
+    const { access_token, refresh_token, expires_in } = response.data;
+    const expires_at = Date.now() + expires_in * 1000;
 
-  await configRef.update({
-    pco_oauth: { access_token, refresh_token, expires_at },
-  });
+    await configRef.update({
+      pco_oauth: { access_token, refresh_token, expires_at },
+    });
 
-  return access_token;
+    return access_token;
+  } catch (err: any) {
+    const errorDetails = err?.response?.data?.error_description || err?.response?.data?.error || err?.message;
+    console.error(`PCO refresh token failed for org ${orgId}:`, errorDetails);
+    throw new HttpsError(
+      'unauthenticated',
+      `Planning Center authentication expired: ${errorDetails || 'Failed to refresh token'}. Please reconnect Planning Center in Settings.`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -391,7 +391,8 @@ export const triggerUserSync = onCall<TriggerUserSyncRequest, Promise<UserSyncRe
       return await syncOrgUsers(orgId, true);
     } catch (err: any) {
       console.error(`User sync failed for org ${orgId}:`, err);
-      throw new HttpsError('internal', err?.message || 'User sync failed.');
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError('failed-precondition', err?.message || 'User sync failed.');
     }
   }
 );
@@ -431,7 +432,8 @@ export const getPcoLists = onCall<GetPcoListsRequest, Promise<{ lists: PcoList[]
       return { lists };
     } catch (err: any) {
       console.error(`getPcoLists failed for org ${orgId}:`, err);
-      throw new HttpsError('internal', err?.message || 'Failed to fetch PCO lists.');
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError('failed-precondition', err?.message || 'Failed to fetch PCO lists.');
     }
   }
 );
