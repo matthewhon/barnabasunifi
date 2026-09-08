@@ -467,21 +467,17 @@ export const syncUnifiSchedules = onCall<{ orgId: string }>(
             type: 'unlock',
             doors: [{ id: doorId, name: doorName }],
           }, orgId);
-          schedulesMap.set(schedId, normalized);
+          const hasActiveSlots = normalized.weekly_schedule?.some((d) => d.active && d.slots.length > 0);
+          if (hasActiveSlots) {
+            schedulesMap.set(schedId, normalized);
+          }
         }
       }
-
-      const isUuid = (str: string) =>
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 
       const allSchedules = Array.from(schedulesMap.values()).filter((sched) => {
         if (!sched.id || sched.id.trim() === '') return false;
         const hasActiveSlots = sched.weekly_schedule?.some((d) => d.active && d.slots.length > 0);
-        const hasDoors = Boolean(sched.door_ids && sched.door_ids.length > 0);
-        if (isUuid(sched.name) && !hasActiveSlots && !hasDoors) {
-          return false;
-        }
-        return true;
+        return Boolean(hasActiveSlots);
       });
 
       const batch = db.batch();
@@ -512,24 +508,21 @@ export const syncUnifiSchedules = onCall<{ orgId: string }>(
         }
       }
 
-      // Prune phantom or orphaned schedule documents in Firestore
+      // Prune phantom or empty/inactive schedule documents in Firestore
       try {
         const existingSchedsSnap = await db.collection(`organizations/${orgId}/unifi_schedules`).get();
         for (const docSnap of existingSchedsSnap.docs) {
           const docId = docSnap.id;
           const data = docSnap.data();
-          const schedName = String(data.name || '').trim();
-          const hasDoors = Array.isArray(data.door_ids) && data.door_ids.length > 0;
           const hasActiveSlots = Array.isArray(data.weekly_schedule) && data.weekly_schedule.some((d: any) => d.active && d.slots?.length > 0);
-          if (!validScheduleIds.has(docId)) {
-            if (isUuid(docId) || isUuid(schedName) || !schedName || schedName === 'Schedule') {
-              if (!hasDoors && !hasActiveSlots) {
-                batch.delete(docSnap.ref);
-              }
-            }
+
+          if (!validScheduleIds.has(docId) || !hasActiveSlots) {
+            batch.delete(docSnap.ref);
           }
         }
-      } catch {}
+      } catch (pruneErr) {
+        console.warn('Error during schedule pruning:', pruneErr);
+      }
 
       await batch.commit();
 

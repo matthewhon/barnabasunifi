@@ -1974,7 +1974,7 @@ export class UnifiAccessClient {
 
           // Check if this rule has active hours or days
           const hasActiveSlots = normalized.weekly_schedule?.some((d) => d.active && d.slots.length > 0);
-          if (hasActiveSlots || !schedulesMap.has(schedId)) {
+          if (hasActiveSlots) {
             schedulesMap.set(schedId, normalized);
             const entry = scheduleToDoors.get(schedId) || { doorIds: [], doorLabels: [] };
             if (!entry.doorIds.includes(doorId)) {
@@ -1997,8 +1997,11 @@ export class UnifiAccessClient {
             weekly_schedule: passList,
             doors: [{ id: doorId, name: doorName }],
           });
-          schedulesMap.set(schedId, normalized);
-          scheduleToDoors.set(schedId, { doorIds: [doorId], doorLabels: [doorName] });
+          const hasActiveSlots = normalized.weekly_schedule?.some((d) => d.active && d.slots.length > 0);
+          if (hasActiveSlots) {
+            schedulesMap.set(schedId, normalized);
+            scheduleToDoors.set(schedId, { doorIds: [doorId], doorLabels: [doorName] });
+          }
         }
       }
 
