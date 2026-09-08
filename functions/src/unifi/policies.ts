@@ -117,12 +117,17 @@ export const syncUnifiAccessPolicies = onCall<SyncPoliciesRequest, Promise<{ suc
         timeout: 15000,
       });
 
-      let rawPolicies: any[] = [];
+      const policyMap = new Map<string, any>();
       const endpoints = [
         '/proxy/access/integration/v1/developer/access_policies',
         '/proxy/access/api/v1/developer/access_policies',
         '/api/v1/developer/access_policies',
         '/proxy/access/api/v2/policies',
+        '/proxy/access/api/v2/access_policies',
+        '/proxy/access/api/v2/permission/access_policies',
+        '/proxy/access/api/v2/permission/policies',
+        '/proxy/access/api/v2/user_groups',
+        '/proxy/access/api/v2/groups',
       ];
 
       for (const ep of endpoints) {
@@ -132,19 +137,33 @@ export const syncUnifiAccessPolicies = onCall<SyncPoliciesRequest, Promise<{ suc
             ? res.data.data
             : Array.isArray(res.data?.data?.access_policies)
             ? res.data.data.access_policies
+            : Array.isArray(res.data?.data?.policies)
+            ? res.data.data.policies
+            : Array.isArray(res.data?.data?.list)
+            ? res.data.data.list
+            : Array.isArray(res.data?.list)
+            ? res.data.list
+            : Array.isArray(res.data?.access_policies)
+            ? res.data.access_policies
+            : Array.isArray(res.data?.policies)
+            ? res.data.policies
             : Array.isArray(res.data)
             ? res.data
             : null;
-          if (list) {
-            rawPolicies = list;
-            break;
+
+          if (list && list.length > 0) {
+            for (const raw of list) {
+              const pol = normalizeUnifiAccessPolicy(raw, targetOrgId);
+              if (pol.id) {
+                policyMap.set(pol.id, pol);
+              }
+            }
           }
         } catch {}
       }
 
       const batch = db.batch();
-      for (const raw of rawPolicies) {
-        const policy = normalizeUnifiAccessPolicy(raw, targetOrgId);
+      for (const policy of policyMap.values()) {
         if (policy.id) {
           const docRef = db.doc(`organizations/${targetOrgId}/access_policies/${policy.id}`);
           batch.set(docRef, { ...policy, updated_at: FieldValue.serverTimestamp() }, { merge: true });
@@ -154,7 +173,7 @@ export const syncUnifiAccessPolicies = onCall<SyncPoliciesRequest, Promise<{ suc
 
       return {
         success: true,
-        message: `Synchronized ${rawPolicies.length} access policies directly via remote API.`,
+        message: `Synchronized ${policyMap.size} access policies directly via remote API.`,
       };
     }
 

@@ -2617,9 +2617,15 @@ export class UnifiAccessClient {
 
   /**
    * Fetch all access policies from UniFi Access.
+   * Discovers access policies across Developer and native console endpoints.
    */
   async getAccessPolicies(): Promise<any[]> {
-    const endpoints = this.getAccessPolicyEndpoints();
+    const policyMap = new Map<string, any>();
+    const endpoints = [
+      ...this.getAccessPolicyEndpoints(),
+      '/proxy/access/api/v2/user_groups',
+      '/proxy/access/api/v2/groups',
+    ];
 
     for (const endpoint of endpoints) {
       try {
@@ -2643,10 +2649,14 @@ export class UnifiAccessClient {
           : null;
 
         if (rawList && rawList.length > 0) {
-          logger.info(`[UniFi] Fetched ${rawList.length} access policy(ies) via ${endpoint}`);
-          return rawList.map((p: any) => {
+          let added = 0;
+          for (const p of rawList) {
+            if (!p || typeof p !== 'object') continue;
+            const polId = String(p.id || p.unique_id || p.policy_id || p.group_id || p._id || '');
+            if (!polId) continue;
+
             const doorIds: string[] = [];
-            const rawDoors = p.doors || p.door_ids || p.resources || p.locations || p.configs || p.elements;
+            const rawDoors = p.doors || p.door_ids || p.resources || p.locations || p.configs || p.elements || p.group_resources;
             if (Array.isArray(rawDoors)) {
               for (const d of rawDoors) {
                 if (typeof d === 'string') {
@@ -2658,23 +2668,36 @@ export class UnifiAccessClient {
               }
             }
 
-            return {
-              id: String(p.id || p.unique_id || p.policy_id || p._id || ''),
-              unifi_policy_id: String(p.id || p.unique_id || p.policy_id || p._id || ''),
-              name: String(p.name || p.policy_name || 'Policy'),
-              door_ids: Array.from(new Set(doorIds)),
-              schedule_id: p.schedule_id || p.scheduleId || p.schedule?.id || p.work_time_id || undefined,
-              schedule_name: p.schedule_name || p.schedule?.name || undefined,
+            const existing = policyMap.get(polId);
+            const mergedDoorIds = Array.from(new Set([...(existing?.door_ids || []), ...doorIds]));
+
+            const policyObj = {
+              id: polId,
+              unifi_policy_id: polId,
+              name: String(p.name || p.policy_name || p.group_name || existing?.name || 'Access Policy'),
+              door_ids: mergedDoorIds,
+              schedule_id: p.schedule_id || p.scheduleId || p.schedule?.id || p.work_time_id || p.unlock_schedule_id || existing?.schedule_id || undefined,
+              schedule_name: p.schedule_name || p.schedule?.name || existing?.schedule_name || undefined,
+              description: typeof p.description === 'string' ? p.description : (typeof p.remarks === 'string' ? p.remarks : existing?.description),
+              user_count: typeof p.user_count === 'number' ? p.user_count : (typeof p.users_count === 'number' ? p.users_count : existing?.user_count),
               raw_data: p,
+              sync_status: 'synced',
             };
-          });
+
+            policyMap.set(polId, policyObj);
+            added++;
+          }
+
+          if (added > 0) {
+            logger.info(`[UniFi] Fetched ${added} access policy record(s) via ${endpoint}`);
+          }
         }
       } catch (err: any) {
         logger.debug(`[UniFi] getAccessPolicies tried ${endpoint}: ${err.response?.status || err.message}`);
       }
     }
 
-    return [];
+    return Array.from(policyMap.values());
   }
 
   /**
