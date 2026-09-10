@@ -413,6 +413,31 @@
         <div id="cardDoorCount" class="card-value">0</div>
         <div id="cardLastSync" class="card-subtext">Sync idle</div>
       </div>
+      <div class="card">
+        <div class="card-title">Offline Resilience</div>
+        <div id="cardOfflineStatus" class="card-value">-</div>
+        <div id="cardOfflineDetail" class="card-subtext">0 windows cached</div>
+      </div>
+    </div>
+
+    <!-- Offline Mode Banner -->
+    <div id="offlineBanner" class="section" style="display: none; border-color: var(--warning); background: rgba(245, 158, 11, 0.1);">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div>
+          <h2 class="section-title" style="color: var(--warning); margin-bottom: 0.25rem;">🛡️ Autonomous Offline Mode Active</h2>
+          <p style="font-size: 0.8125rem; color: var(--text-secondary); margin: 0;">
+            Internet connectivity to Firebase is down. Scheduled door unlocks and locks continue running locally on LAN based on the last settings. All actions will automatically sync to cloud once connection is restored.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Upcoming Local Scheduled Actions -->
+    <div id="upcomingSection" class="section" style="display: none;">
+      <h2 class="section-title" style="margin-bottom: 0.75rem;">
+        📅 Upcoming Scheduled Operations (Local Cache)
+      </h2>
+      <div id="upcomingList" style="font-size: 0.8125rem;"></div>
     </div>
 
     <!-- Software Update / Version Comparison Section -->
@@ -680,6 +705,60 @@
 
         document.getElementById('cardDoorCount').innerText = data.doorCount ?? 0;
         document.getElementById('cardLastSync').innerText = data.lastSync ? `Synced ${new Date(data.lastSync).toLocaleTimeString()}` : 'No sync yet';
+
+        // Offline Resilience Card & Banner
+        const isOffline = Boolean(data.offlineMode || !data.firebaseConnected);
+        const cardOfflineStatus = document.getElementById('cardOfflineStatus');
+        const cardOfflineDetail = document.getElementById('cardOfflineDetail');
+        if (data.offlineMode) {
+          cardOfflineStatus.innerText = 'Offline Autonomous';
+          cardOfflineStatus.style.color = 'var(--warning)';
+          cardOfflineDetail.innerText = `${data.cachedWindowsCount ?? 0} windows cached · Running on LAN`;
+        } else {
+          cardOfflineStatus.innerText = 'Protected';
+          cardOfflineStatus.style.color = 'var(--success)';
+          cardOfflineDetail.innerText = `${data.cachedWindowsCount ?? 0} windows cached (14-day buffer)`;
+        }
+
+        const offlineBanner = document.getElementById('offlineBanner');
+        if (offlineBanner) {
+          offlineBanner.style.display = data.offlineMode ? 'block' : 'none';
+        }
+
+        // Upcoming Scheduled Operations list
+        const upcomingSec = document.getElementById('upcomingSection');
+        const upcomingList = document.getElementById('upcomingList');
+        if (data.nextUpcomingActions && data.nextUpcomingActions.length > 0) {
+          upcomingSec.style.display = 'block';
+          upcomingList.innerHTML = `
+            <table style="width: 100%; border-collapse: collapse; text-align: left;">
+              <thead>
+                <tr style="border-bottom: 1px solid var(--border); color: var(--text-secondary); font-size: 0.75rem;">
+                  <th style="padding: 0.5rem 0.25rem;">ACTION</th>
+                  <th style="padding: 0.5rem 0.25rem;">DOOR</th>
+                  <th style="padding: 0.5rem 0.25rem;">SCHEDULED TIME</th>
+                  <th style="padding: 0.5rem 0.25rem;">EVENT / SERVICE</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.nextUpcomingActions.map((item) => `
+                  <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                    <td style="padding: 0.5rem 0.25rem;">
+                      <span class="badge ${item.action === 'unlock' ? 'badge-running' : 'badge-unconfigured'}" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;">
+                        ${item.action.toUpperCase()}
+                      </span>
+                    </td>
+                    <td style="padding: 0.5rem 0.25rem; font-weight: 600; color: var(--text-primary);">${item.doorLabel}</td>
+                    <td style="padding: 0.5rem 0.25rem; font-family: monospace; color: #38bdf8;">${new Date(item.time).toLocaleString()}</td>
+                    <td style="padding: 0.5rem 0.25rem; color: var(--text-secondary);">${item.sourceLabel}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `;
+        } else {
+          upcomingSec.style.display = 'none';
+        }
 
         // Service Account status
         const saStatus = document.getElementById('serviceAccountStatus');

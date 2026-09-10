@@ -21,6 +21,11 @@ if not exist "%~dp0.env" (
     )
 )
 
+rem Ensure data directory exists for offline cache
+if not exist "%~dp0data" (
+    mkdir "%~dp0data"
+)
+
 echo Building and launching container...
 docker compose up -d --build
 

@@ -29,7 +29,7 @@ COPY .env.example .env.example
 ENV NODE_ENV=production
 
 # Run as non-root user for security
-RUN addgroup -S agent && adduser -S agent -G agent && chown -R agent:agent /app
+RUN mkdir -p /app/data && addgroup -S agent && adduser -S agent -G agent && chown -R agent:agent /app
 USER agent
 
 EXPOSE 8080

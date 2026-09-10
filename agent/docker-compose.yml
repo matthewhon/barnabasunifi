@@ -16,6 +16,7 @@ services:
     volumes:
       - ./service-account.json:/app/service-account.json
       - ./.env:/app/.env
+      - ./data:/app/data
       - agent_dist:/app/dist
     logging:
       driver: json-file

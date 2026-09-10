@@ -29,6 +29,11 @@ interface MappingData {
   lock_timing_mode?: 'after_end' | 'after_start';
   lock_offset_min?: number;
   unlock_offset_min?: number;
+  door_timings?: Record<string, {
+    unlock_offset_min?: number;
+    lock_timing_mode?: 'after_end' | 'after_start';
+    lock_offset_min?: number;
+  }>;
 }
 
 interface SyncResult {
@@ -150,21 +155,74 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       unlock_offset_min?: number;
       lock_offset_min?: number;
       lock_timing_mode?: 'after_end' | 'after_start';
+      door_timings?: Record<string, {
+        unlock_offset_min?: number;
+        lock_timing_mode?: 'after_end' | 'after_start';
+        lock_offset_min?: number;
+      }>;
     }
   ): Promise<void> {
-    const unlockOffsetMin = mappingOptions?.unlock_offset_min ?? settings.unlock_buffer_before_min ?? 15;
-    const unlockAt = new Date(startsAt.getTime() - unlockOffsetMin * 60 * 1000);
-
-    const lockMode = mappingOptions?.lock_timing_mode ?? settings.lock_timing_mode ?? 'after_end';
-    let lockAt: Date;
-
-    if (lockMode === 'after_start') {
-      const lockOffsetMin = mappingOptions?.lock_offset_min ?? settings.lock_after_start_min ?? 15;
-      lockAt = new Date(startsAt.getTime() + lockOffsetMin * 60 * 1000);
+    const defaultUnlockOffsetMin = mappingOptions?.unlock_offset_min ?? settings.unlock_buffer_before_min ?? 15;
+    const defaultLockMode = mappingOptions?.lock_timing_mode ?? settings.lock_timing_mode ?? 'after_end';
+    let defaultLockOffsetMin: number;
+    if (defaultLockMode === 'after_start') {
+      defaultLockOffsetMin = mappingOptions?.lock_offset_min ?? settings.lock_after_start_min ?? 15;
     } else {
-      const lockOffsetMin = mappingOptions?.lock_offset_min ?? settings.lock_buffer_after_min ?? 15;
-      lockAt = new Date(endsAt.getTime() + lockOffsetMin * 60 * 1000);
+      defaultLockOffsetMin = mappingOptions?.lock_offset_min ?? settings.lock_buffer_after_min ?? 15;
     }
+
+    const doorIds = (metadata.door_ids as string[]) ?? [];
+    const doorLabels = (metadata.door_labels as string[]) ?? [];
+
+    // Compute door-specific unlock and lock times
+    const computedDoorTimings: Record<string, {
+      unlock_at: Timestamp;
+      lock_at: Timestamp;
+      unlock_offset_min: number;
+      lock_offset_min: number;
+      lock_timing_mode: 'after_end' | 'after_start';
+    }> = {};
+
+    let earliestUnlockMs = Infinity;
+    let latestLockMs = -Infinity;
+
+    if (doorIds.length > 0) {
+      for (const doorId of doorIds) {
+        const override = mappingOptions?.door_timings?.[doorId];
+        const dUnlockOffset = override?.unlock_offset_min ?? defaultUnlockOffsetMin;
+        const dLockMode = override?.lock_timing_mode ?? defaultLockMode;
+        let dLockOffset: number;
+        if (dLockMode === 'after_start') {
+          dLockOffset = override?.lock_offset_min ?? (defaultLockMode === 'after_start' ? defaultLockOffsetMin : (settings.lock_after_start_min ?? 15));
+        } else {
+          dLockOffset = override?.lock_offset_min ?? (defaultLockMode === 'after_end' ? defaultLockOffsetMin : (settings.lock_buffer_after_min ?? 15));
+        }
+
+        const dUnlockAt = new Date(startsAt.getTime() - dUnlockOffset * 60 * 1000);
+        const dLockAt = dLockMode === 'after_start'
+          ? new Date(startsAt.getTime() + dLockOffset * 60 * 1000)
+          : new Date(endsAt.getTime() + dLockOffset * 60 * 1000);
+
+        earliestUnlockMs = Math.min(earliestUnlockMs, dUnlockAt.getTime());
+        latestLockMs = Math.max(latestLockMs, dLockAt.getTime());
+
+        computedDoorTimings[doorId] = {
+          unlock_at: Timestamp.fromDate(dUnlockAt),
+          lock_at: Timestamp.fromDate(dLockAt),
+          unlock_offset_min: dUnlockOffset,
+          lock_offset_min: dLockOffset,
+          lock_timing_mode: dLockMode,
+        };
+      }
+    }
+
+    const baseUnlockAt = new Date(startsAt.getTime() - defaultUnlockOffsetMin * 60 * 1000);
+    const baseLockAt = defaultLockMode === 'after_start'
+      ? new Date(startsAt.getTime() + defaultLockOffsetMin * 60 * 1000)
+      : new Date(endsAt.getTime() + defaultLockOffsetMin * 60 * 1000);
+
+    const unlockAt = isFinite(earliestUnlockMs) ? new Date(earliestUnlockMs) : baseUnlockAt;
+    const lockAt = isFinite(latestLockMs) ? new Date(latestLockMs) : baseLockAt;
 
     // Query for an existing window with this idempotency key
     const existingSnap = await windowsRef
@@ -178,10 +236,14 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       ends_at: Timestamp.fromDate(endsAt),
       unlock_at: Timestamp.fromDate(unlockAt),
       lock_at: Timestamp.fromDate(lockAt),
-      lock_timing_mode: lockMode,
+      lock_timing_mode: defaultLockMode,
       updated_at: FieldValue.serverTimestamp(),
       ...metadata,
     };
+
+    if (Object.keys(computedDoorTimings).length > 0) {
+      windowData.door_timings = computedDoorTimings;
+    }
 
     let windowId: string;
 
@@ -208,15 +270,19 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
     }
 
     // Create door_commands for windows within the next 24 hours ONLY if doors are mapped
-    const doorIds = (metadata.door_ids as string[]) ?? [];
-    const doorLabels = (metadata.door_labels as string[]) ?? [];
-    if (doorIds.length > 0 && unlockAt.getTime() - now < twentyFourHoursMs) {
-      const durationMin = Math.max(1, Math.round((lockAt.getTime() - unlockAt.getTime()) / (60 * 1000)));
+    if (doorIds.length > 0) {
       for (let i = 0; i < doorIds.length; i++) {
         const doorId = doorIds[i];
         const doorLabel = doorLabels[i] || doorId;
-        await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'unlock', unlockAt, durationMin);
-        await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'lock', lockAt);
+        const timing = computedDoorTimings[doorId];
+        const dUnlockAt = timing ? timing.unlock_at.toDate() : unlockAt;
+        const dLockAt = timing ? timing.lock_at.toDate() : lockAt;
+
+        if (dUnlockAt.getTime() - now < twentyFourHoursMs) {
+          const durationMin = Math.max(1, Math.round((dLockAt.getTime() - dUnlockAt.getTime()) / (60 * 1000)));
+          await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'unlock', dUnlockAt, durationMin);
+          await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'lock', dLockAt);
+        }
       }
     }
   }
@@ -238,7 +304,20 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       .limit(1)
       .get();
 
-    if (!existingSnap.empty) return;
+    if (!existingSnap.empty) {
+      const doc = existingSnap.docs[0];
+      const data = doc.data();
+      if (data.status === 'pending') {
+        const updatePayload: Record<string, unknown> = {
+          execute_at: Timestamp.fromDate(executeAt),
+        };
+        if (durationMin !== undefined) {
+          updatePayload.duration_min = durationMin;
+        }
+        await doc.ref.update(updatePayload);
+      }
+      return;
+    }
 
     // Also check backwards-compatible 'window_id' query
     const legacySnap = await ref
@@ -248,7 +327,20 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       .limit(1)
       .get();
 
-    if (!legacySnap.empty) return;
+    if (!legacySnap.empty) {
+      const doc = legacySnap.docs[0];
+      const data = doc.data();
+      if (data.status === 'pending') {
+        const updatePayload: Record<string, unknown> = {
+          execute_at: Timestamp.fromDate(executeAt),
+        };
+        if (durationMin !== undefined) {
+          updatePayload.duration_min = durationMin;
+        }
+        await doc.ref.update(updatePayload);
+      }
+      return;
+    }
 
     const commandPayload: Record<string, unknown> = {
       schedule_window_id: windowId,
@@ -358,6 +450,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
               unlock_offset_min: mapping?.unlock_offset_min,
               lock_offset_min: mapping?.lock_offset_min,
               lock_timing_mode: mapping?.lock_timing_mode,
+              door_timings: mapping?.door_timings,
             }
           );
         }
@@ -429,6 +522,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
             unlock_offset_min: mapping?.unlock_offset_min,
             lock_offset_min: mapping?.lock_offset_min,
             lock_timing_mode: mapping?.lock_timing_mode,
+            door_timings: mapping?.door_timings,
           }
         );
       }

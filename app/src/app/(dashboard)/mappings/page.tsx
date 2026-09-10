@@ -27,6 +27,7 @@ import type {
   MappingSourceType,
   PlanTimeType,
   LockTimingMode,
+  DoorTimingConfig,
   PcoServiceType,
   PcoGroup,
   PcoTimeInfo,
@@ -266,10 +267,27 @@ function ActiveMappingCard({
   onEditTiming,
   toggling,
 }: ActiveMappingCardProps) {
-  // Find doors matching this mapping
+  const effectiveLockMode = mapping.lock_timing_mode ?? orgSettings?.lock_timing_mode ?? 'after_end';
+  const effectiveUnlockMin = mapping.unlock_offset_min ?? orgSettings?.unlock_buffer_before_min ?? 15;
+  const effectiveLockMin = mapping.lock_offset_min ?? (effectiveLockMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
+  const isCustomTiming = mapping.lock_timing_mode !== undefined || mapping.lock_offset_min !== undefined || mapping.unlock_offset_min !== undefined;
+
+  // Find doors matching this mapping with their specific timing rules
   const mappedDoors = mapping.door_ids.map((dId) => {
     const found = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
     const cleanLabel = (found?.label || '').trim();
+    const timingOverride = mapping.door_timings?.[dId];
+    const isDoorCustom = Boolean(
+      timingOverride && (
+        timingOverride.lock_timing_mode !== undefined ||
+        timingOverride.lock_offset_min !== undefined ||
+        timingOverride.unlock_offset_min !== undefined
+      )
+    );
+    const doorLockMode = timingOverride?.lock_timing_mode ?? effectiveLockMode;
+    const doorUnlockMin = timingOverride?.unlock_offset_min ?? effectiveUnlockMin;
+    const doorLockMin = timingOverride?.lock_offset_min ?? (doorLockMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
+
     return {
       id: dId,
       label: cleanLabel || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId),
@@ -278,8 +296,15 @@ function ActiveMappingCard({
       position: found?.door_position_status,
       campusName: found?.campus_name,
       locationName: found?.location_name,
+      isDoorCustom,
+      doorLockMode,
+      doorUnlockMin,
+      doorLockMin,
     };
   });
+
+  const hasPerDoorCustomTiming = mappedDoors.some((d) => d.isDoorCustom);
+  const customDoorsCount = mappedDoors.filter((d) => d.isDoorCustom).length;
 
   // Find upcoming schedule windows linked to this mapping / service / group
   const now = Date.now();
@@ -299,11 +324,6 @@ function ActiveMappingCard({
     .sort((a, b) => new Date(a.unlock_at).getTime() - new Date(b.unlock_at).getTime());
 
   const nextWindow = matchingWindows[0];
-
-  const effectiveLockMode = mapping.lock_timing_mode ?? orgSettings?.lock_timing_mode ?? 'after_end';
-  const effectiveUnlockMin = mapping.unlock_offset_min ?? orgSettings?.unlock_buffer_before_min ?? 15;
-  const effectiveLockMin = mapping.lock_offset_min ?? (effectiveLockMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
-  const isCustomTiming = mapping.lock_timing_mode !== undefined || mapping.lock_offset_min !== undefined || mapping.unlock_offset_min !== undefined;
 
   const frequency = (pcoResource as PcoServiceType)?.frequency;
   const schedule = (pcoResource as PcoGroup)?.schedule;
@@ -497,49 +517,65 @@ function ActiveMappingCard({
                     gap: '0.5rem',
                     padding: '0.375rem 0.625rem',
                     background: 'var(--color-bg-elevated)',
-                    border: '1px solid var(--color-border)',
+                    border: `1px solid ${door.isDoorCustom ? 'rgba(36, 101, 245, 0.35)' : 'var(--color-border)'}`,
                     borderRadius: 'var(--radius-md)',
                     fontSize: '0.8125rem',
                   }}
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                      {door.label}
-                    </span>
-                    {(door.campusName || door.locationName) && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
-                        {door.campusName && (
-                          <span
-                            style={{
-                              fontSize: '0.625rem',
-                              padding: '0.05rem 0.3rem',
-                              borderRadius: '4px',
-                              background: 'rgba(36, 101, 245, 0.1)',
-                              color: 'var(--color-accent, #2465f5)',
-                              border: '1px solid rgba(36, 101, 245, 0.2)',
-                              fontWeight: 500,
-                            }}
-                          >
-                            🏫 {door.campusName}
-                          </span>
-                        )}
-                        {door.locationName && (
-                          <span
-                            style={{
-                              fontSize: '0.625rem',
-                              padding: '0.05rem 0.3rem',
-                              borderRadius: '4px',
-                              background: 'rgba(168, 85, 247, 0.1)',
-                              color: '#9333ea',
-                              border: '1px solid rgba(168, 85, 247, 0.2)',
-                              fontWeight: 500,
-                            }}
-                          >
-                            📍 {door.locationName}
-                          </span>
-                        )}
-                      </div>
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                        {door.label}
+                      </span>
+                      {door.isDoorCustom && (
+                        <span className="badge badge-info" style={{ fontSize: '0.625rem', padding: '0.05rem 0.3rem' }}>
+                          Custom
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+                      {door.campusName && (
+                        <span
+                          style={{
+                            fontSize: '0.625rem',
+                            padding: '0.05rem 0.3rem',
+                            borderRadius: '4px',
+                            background: 'rgba(36, 101, 245, 0.1)',
+                            color: 'var(--color-accent, #2465f5)',
+                            border: '1px solid rgba(36, 101, 245, 0.2)',
+                            fontWeight: 500,
+                          }}
+                        >
+                          🏫 {door.campusName}
+                        </span>
+                      )}
+                      {door.locationName && (
+                        <span
+                          style={{
+                            fontSize: '0.625rem',
+                            padding: '0.05rem 0.3rem',
+                            borderRadius: '4px',
+                            background: 'rgba(168, 85, 247, 0.1)',
+                            color: '#9333ea',
+                            border: '1px solid rgba(168, 85, 247, 0.2)',
+                            fontWeight: 500,
+                          }}
+                        >
+                          📍 {door.locationName}
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          fontSize: '0.625rem',
+                          color: door.isDoorCustom ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                          fontWeight: door.isDoorCustom ? 600 : 400,
+                        }}
+                      >
+                        {door.doorLockMode === 'after_start'
+                          ? `🛡️ Locks +${door.doorLockMin}m after start`
+                          : `🕒 Locks +${door.doorLockMin}m after end`}
+                      </span>
+                    </div>
                   </div>
                   <span
                     className={`badge ${
@@ -602,30 +638,58 @@ function ActiveMappingCard({
             gap: '0.25rem',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
-              Door Locking Rule {isCustomTiming && <span className="badge badge-info" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>Custom</span>}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
+                Door Locking Rule
+              </span>
+              {isCustomTiming && <span className="badge badge-info" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>Custom Default</span>}
+              {hasPerDoorCustomTiming && (
+                <span className="badge badge-primary" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', background: 'rgba(168, 85, 247, 0.12)', color: '#9333ea', border: '1px solid rgba(168, 85, 247, 0.25)' }}>
+                  {customDoorsCount} Door Override{customDoorsCount !== 1 ? 's' : ''}
+                </span>
+              )}
             </div>
             {onEditTiming && (
               <button
                 className="btn btn-ghost btn-sm"
                 style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', height: 'auto' }}
                 onClick={() => onEditTiming(mapping)}
-                title="Edit lock timing rule for this mapping"
+                title="Edit lock timing rule and per-door schedules for this mapping"
               >
-                ⚙️ Edit Rule
+                ⚙️ Edit Rules
               </button>
             )}
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--color-text-primary)', lineHeight: 1.4 }}>
-            {effectiveLockMode === 'after_start' ? (
-              <>
-                <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>🛡️ Security Mode:</span> Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after start · Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before
-              </>
-            ) : (
-              <>
-                <span style={{ fontWeight: 600 }}>🕒 Standard Mode:</span> Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after end · Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before
-              </>
+            <div>
+              <span style={{ fontWeight: 600, color: 'var(--color-text-muted)' }}>Default: </span>
+              {effectiveLockMode === 'after_start' ? (
+                <>
+                  <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>🛡️ Security Mode:</span> Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after start · Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before
+                </>
+              ) : (
+                <>
+                  <span style={{ fontWeight: 600 }}>🕒 Standard Mode:</span> Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after end · Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before
+                </>
+              )}
+            </div>
+            {hasPerDoorCustomTiming && (
+              <div style={{ marginTop: '0.375rem', paddingTop: '0.375rem', borderTop: '1px dashed var(--color-border)', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                <span style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Door-Specific Timing:
+                </span>
+                {mappedDoors.filter((d) => d.isDoorCustom).map((d) => (
+                  <div key={d.id} style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>• {d.label}:</span>
+                    {d.doorLockMode === 'after_start' ? (
+                      <span style={{ color: 'var(--color-success, #10b981)' }}>🛡️ Security Mode (Locks +{d.doorLockMin}m after start · Unlocks -{d.doorUnlockMin}m before)</span>
+                    ) : (
+                      <span>🕒 Standard Mode (Locks +{d.doorLockMin}m after end · Unlocks -{d.doorUnlockMin}m before)</span>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -709,6 +773,7 @@ interface EditTimingModalProps {
   isOpen: boolean;
   onClose: () => void;
   mapping: Mapping | null;
+  doors: Door[];
   orgSettings: OrgSettings | null;
   onSave: (
     mappingId: string,
@@ -716,6 +781,7 @@ interface EditTimingModalProps {
       lock_timing_mode?: LockTimingMode;
       lock_offset_min?: number;
       unlock_offset_min?: number;
+      door_timings?: Record<string, DoorTimingConfig>;
     },
   ) => Promise<void>;
   saving: boolean;
@@ -725,6 +791,7 @@ function EditTimingModal({
   isOpen,
   onClose,
   mapping,
+  doors,
   orgSettings,
   onSave,
   saving,
@@ -732,6 +799,7 @@ function EditTimingModal({
   const [timingChoice, setTimingChoice] = useState<'default' | 'after_start' | 'after_end'>('default');
   const [unlockMin, setUnlockMin] = useState(15);
   const [lockMin, setLockMin] = useState(15);
+  const [doorTimings, setDoorTimings] = useState<Record<string, DoorTimingConfig>>({});
 
   useEffect(() => {
     if (!mapping) return;
@@ -747,6 +815,8 @@ function EditTimingModal({
       const mode = mapping.lock_timing_mode ?? orgSettings?.lock_timing_mode ?? 'after_end';
       setLockMin(mode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
     }
+    // Deep clone existing door timings or initialize empty
+    setDoorTimings(mapping.door_timings ? JSON.parse(JSON.stringify(mapping.door_timings)) : {});
   }, [mapping, orgSettings, isOpen]);
 
   if (!mapping) return null;
@@ -755,21 +825,76 @@ function EditTimingModal({
   const orgUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
   const orgLock = orgMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15);
 
+  const effectiveDefaultMode = timingChoice !== 'default' ? timingChoice : orgMode;
+  const effectiveDefaultUnlock = timingChoice !== 'default' ? unlockMin : orgUnlock;
+  const effectiveDefaultLock = timingChoice !== 'default' ? lockMin : orgLock;
+
+  function handleToggleDoorCustom(doorId: string, custom: boolean) {
+    setDoorTimings((prev) => {
+      const next = { ...prev };
+      if (!custom) {
+        delete next[doorId];
+      } else {
+        // Pre-populate with Security Mode (lock 15m after start) as recommended default for side doors
+        next[doorId] = {
+          lock_timing_mode: 'after_start',
+          lock_offset_min: 15,
+          unlock_offset_min: effectiveDefaultUnlock,
+        };
+      }
+      return next;
+    });
+  }
+
+  function handleUpdateDoorTiming(doorId: string, partial: Partial<DoorTimingConfig>) {
+    setDoorTimings((prev) => ({
+      ...prev,
+      [doorId]: {
+        ...(prev[doorId] || {
+          lock_timing_mode: 'after_start',
+          lock_offset_min: 15,
+          unlock_offset_min: effectiveDefaultUnlock,
+        }),
+        ...partial,
+      },
+    }));
+  }
+
   async function handleSave() {
     if (!mapping) return;
-    if (timingChoice === 'default') {
-      await onSave(mapping.id, {
-        lock_timing_mode: undefined,
-        lock_offset_min: undefined,
-        unlock_offset_min: undefined,
-      });
-    } else {
-      await onSave(mapping.id, {
-        lock_timing_mode: timingChoice,
-        lock_offset_min: lockMin,
-        unlock_offset_min: unlockMin,
-      });
+
+    // Clean doorTimings: keep only doors currently assigned to mapping
+    const cleanedDoorTimings: Record<string, DoorTimingConfig> = {};
+    for (const dId of mapping.door_ids) {
+      if (doorTimings[dId]) {
+        cleanedDoorTimings[dId] = {
+          lock_timing_mode: doorTimings[dId].lock_timing_mode,
+          lock_offset_min: doorTimings[dId].lock_offset_min,
+          unlock_offset_min: doorTimings[dId].unlock_offset_min,
+        };
+      }
     }
+
+    const updates: {
+      lock_timing_mode?: LockTimingMode;
+      lock_offset_min?: number;
+      unlock_offset_min?: number;
+      door_timings?: Record<string, DoorTimingConfig>;
+    } = {};
+
+    if (timingChoice === 'default') {
+      updates.lock_timing_mode = undefined;
+      updates.lock_offset_min = undefined;
+      updates.unlock_offset_min = undefined;
+    } else {
+      updates.lock_timing_mode = timingChoice;
+      updates.lock_offset_min = lockMin;
+      updates.unlock_offset_min = unlockMin;
+    }
+
+    updates.door_timings = Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined;
+
+    await onSave(mapping.id, updates);
   }
 
   return (
@@ -783,18 +908,19 @@ function EditTimingModal({
             Cancel
           </button>
           <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : 'Save Timing Rule'}
+            {saving ? 'Saving…' : 'Save Timing Rules'}
           </button>
         </div>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxHeight: '75vh', overflowY: 'auto', paddingRight: '0.25rem' }}>
+        {/* 1. Mapping Default Locking Rule */}
         <div>
-          <label className="form-label" style={{ marginBottom: '0.5rem', display: 'block', fontWeight: 600 }}>
-            Timing & Locking Rule
+          <label className="form-label" style={{ marginBottom: '0.375rem', display: 'block', fontWeight: 700, fontSize: '0.9375rem' }}>
+            1. Mapping Default Timing Rule
           </label>
           <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>
-            Choose how doors should lock for <strong>{mapping.pco_resource_label}</strong>. You can lock doors shortly after the service starts for security, or keep them unlocked until after the service ends.
+            Choose the baseline timing rule for <strong>{mapping.pco_resource_label}</strong>. All doors mapped to this schedule follow this rule unless given a custom override below.
           </p>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -857,7 +983,7 @@ function EditTimingModal({
                   🛡️ Security Mode — Lock after service starts
                 </span>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                  Doors will unlock before the service and automatically lock a set time after the service begins.
+                  Doors unlock before start and automatically lock shortly after the service begins.
                 </span>
               </div>
             </label>
@@ -888,91 +1014,315 @@ function EditTimingModal({
                   🕒 Standard Mode — Lock after service ends
                 </span>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                  Doors stay unlocked for the full duration of the service and lock after it concludes.
+                  Doors stay unlocked for the duration of the service and lock after it concludes.
                 </span>
               </div>
             </label>
           </div>
-        </div>
 
-        {/* Sliders if custom mode selected */}
-        {timingChoice !== 'default' && (
-          <div
-            style={{
-              padding: '1rem',
-              background: 'var(--color-bg-elevated)',
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-md)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1rem',
-            }}
-          >
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
-                  Unlock doors before start
-                </label>
-                <span style={{ fontWeight: 700, color: 'var(--color-accent)', fontSize: '0.8125rem' }}>
-                  {unlockMin} min before
-                </span>
-              </div>
-              <input
-                type="range"
-                className="form-range"
-                min="0"
-                max="60"
-                step="5"
-                value={unlockMin}
-                onChange={(e) => setUnlockMin(Number(e.target.value))}
-              />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
-                  {timingChoice === 'after_start' ? 'Lock doors after start' : 'Lock doors after end'}
-                </label>
-                <span style={{ fontWeight: 700, color: 'var(--color-accent)', fontSize: '0.8125rem' }}>
-                  {lockMin} min {timingChoice === 'after_start' ? 'after start' : 'after end'}
-                </span>
-              </div>
-              <input
-                type="range"
-                className="form-range"
-                min="0"
-                max={timingChoice === 'after_start' ? '120' : '60'}
-                step="5"
-                value={lockMin}
-                onChange={(e) => setLockMin(Number(e.target.value))}
-              />
-            </div>
-
-            {/* Example preview */}
+          {/* Sliders if custom default mode selected */}
+          {timingChoice !== 'default' && (
             <div
               style={{
-                fontSize: '0.75rem',
-                color: 'var(--color-text-secondary)',
-                background: 'var(--color-bg-surface)',
-                padding: '0.5rem 0.75rem',
-                borderRadius: 'var(--radius-sm)',
-                border: '1px dashed var(--color-border)',
+                marginTop: '0.75rem',
+                padding: '0.875rem 1rem',
+                background: 'var(--color-bg-elevated)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.875rem',
               }}
             >
-              💡 <strong>Example:</strong> For a 10:00 AM – 11:30 AM service, doors unlock at{' '}
-              <strong>
-                {10 - Math.floor(unlockMin / 60)}:{String((60 - (unlockMin % 60)) % 60).padStart(2, '0')}{' '}
-                {unlockMin > 0 ? 'AM' : 'AM'}
-              </strong>{' '}
-              and lock at{' '}
-              <strong>
-                {timingChoice === 'after_start'
-                  ? `${10 + Math.floor(lockMin / 60)}:${String(lockMin % 60).padStart(2, '0')} AM`
-                  : `${11 + Math.floor((30 + lockMin) / 60)}:${String((30 + lockMin) % 60).padStart(2, '0')} AM`}
-              </strong>.
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                  <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
+                    Unlock doors before start
+                  </label>
+                  <span style={{ fontWeight: 700, color: 'var(--color-accent)', fontSize: '0.8125rem' }}>
+                    {unlockMin} min before
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  className="form-range"
+                  min="0"
+                  max="60"
+                  step="5"
+                  value={unlockMin}
+                  onChange={(e) => setUnlockMin(Number(e.target.value))}
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                  <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
+                    {timingChoice === 'after_start' ? 'Lock doors after start' : 'Lock doors after end'}
+                  </label>
+                  <span style={{ fontWeight: 700, color: 'var(--color-accent)', fontSize: '0.8125rem' }}>
+                    {lockMin} min {timingChoice === 'after_start' ? 'after start' : 'after end'}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  className="form-range"
+                  min="0"
+                  max={timingChoice === 'after_start' ? '120' : '60'}
+                  step="5"
+                  value={lockMin}
+                  onChange={(e) => setLockMin(Number(e.target.value))}
+                />
+              </div>
             </div>
+          )}
+        </div>
+
+        {/* 2. Per-Door Timing Configuration */}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.375rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <label className="form-label" style={{ marginBottom: 0, display: 'block', fontWeight: 700, fontSize: '0.9375rem' }}>
+              2. Per-Door Timing Overrides (Optional)
+            </label>
+            {Object.keys(doorTimings).length > 0 && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem', color: 'var(--color-text-muted)' }}
+                onClick={() => setDoorTimings({})}
+              >
+                Reset All to Default
+              </button>
+            )}
           </div>
-        )}
+          <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>
+            Configure different lock and unlock times per door. For instance, keep the main entrance unlocked for the entire service while automatically locking side or back doors shortly after service begins.
+          </p>
+
+          {mapping.door_ids.length === 0 ? (
+            <div style={{ padding: '0.75rem', background: 'var(--color-bg-elevated)', borderRadius: 'var(--radius-md)', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+              No doors mapped to this schedule.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {mapping.door_ids.map((dId, idx) => {
+                const doorObj = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
+                const doorLabel = doorObj?.label || mapping.door_labels[idx] || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId);
+                const isCustom = doorTimings[dId] !== undefined;
+                const dTiming = doorTimings[dId] || {};
+                const dMode = dTiming.lock_timing_mode ?? 'after_start';
+                const dUnlock = dTiming.unlock_offset_min ?? effectiveDefaultUnlock;
+                const dLock = dTiming.lock_offset_min ?? 15;
+
+                return (
+                  <div
+                    key={dId}
+                    style={{
+                      padding: '0.875rem 1rem',
+                      background: 'var(--color-bg-elevated)',
+                      border: `1px solid ${isCustom ? 'rgba(36, 101, 245, 0.4)' : 'var(--color-border)'}`,
+                      borderRadius: 'var(--radius-md)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.75rem',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    {/* Header: Door Info & Toggle */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
+                          {doorLabel}
+                        </span>
+                        {doorObj?.campus_name && (
+                          <span
+                            style={{
+                              fontSize: '0.625rem',
+                              padding: '0.05rem 0.3rem',
+                              borderRadius: '4px',
+                              background: 'rgba(36, 101, 245, 0.1)',
+                              color: 'var(--color-accent, #2465f5)',
+                              border: '1px solid rgba(36, 101, 245, 0.2)',
+                              fontWeight: 500,
+                            }}
+                          >
+                            🏫 {doorObj.campus_name}
+                          </span>
+                        )}
+                        {doorObj?.location_name && (
+                          <span
+                            style={{
+                              fontSize: '0.625rem',
+                              padding: '0.05rem 0.3rem',
+                              borderRadius: '4px',
+                              background: 'rgba(168, 85, 247, 0.1)',
+                              color: '#9333ea',
+                              border: '1px solid rgba(168, 85, 247, 0.2)',
+                              fontWeight: 500,
+                            }}
+                          >
+                            📍 {doorObj.location_name}
+                          </span>
+                        )}
+                        <span
+                          className={`badge ${isCustom ? 'badge-info' : 'badge-neutral'}`}
+                          style={{ fontSize: '0.6875rem' }}
+                        >
+                          {isCustom ? 'Custom Override' : 'Mapping Default'}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        {isCustom ? (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', color: 'var(--color-text-muted)' }}
+                            onClick={() => handleToggleDoorCustom(dId, false)}
+                          >
+                            ↩️ Reset to Default
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                            onClick={() => handleToggleDoorCustom(dId, true)}
+                          >
+                            ⚙️ Set Custom Timing
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* If Custom Override Active for this Door */}
+                    {isCustom ? (
+                      <div
+                        style={{
+                          padding: '0.75rem',
+                          background: 'var(--color-bg-surface)',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--color-border)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.75rem',
+                        }}
+                      >
+                        {/* Door mode selection */}
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className={`btn btn-sm ${dMode === 'after_start' ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
+                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start' })}
+                          >
+                            🛡️ Security Mode (Lock after start)
+                          </button>
+                          <button
+                            type="button"
+                            className={`btn btn-sm ${dMode === 'after_end' ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
+                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end' })}
+                          >
+                            🕒 Standard Mode (Lock after end)
+                          </button>
+                        </div>
+
+                        {/* Quick Presets */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Presets:</span>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
+                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 10 })}
+                          >
+                            🔒 Lock 10m after start
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
+                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 15 })}
+                          >
+                            🔒 Lock 15m after start
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
+                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 30 })}
+                          >
+                            🔒 Lock 30m after start
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
+                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 15 })}
+                          >
+                            🕒 Lock 15m after end
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
+                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 0 })}
+                          >
+                            🕒 Lock at service end (0m)
+                          </button>
+                        </div>
+
+                        {/* Sliders */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(11rem, 1fr))', gap: '0.75rem' }}>
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.2rem' }}>
+                              <span>Unlock before start:</span>
+                              <strong style={{ color: 'var(--color-accent)' }}>{dUnlock}m</strong>
+                            </div>
+                            <input
+                              type="range"
+                              className="form-range"
+                              min="0"
+                              max="60"
+                              step="5"
+                              value={dUnlock}
+                              onChange={(e) => handleUpdateDoorTiming(dId, { unlock_offset_min: Number(e.target.value) })}
+                            />
+                          </div>
+
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.2rem' }}>
+                              <span>{dMode === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
+                              <strong style={{ color: 'var(--color-accent)' }}>{dLock}m</strong>
+                            </div>
+                            <input
+                              type="range"
+                              className="form-range"
+                              min="0"
+                              max={dMode === 'after_start' ? '120' : '60'}
+                              step="5"
+                              value={dLock}
+                              onChange={(e) => handleUpdateDoorTiming(dId, { lock_offset_min: Number(e.target.value) })}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Summary badge */}
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <span>👉 <strong>{doorLabel}</strong> will unlock <strong>{dUnlock}m</strong> before start and lock <strong>+{dLock}m</strong> {dMode === 'after_start' ? 'after start' : 'after end'}.</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                        Currently inherits baseline rule: {effectiveDefaultMode === 'after_start' ? `🛡️ Locks +${effectiveDefaultLock}m after start` : `🕒 Locks +${effectiveDefaultLock}m after end`} · Unlocks -{effectiveDefaultUnlock}m before.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </Modal>
   );
@@ -1243,6 +1593,7 @@ interface AddMappingModalProps {
     lock_timing_mode?: LockTimingMode;
     lock_offset_min?: number;
     unlock_offset_min?: number;
+    door_timings?: Record<string, DoorTimingConfig>;
     enabled: boolean;
   }) => Promise<void>;
   saving: boolean;
@@ -1266,6 +1617,7 @@ function AddMappingModal({
   const [timingChoice, setTimingChoice] = useState<'default' | 'after_start' | 'after_end'>('default');
   const [customUnlockMin, setCustomUnlockMin] = useState(15);
   const [customLockMin, setCustomLockMin] = useState(15);
+  const [doorTimings, setDoorTimings] = useState<Record<string, DoorTimingConfig>>({});
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [doorSearch, setDoorSearch] = useState('');
@@ -1315,6 +1667,7 @@ function AddMappingModal({
     setTimingChoice('default');
     setCustomUnlockMin(orgSettings?.unlock_buffer_before_min ?? 15);
     setCustomLockMin(15);
+    setDoorTimings({});
     setEnabled(true);
     setDoorSearch('');
     setSelectedCampusFilter('all');
@@ -1355,6 +1708,44 @@ function AddMappingModal({
 
   const selectedResource = pcoResources.find((r) => r.id === selectedResourceId);
 
+  const orgMode = orgSettings?.lock_timing_mode ?? 'after_end';
+  const orgUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
+  const orgLock = orgMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15);
+
+  const effectiveDefaultUnlock = timingChoice !== 'default' ? customUnlockMin : orgUnlock;
+  const effectiveDefaultLock = timingChoice !== 'default' ? customLockMin : orgLock;
+  const effectiveDefaultMode = timingChoice !== 'default' ? timingChoice : orgMode;
+
+  function handleToggleDoorCustom(doorId: string, custom: boolean) {
+    setDoorTimings((prev) => {
+      const next = { ...prev };
+      if (!custom) {
+        delete next[doorId];
+      } else {
+        next[doorId] = {
+          lock_timing_mode: 'after_start',
+          lock_offset_min: 15,
+          unlock_offset_min: effectiveDefaultUnlock,
+        };
+      }
+      return next;
+    });
+  }
+
+  function handleUpdateDoorTiming(doorId: string, partial: Partial<DoorTimingConfig>) {
+    setDoorTimings((prev) => ({
+      ...prev,
+      [doorId]: {
+        ...(prev[doorId] || {
+          lock_timing_mode: 'after_start',
+          lock_offset_min: 15,
+          unlock_offset_min: effectiveDefaultUnlock,
+        }),
+        ...partial,
+      },
+    }));
+  }
+
   async function handleSave() {
     setError(null);
     if (!selectedResourceId) { setError('Please select a PCO resource.'); return; }
@@ -1362,6 +1753,18 @@ function AddMappingModal({
     if (sourceType === 'service' && timeTypes.length === 0) { setError('Please select at least one time type.'); return; }
 
     const selectedDoors = validDoors.filter((d) => selectedDoorIds.includes(d.id));
+
+    // Clean doorTimings: keep only doors currently selected
+    const cleanedDoorTimings: Record<string, DoorTimingConfig> = {};
+    for (const dId of selectedDoorIds) {
+      if (doorTimings[dId]) {
+        cleanedDoorTimings[dId] = {
+          lock_timing_mode: doorTimings[dId].lock_timing_mode,
+          lock_offset_min: doorTimings[dId].lock_offset_min,
+          unlock_offset_min: doorTimings[dId].unlock_offset_min,
+        };
+      }
+    }
 
     try {
       await onSave({
@@ -1373,6 +1776,7 @@ function AddMappingModal({
         lock_timing_mode: timingChoice === 'default' ? undefined : timingChoice,
         lock_offset_min: timingChoice === 'default' ? undefined : customLockMin,
         unlock_offset_min: timingChoice === 'default' ? undefined : customUnlockMin,
+        door_timings: Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined,
         enabled,
       });
       reset();
@@ -1392,10 +1796,6 @@ function AddMappingModal({
     };
     return labels[s] ?? `Step ${s}`;
   };
-
-  const orgMode = orgSettings?.lock_timing_mode ?? 'after_end';
-  const orgUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
-  const orgLock = orgMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15);
 
   return (
     <Modal
@@ -1907,6 +2307,157 @@ function AddMappingModal({
             )}
           </div>
 
+          {/* Optional Per-Door Timing Overrides */}
+          {selectedDoorIds.length > 0 && (
+            <div
+              style={{
+                padding: '0.875rem',
+                background: 'var(--color-bg-elevated)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.75rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
+                  Per-Door Timing Overrides (Optional)
+                </label>
+                {Object.keys(doorTimings).length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: '0.6875rem', padding: '0.1rem 0.35rem', color: 'var(--color-text-muted)' }}
+                    onClick={() => setDoorTimings({})}
+                  >
+                    Reset All to Baseline
+                  </button>
+                )}
+              </div>
+              <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', margin: 0 }}>
+                Set custom timing rules for specific doors (e.g. lock side doors shortly after service starts while keeping main doors open).
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {selectedDoorIds.map((dId) => {
+                  const doorObj = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
+                  const doorLabel = doorObj?.label || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId);
+                  const isCustom = doorTimings[dId] !== undefined;
+                  const dTiming = doorTimings[dId] || {};
+                  const dMode = dTiming.lock_timing_mode ?? 'after_start';
+                  const dUnlock = dTiming.unlock_offset_min ?? effectiveDefaultUnlock;
+                  const dLock = dTiming.lock_offset_min ?? 15;
+
+                  return (
+                    <div
+                      key={dId}
+                      style={{
+                        padding: '0.625rem 0.75rem',
+                        background: 'var(--color-bg-surface)',
+                        border: `1px solid ${isCustom ? 'rgba(36, 101, 245, 0.4)' : 'var(--color-border)'}`,
+                        borderRadius: 'var(--radius-sm)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--color-text-primary)' }}>
+                            {doorLabel}
+                          </span>
+                          <span
+                            className={`badge ${isCustom ? 'badge-info' : 'badge-neutral'}`}
+                            style={{ fontSize: '0.625rem', padding: '0.05rem 0.35rem' }}
+                          >
+                            {isCustom ? 'Custom Override' : 'Inherits Baseline'}
+                          </span>
+                        </div>
+
+                        {isCustom ? (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', color: 'var(--color-text-muted)' }}
+                            onClick={() => handleToggleDoorCustom(dId, false)}
+                          >
+                            ↩️ Reset
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem' }}
+                            onClick={() => handleToggleDoorCustom(dId, true)}
+                          >
+                            ⚙️ Customize Timing
+                          </button>
+                        )}
+                      </div>
+
+                      {isCustom && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingTop: '0.25rem' }}>
+                          <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className={`btn btn-sm ${dMode === 'after_start' ? 'btn-primary' : 'btn-secondary'}`}
+                              style={{ fontSize: '0.6875rem', padding: '0.2rem 0.5rem' }}
+                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start' })}
+                            >
+                              🛡️ Security Mode (after start)
+                            </button>
+                            <button
+                              type="button"
+                              className={`btn btn-sm ${dMode === 'after_end' ? 'btn-primary' : 'btn-secondary'}`}
+                              style={{ fontSize: '0.6875rem', padding: '0.2rem 0.5rem' }}
+                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end' })}
+                            >
+                              🕒 Standard Mode (after end)
+                            </button>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                            <div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem', marginBottom: '0.15rem' }}>
+                                <span>Unlock before:</span>
+                                <strong style={{ color: 'var(--color-accent)' }}>{dUnlock}m</strong>
+                              </div>
+                              <input
+                                type="range"
+                                className="form-range"
+                                min="0"
+                                max="60"
+                                step="5"
+                                value={dUnlock}
+                                onChange={(e) => handleUpdateDoorTiming(dId, { unlock_offset_min: Number(e.target.value) })}
+                              />
+                            </div>
+                            <div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem', marginBottom: '0.15rem' }}>
+                                <span>{dMode === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
+                                <strong style={{ color: 'var(--color-accent)' }}>{dLock}m</strong>
+                              </div>
+                              <input
+                                type="range"
+                                className="form-range"
+                                min="0"
+                                max={dMode === 'after_start' ? '120' : '60'}
+                                step="5"
+                                value={dLock}
+                                onChange={(e) => handleUpdateDoorTiming(dId, { lock_offset_min: Number(e.target.value) })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div
             style={{
               padding: '0.875rem',
@@ -1942,6 +2493,14 @@ function AddMappingModal({
                 ? `🛡️ Security Mode: Locks +${customLockMin}m after start · Unlocks -${customUnlockMin}m before`
                 : `🕒 Standard Mode: Locks +${customLockMin}m after end · Unlocks -${customUnlockMin}m before`}
             </div>
+            {Object.keys(doorTimings).length > 0 && (
+              <div>
+                <span style={{ color: 'var(--color-text-muted)' }}>Door Timing Overrides:</span>{' '}
+                <span style={{ color: 'var(--color-accent)', fontWeight: 600 }}>
+                  {Object.keys(doorTimings).length} door{Object.keys(doorTimings).length === 1 ? '' : 's'} customized
+                </span>
+              </div>
+            )}
           </div>
 
           <div>
@@ -2179,6 +2738,7 @@ export default function MappingsPage() {
       lock_timing_mode?: LockTimingMode;
       lock_offset_min?: number;
       unlock_offset_min?: number;
+      door_timings?: Record<string, DoorTimingConfig>;
       enabled: boolean;
     }) => {
       if (!orgId || tab === 'user_policy') return;
@@ -2199,6 +2759,16 @@ export default function MappingsPage() {
         setMappings((prev) => [...prev, newMapping]);
         setModalOpen(false);
         showFeedback('Mapping created successfully.', true);
+
+        // Trigger PCO sync in the background so schedule windows & commands generate immediately
+        try {
+          const triggerFn = httpsCallable<{ orgId: string }, any>(functions, 'triggerPcoSync');
+          triggerFn({ orgId }).catch((syncErr) => {
+            console.warn('Background sync trigger after create mapping failed:', syncErr);
+          });
+        } catch (syncErr) {
+          console.warn('Background sync trigger after create mapping failed:', syncErr);
+        }
       } catch (err: any) {
         console.error('Failed to save mapping:', err);
         showFeedback(`Failed to save mapping: ${err?.message || 'Unknown error'}`, false);
@@ -2217,6 +2787,7 @@ export default function MappingsPage() {
         lock_timing_mode?: LockTimingMode;
         lock_offset_min?: number;
         unlock_offset_min?: number;
+        door_timings?: Record<string, DoorTimingConfig>;
       },
     ) => {
       if (!orgId) return;
@@ -2229,6 +2800,16 @@ export default function MappingsPage() {
         setEditTimingModalOpen(false);
         setEditingMapping(null);
         showFeedback('Timing rule updated successfully.', true);
+
+        // Trigger PCO sync in background so schedule windows update immediately
+        try {
+          const triggerFn = httpsCallable<{ orgId: string }, any>(functions, 'triggerPcoSync');
+          triggerFn({ orgId }).catch((syncErr) => {
+            console.warn('Background sync trigger after timing update failed:', syncErr);
+          });
+        } catch (syncErr) {
+          console.warn('Background sync trigger after timing update failed:', syncErr);
+        }
       } catch {
         showFeedback('Failed to update timing rule.', false);
       } finally {
@@ -2978,6 +3559,7 @@ export default function MappingsPage() {
           setEditingMapping(null);
         }}
         mapping={editingMapping}
+        doors={doors}
         orgSettings={orgSettings}
         onSave={handleUpdateTiming}
         saving={savingTiming}

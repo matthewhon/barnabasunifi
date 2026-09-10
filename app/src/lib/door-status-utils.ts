@@ -119,10 +119,15 @@ export function getDoorUnlockStatus(
       (w.door_labels && w.door_labels.includes(door.label));
     if (!matchesDoor) return false;
 
-    const unlockMs = new Date(w.unlock_at).getTime();
-    const lockMs = new Date(w.lock_at).getTime();
+    const doorTiming = w.door_timings?.[doorId] || (unifiDoorId ? w.door_timings?.[unifiDoorId] : undefined);
+    const unlockMs = new Date(doorTiming?.unlock_at || w.unlock_at).getTime();
+    const lockMs = new Date(doorTiming?.lock_at || w.lock_at).getTime();
     return nowMs >= unlockMs && nowMs <= lockMs;
   });
+
+  const activeDoorTiming = activeWindow
+    ? activeWindow.door_timings?.[doorId] || (unifiDoorId ? activeWindow.door_timings?.[unifiDoorId] : undefined)
+    : undefined;
 
   // 2. Check for active UniFi Weekly Unlock Schedule slot
   const dayName = DAYS[referenceDate.getDay()];
@@ -174,8 +179,8 @@ export function getDoorUnlockStatus(
   if (door.hold_unlock_expires_at) {
     expiresAt = new Date(door.hold_unlock_expires_at);
   } else if (activeWindow) {
-    expiresAt = new Date(activeWindow.lock_at);
-    const windowStartMs = new Date(activeWindow.unlock_at).getTime();
+    expiresAt = new Date(activeDoorTiming?.lock_at || activeWindow.lock_at);
+    const windowStartMs = new Date(activeDoorTiming?.unlock_at || activeWindow.unlock_at).getTime();
     durationSetMin = Math.round((expiresAt.getTime() - windowStartMs) / 60000);
   } else if (activeWeeklySlot) {
     const [endH, endM] = activeWeeklySlot.slot.end_time.split(':').map((v) => parseInt(v, 10));
@@ -210,7 +215,7 @@ export function getDoorUnlockStatus(
   if (activeWindow) {
     policyLabel = activeWindow.source_label || 'Planning Center Event';
     const remainingStr = remainingMinutes !== null ? `${formatDurationMinutes(remainingMinutes)} remaining` : '';
-    const lockTimeStr = safeFormat(activeWindow.lock_at, 'h:mm a');
+    const lockTimeStr = safeFormat(activeDoorTiming?.lock_at || activeWindow.lock_at, 'h:mm a');
     durationLabel = `Scheduled until ${lockTimeStr} (${remainingStr})`;
     statusSummary = `Unlocked for "${policyLabel}" · Relocks at ${lockTimeStr}`;
 

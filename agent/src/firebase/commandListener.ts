@@ -19,6 +19,7 @@ import { syncVisitors } from './visitorSync';
 import { syncAccessLogs } from './accessLogSync';
 import { syncAccessPolicies, syncUsers } from './userSync';
 import { checkForUpdate, applyPendingUpdate } from './updateChecker';
+import { getCacheStore } from '../storage/cacheStore';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -320,6 +321,9 @@ export function startCommandListener(
         const durationMin = command.duration_min ?? 60;
         await unifiClient.unlockDoor(command.unifi_door_id, durationMin);
         resultMessage = `Door unlocked for ${durationMin} minute(s).`;
+        if (command.schedule_window_id) {
+          getCacheStore().recordExecutedAction(`${command.schedule_window_id}:${command.unifi_door_id}:unlock`);
+        }
         syncDoors(orgId, unifiClient).catch(() => {});
       } else if (command.action === 'lock') {
         if (!command.unifi_door_id) throw new Error('Missing unifi_door_id for lock action');
@@ -328,19 +332,34 @@ export function startCommandListener(
         let skipLock = false;
         if (command.triggered_by !== 'manual') {
           try {
-            const activeWindowsSnap = await db
-              .collection(`organizations/${orgId}/schedule_windows`)
-              .where('door_ids', 'array-contains', command.unifi_door_id)
-              .get();
-
             const now = Date.now();
-            const hasActiveOverlappingWindow = activeWindowsSnap.docs.some((wDoc) => {
-              if (wDoc.id === command.schedule_window_id) return false;
-              const d = wDoc.data();
-              const unlockAt = d.unlock_at?.toMillis ? d.unlock_at.toMillis() : new Date(d.unlock_at).getTime();
-              const lockAt = d.lock_at?.toMillis ? d.lock_at.toMillis() : new Date(d.lock_at).getTime();
-              return !isNaN(unlockAt) && !isNaN(lockAt) && unlockAt <= now && lockAt > now;
+            let hasActiveOverlappingWindow = false;
+
+            // 1. First check local memory cache
+            const cachedWindows = getCacheStore().getScheduleWindows();
+            hasActiveOverlappingWindow = cachedWindows.some((cw) => {
+              if (cw.id === command.schedule_window_id) return false;
+              if (!cw.door_ids.includes(command.unifi_door_id!)) return false;
+              const uMs = new Date(cw.unlock_at).getTime();
+              const lMs = new Date(cw.lock_at).getTime();
+              return !isNaN(uMs) && !isNaN(lMs) && uMs <= now && lMs > now;
             });
+
+            // 2. Also check Firestore if available
+            if (!hasActiveOverlappingWindow) {
+              const activeWindowsSnap = await db
+                .collection(`organizations/${orgId}/schedule_windows`)
+                .where('door_ids', 'array-contains', command.unifi_door_id)
+                .get();
+
+              hasActiveOverlappingWindow = activeWindowsSnap.docs.some((wDoc) => {
+                if (wDoc.id === command.schedule_window_id) return false;
+                const d = wDoc.data();
+                const unlockAt = d.unlock_at?.toMillis ? d.unlock_at.toMillis() : new Date(d.unlock_at).getTime();
+                const lockAt = d.lock_at?.toMillis ? d.lock_at.toMillis() : new Date(d.lock_at).getTime();
+                return !isNaN(unlockAt) && !isNaN(lockAt) && unlockAt <= now && lockAt > now;
+              });
+            }
 
             if (hasActiveOverlappingWindow) {
               logger.info(
@@ -357,6 +376,9 @@ export function startCommandListener(
         if (!skipLock) {
           await unifiClient.lockDoor(command.unifi_door_id);
           resultMessage = 'Door locked successfully.';
+          if (command.schedule_window_id) {
+            getCacheStore().recordExecutedAction(`${command.schedule_window_id}:${command.unifi_door_id}:lock`);
+          }
           syncDoors(orgId, unifiClient).catch(() => {});
         }
       } else if (command.action === 'sync_doors') {

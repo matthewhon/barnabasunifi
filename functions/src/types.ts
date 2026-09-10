@@ -57,6 +57,12 @@ export interface OrgSettings {
 export type MappingSourceType = 'service' | 'group';
 export type PlanTimeType = 'service' | 'rehearsal' | 'other';
 
+export interface DoorTimingConfig {
+  unlock_offset_min?: number;
+  lock_timing_mode?: LockTimingMode;
+  lock_offset_min?: number;
+}
+
 export interface Mapping {
   id: string;
   org_id: string;
@@ -70,6 +76,8 @@ export interface Mapping {
   lock_timing_mode?: LockTimingMode;
   lock_offset_min?: number;
   unlock_offset_min?: number;
+  /** Custom per-door lock and unlock timing overrides */
+  door_timings?: Record<string, DoorTimingConfig>;
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -146,6 +154,14 @@ export interface Door {
 
 export type ScheduleWindowStatus = 'pending' | 'unlocked' | 'locked' | 'cancelled' | 'error';
 
+export interface ScheduleWindowDoorTiming {
+  unlock_at: string;
+  lock_at: string;
+  unlock_offset_min?: number;
+  lock_offset_min?: number;
+  lock_timing_mode?: LockTimingMode;
+}
+
 export interface ScheduleWindow {
   id: string;
   org_id: string;
@@ -160,6 +176,8 @@ export interface ScheduleWindow {
   lock_timing_mode?: LockTimingMode;
   door_ids: string[];
   door_labels: string[];
+  /** Door-specific unlock and lock schedules */
+  door_timings?: Record<string, ScheduleWindowDoorTiming>;
   status: ScheduleWindowStatus;
   updated_at: string;
 }

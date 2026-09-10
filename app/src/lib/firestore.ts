@@ -354,6 +354,20 @@ export function subscribeToScheduleWindows(
     const windows = snap.docs.map((d) => {
       const data = d.data();
 
+      let doorTimings: Record<string, any> | undefined;
+      if (data.door_timings && typeof data.door_timings === 'object') {
+        doorTimings = {};
+        for (const [doorId, timing] of Object.entries(data.door_timings as Record<string, any>)) {
+          if (timing && typeof timing === 'object') {
+            doorTimings[doorId] = {
+              ...timing,
+              unlock_at: normalizeTimestamp(timing.unlock_at),
+              lock_at: normalizeTimestamp(timing.lock_at),
+            };
+          }
+        }
+      }
+
       return {
         id: d.id,
         ...data,
@@ -361,6 +375,7 @@ export function subscribeToScheduleWindows(
         ends_at: normalizeTimestamp(data.ends_at),
         unlock_at: normalizeTimestamp(data.unlock_at),
         lock_at: normalizeTimestamp(data.lock_at),
+        door_timings: doorTimings,
         source_type: data.source_type ?? (data.source === 'pco_group' ? 'group' : 'service'),
         source_label: data.source_label ?? data.label ?? 'PCO Event',
         door_ids: data.door_ids ?? [],

@@ -41,6 +41,17 @@ export interface AgentBridgeState {
   errorMessage?: string;
   onRestartRequest?: () => Promise<void>;
   onSyncDoors?: () => Promise<number>;
+  offlineMode?: boolean;
+  cachedWindowsCount?: number;
+  pendingOfflineActionsCount?: number;
+  getNextUpcomingActions?: () => Array<{
+    action: 'unlock' | 'lock';
+    doorId: string;
+    doorLabel: string;
+    time: string;
+    windowId: string;
+    sourceLabel: string;
+  }>;
 }
 
 export function startWebServer(
@@ -88,6 +99,10 @@ export function startWebServer(
       doorCount: state.doorCount,
       lastSync: state.lastSync ? state.lastSync.toISOString() : null,
       error: state.errorMessage,
+      offlineMode: state.offlineMode ?? false,
+      cachedWindowsCount: state.cachedWindowsCount ?? 0,
+      pendingOfflineActionsCount: state.pendingOfflineActionsCount ?? 0,
+      nextUpcomingActions: state.getNextUpcomingActions ? state.getNextUpcomingActions() : [],
       localIp: getLocalIp(),
       hostname: os.hostname(),
       platform: `${os.type()} ${os.release()}`,

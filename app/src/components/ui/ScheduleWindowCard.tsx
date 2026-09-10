@@ -214,15 +214,37 @@ export default function ScheduleWindowCard({ window: win, compact = false }: Sch
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
           </svg>
-          {win.door_labels.map((label) => (
-            <span
-              key={label}
-              className="badge badge-neutral"
-              style={{ fontSize: '0.6875rem' }}
-            >
-              {label}
-            </span>
-          ))}
+          {win.door_labels.map((label, idx) => {
+            const dId = win.door_ids[idx];
+            const dTiming = win.door_timings?.[dId];
+            let lockBadgeText: string | null = null;
+            if (dTiming?.lock_at) {
+              try {
+                const dLock = new Date(dTiming.lock_at);
+                if (!isNaN(dLock.getTime())) {
+                  lockBadgeText = format(dLock, 'h:mm a');
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+
+            return (
+              <span
+                key={`${label}-${idx}`}
+                className={`badge ${dTiming ? 'badge-info' : 'badge-neutral'}`}
+                style={{ fontSize: '0.6875rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                title={dTiming ? `Custom timing: Locks at ${lockBadgeText || 'custom time'}` : undefined}
+              >
+                <span>{label}</span>
+                {lockBadgeText && (
+                  <span style={{ fontSize: '0.625rem', opacity: 0.85, fontWeight: 600 }}>
+                    · Locks {lockBadgeText}
+                  </span>
+                )}
+              </span>
+            );
+          })}
         </div>
       )}
     </div>
