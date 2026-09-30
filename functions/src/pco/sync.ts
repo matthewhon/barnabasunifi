@@ -247,10 +247,13 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
     let windowId: string;
 
+    const initialReviewStatus = doorIds.length > 0 ? 'mapped' : 'unreviewed';
+
     if (existingSnap.empty) {
       const newWindowRef = await windowsRef.add({
         ...windowData,
         status: metadata.status || 'pending',
+        review_status: initialReviewStatus,
         created_at: FieldValue.serverTimestamp(),
       });
       windowId = newWindowRef.id;
@@ -261,10 +264,19 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       const existingData = existingDoc.data();
       // Preserve existing status (e.g. 'unlocked', 'locked') if already progressed
       const preservedStatus = existingData?.status || metadata.status || 'pending';
+
+      // Update review status logic: if doors are now mapped, set to 'mapped'.
+      // Otherwise preserve existing review_status if available (e.g. 'dismissed' or 'unreviewed').
+      let updatedReviewStatus = existingData?.review_status || initialReviewStatus;
+      if (doorIds.length > 0 && updatedReviewStatus !== 'mapped') {
+        updatedReviewStatus = 'mapped';
+      }
+
       const { status: _ignoredStatus, ...restWindowData } = windowData;
       await existingDoc.ref.update({
         ...restWindowData,
         status: preservedStatus,
+        review_status: updatedReviewStatus,
       });
       windowsUpdated++;
     }

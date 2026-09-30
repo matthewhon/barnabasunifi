@@ -157,6 +157,15 @@ export default function SettingsPage() {
   const [testingPco, setTestingPco] = useState(false);
   const [testingUnifi, setTestingUnifi] = useState(false);
 
+  // Event Notification settings state
+  const [notifyEnabled, setNotifyEnabled] = useState(true);
+  const [notifyLeadDays, setNotifyLeadDays] = useState(14);
+  const [notifyInApp, setNotifyInApp] = useState(true);
+  const [slackEnabled, setSlackEnabled] = useState(false);
+  const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
+  const [testingSlack, setTestingSlack] = useState(false);
+  const [savingNotifications, setSavingNotifications] = useState(false);
+
   const [copied, setCopied] = useState(false);
 
   const handleTestPcoConnection = async () => {
@@ -233,6 +242,13 @@ export default function SettingsPage() {
           setPollInterval(s.poll_interval_min);
           setTimezone(s.timezone ?? 'America/Chicago');
           setEnableUserSync(Boolean(s.enable_user_sync));
+          if (s.event_notifications) {
+            setNotifyEnabled(Boolean(s.event_notifications.enabled));
+            setNotifyLeadDays(s.event_notifications.lead_days ?? 14);
+            setNotifyInApp(Boolean(s.event_notifications.channels?.in_app ?? true));
+            setSlackEnabled(Boolean(s.event_notifications.channels?.slack_webhook?.enabled));
+            setSlackWebhookUrl(s.event_notifications.channels?.slack_webhook?.webhook_url ?? '');
+          }
         }
       })
       .finally(() => {
@@ -253,6 +269,52 @@ export default function SettingsPage() {
       unsubAgents();
     };
   }, [orgId, showToast]);
+
+  const handleSaveNotifications = async () => {
+    if (!orgId) return;
+    setSavingNotifications(true);
+    try {
+      await updateOrgSettings(orgId, {
+        event_notifications: {
+          enabled: notifyEnabled,
+          lead_days: notifyLeadDays,
+          channels: {
+            in_app: notifyInApp,
+            slack_webhook: {
+              enabled: slackEnabled,
+              webhook_url: slackWebhookUrl.trim(),
+            },
+          },
+        },
+      });
+      showToast('Event notification settings saved.', 'success');
+    } catch (err: any) {
+      showToast(`Failed to save notification settings: ${err?.message || 'Unknown error'}`, 'error');
+    } finally {
+      setSavingNotifications(false);
+    }
+  };
+
+  const handleTestSlack = async () => {
+    if (!orgId) return;
+    if (!slackWebhookUrl.trim()) {
+      showToast('Please enter a Slack Webhook URL first.', 'error');
+      return;
+    }
+    setTestingSlack(true);
+    try {
+      const fn = httpsCallable<{ orgId: string; webhookUrl: string }, { success: boolean }>(
+        functions,
+        'sendTestSlackNotification'
+      );
+      await fn({ orgId, webhookUrl: slackWebhookUrl.trim() });
+      showToast('Test notification sent to Slack!', 'success');
+    } catch (err: any) {
+      showToast(`Test Slack notification failed: ${err?.message || 'Unknown error'}`, 'error');
+    } finally {
+      setTestingSlack(false);
+    }
+  };
 
   const handleSaveTimings = useCallback(async () => {
     if (!orgId) return;
@@ -1433,6 +1495,144 @@ SKIP_TLS_VERIFY=true`}</pre>
                   </button>
                 </div>
               </div>
+            )}
+          </div>
+        </SectionCard>
+
+        {/* ── 6. Event Review Notifications & Alerts ── */}
+        <SectionCard title="6. Event Review Notifications & Alerts">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', lineHeight: 1.5, margin: 0 }}>
+              Configure alerts for new Planning Center events that lack door schedule access mappings.
+            </p>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.875rem 1rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--color-text-primary)' }}>
+                  Enable Unmapped Event Alerts
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
+                  Notify team members when new events appear in PCO without door schedule mappings.
+                </div>
+              </div>
+              <label style={{ position: 'relative', display: 'inline-block', width: '2.75rem', height: '1.5rem', flexShrink: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={notifyEnabled}
+                  onChange={(e) => setNotifyEnabled(e.target.checked)}
+                  style={{ opacity: 0, width: 0, height: 0 }}
+                />
+                <span
+                  style={{
+                    position: 'absolute',
+                    cursor: 'pointer',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: notifyEnabled ? 'var(--color-accent)' : 'var(--color-border)',
+                    borderRadius: '1rem',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  <span
+                    style={{
+                      position: 'absolute',
+                      content: '""',
+                      height: '1.125rem',
+                      width: '1.125rem',
+                      left: notifyEnabled ? '1.4rem' : '0.2rem',
+                      bottom: '0.1875rem',
+                      backgroundColor: 'white',
+                      borderRadius: '50%',
+                      transition: 'all 0.2s',
+                    }}
+                  />
+                </span>
+              </label>
+            </div>
+
+            {notifyEnabled && (
+              <>
+                <div className="form-group">
+                  <label className="form-label">
+                    Review Horizon Lead Time:{' '}
+                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{notifyLeadDays} days ahead</span>
+                  </label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <input
+                      type="range"
+                      min={7}
+                      max={60}
+                      step={1}
+                      value={notifyLeadDays}
+                      onChange={(e) => setNotifyLeadDays(Number(e.target.value))}
+                      style={{ flex: 1 }}
+                    />
+                    <input
+                      type="number"
+                      className="form-input"
+                      style={{ width: '5rem' }}
+                      min={7}
+                      max={60}
+                      value={notifyLeadDays}
+                      onChange={(e) => setNotifyLeadDays(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                {/* Slack / Teams Incoming Webhook */}
+                <div style={{ padding: '1rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', background: 'var(--color-bg-base)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
+                      Slack / Microsoft Teams Webhook Channel
+                    </div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={slackEnabled}
+                        onChange={(e) => setSlackEnabled(e.target.checked)}
+                      />
+                      <span>Enable Webhook Alerts</span>
+                    </label>
+                  </div>
+
+                  {slackEnabled && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" style={{ fontSize: '0.75rem' }}>Incoming Webhook URL</label>
+                        <input
+                          type="url"
+                          className="form-input"
+                          placeholder="https://hooks.slack.com/services/..."
+                          value={slackWebhookUrl}
+                          onChange={(e) => setSlackWebhookUrl(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={handleTestSlack}
+                          disabled={testingSlack || !slackWebhookUrl.trim()}
+                        >
+                          {testingSlack ? 'Sending Test...' : 'Send Test Slack Alert'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleSaveNotifications}
+                    disabled={savingNotifications}
+                  >
+                    {savingNotifications ? 'Saving Settings...' : 'Save Notification Settings'}
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </SectionCard>

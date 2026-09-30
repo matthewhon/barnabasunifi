@@ -4,13 +4,15 @@ import React, { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { getOrganization } from '@/lib/firestore';
-import type { Organization } from '@/lib/types';
+import { getOrganization, subscribeToScheduleWindows } from '@/lib/firestore';
+import type { Organization, ScheduleWindow } from '@/lib/types';
+import { safeIsPast } from '@/lib/date-utils';
 
 interface NavItem {
   href: string;
   label: string;
   icon: React.ReactNode;
+  badge?: React.ReactNode;
   adminOnly?: boolean;
   superAdminOnly?: boolean;
 }
@@ -198,7 +200,8 @@ function NavLink({ item, pathname, onClick }: { item: NavItem; pathname: string;
       }}
     >
       <span style={{ opacity: isActive ? 1 : 0.7 }}>{item.icon}</span>
-      {item.label}
+      <span style={{ flex: 1 }}>{item.label}</span>
+      {item.badge}
     </Link>
   );
 }
@@ -209,12 +212,29 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { user, loading, orgId, role, isSuperAdmin, signOut, profile, refreshAuth, impersonatedOrgId, setImpersonatedOrgId } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [org, setOrg] = useState<Organization | null>(null);
+  const [unmappedCount, setUnmappedCount] = useState<number>(0);
   const [signingOut, setSigningOut] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [provisionTimedOut, setProvisionTimedOut] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
   const awaitingOrg = !loading && !!user && !orgId && !isSuperAdmin;
+
+  // Real-time unmapped events counter subscription
+  useEffect(() => {
+    if (!orgId) return;
+    const unsub = subscribeToScheduleWindows(orgId, (windows) => {
+      const count = windows.filter(
+        (w) =>
+          (!w.door_ids || w.door_ids.length === 0) &&
+          w.review_status !== 'dismissed' &&
+          !safeIsPast(w.lock_at) &&
+          w.status !== 'cancelled'
+      ).length;
+      setUnmappedCount(count);
+    });
+    return () => unsub();
+  }, [orgId]);
 
   // Auth guard
   useEffect(() => {
@@ -284,6 +304,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       title: 'Planning Center',
       items: [
         { href: '/schedule', label: 'Schedules & Windows', icon: <CalendarIcon /> },
+        {
+          href: '/events/unmapped',
+          label: 'Unmapped Events',
+          icon: <CalendarIcon />,
+          badge: unmappedCount > 0 ? (
+            <span
+              className="badge badge-warning"
+              style={{
+                fontSize: '0.75rem',
+                padding: '0.1rem 0.45rem',
+                borderRadius: '1rem',
+                fontWeight: 700,
+              }}
+            >
+              {unmappedCount}
+            </span>
+          ) : undefined,
+        },
         { href: '/mappings', label: 'Mappings & Sync', icon: <LinkIcon /> },
       ],
     },

@@ -410,6 +410,15 @@ export default function DashboardPage() {
     .filter((w) => !safeIsPast(w.lock_at) && w.status !== 'cancelled')
     .slice(0, 5);
 
+  // Unmapped windows needing review
+  const unmappedWindows = scheduleWindows.filter(
+    (w) =>
+      (!w.door_ids || w.door_ids.length === 0) &&
+      w.review_status !== 'dismissed' &&
+      !safeIsPast(w.lock_at) &&
+      w.status !== 'cancelled'
+  );
+
   return (
     <div>
       {/* Page header */}
@@ -440,6 +449,34 @@ export default function DashboardPage() {
           style={{ marginBottom: '1.5rem' }}
         >
           {syncMessage}
+        </div>
+      )}
+
+      {/* Unmapped Events Alert Banner */}
+      {unmappedWindows.length > 0 && (
+        <div
+          className="alert alert-warning"
+          style={{
+            marginBottom: '1.5rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '1rem',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span style={{ fontSize: '1.25rem' }}>⚠️</span>
+            <div>
+              <strong>{unmappedWindows.length} upcoming event(s) have no door schedules mapped.</strong>
+              <div style={{ fontSize: '0.8125rem', marginTop: '0.125rem', opacity: 0.9 }}>
+                Review and map doors to ensure facilities are unlocked automatically for upcoming services and groups.
+              </div>
+            </div>
+          </div>
+          <Link href="/events/unmapped" className="btn btn-warning btn-sm" style={{ textDecoration: 'none', whiteSpace: 'nowrap' }}>
+            Review Unmapped Events →
+          </Link>
         </div>
       )}
 

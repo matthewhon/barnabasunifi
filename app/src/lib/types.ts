@@ -63,6 +63,26 @@ export interface OrgSettings {
     skip_tls_verify?: boolean;
     auto_discovered_host?: string;
   };
+  event_notifications?: EventNotificationSettings;
+}
+
+export interface EventNotificationSettings {
+  enabled: boolean;
+  lead_days: number;
+  channels: {
+    in_app: boolean;
+    slack_webhook?: {
+      enabled: boolean;
+      webhook_url: string;
+      channel_name?: string;
+    };
+    email?: {
+      enabled: boolean;
+      recipients: string[];
+      mode: 'daily_digest' | 'immediate';
+      digest_time?: string;
+    };
+  };
 }
 
 // ─── Mappings ─────────────────────────────────────────────────────────────────
@@ -166,6 +186,7 @@ export interface Door {
 // ─── Schedule Windows ─────────────────────────────────────────────────────────
 
 export type ScheduleWindowStatus = 'pending' | 'unlocked' | 'locked' | 'cancelled' | 'error';
+export type EventReviewStatus = 'unreviewed' | 'mapped' | 'dismissed';
 
 export interface ScheduleWindowDoorTiming {
   unlock_at: string;
@@ -182,6 +203,8 @@ export interface ScheduleWindow {
   source_label: string;       // e.g. "Sunday Morning Service"
   pco_plan_id?: string;
   pco_event_id?: string;
+  pco_service_type_id?: string;
+  pco_group_id?: string;
   starts_at: string;          // ISO8601 — original PCO event start
   ends_at: string;            // ISO8601 — original PCO event end
   unlock_at: string;          // starts_at - buffer
@@ -192,6 +215,11 @@ export interface ScheduleWindow {
   /** Door-specific unlock and lock schedules */
   door_timings?: Record<string, ScheduleWindowDoorTiming>;
   status: ScheduleWindowStatus;
+  review_status?: EventReviewStatus;
+  dismissed_at?: string;
+  dismissed_by?: string;
+  dismissed_reason?: string;
+  notification_sent_at?: string;
   updated_at: string;
 }
 

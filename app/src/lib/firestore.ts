@@ -381,9 +381,65 @@ export function subscribeToScheduleWindows(
         door_ids: data.door_ids ?? [],
         door_labels: data.door_labels ?? [],
         status: data.status ?? 'pending',
+        review_status: data.review_status ?? (data.door_ids && data.door_ids.length > 0 ? 'mapped' : 'unreviewed'),
+        dismissed_at: data.dismissed_at ? normalizeTimestamp(data.dismissed_at) : undefined,
+        dismissed_by: data.dismissed_by ?? undefined,
+        dismissed_reason: data.dismissed_reason ?? undefined,
+        notification_sent_at: data.notification_sent_at ? normalizeTimestamp(data.notification_sent_at) : undefined,
       } as unknown as ScheduleWindow;
     });
     callback(windows);
+  });
+}
+
+export async function updateScheduleWindowReviewStatus(
+  orgId: string,
+  windowId: string,
+  updates: {
+    review_status: 'unreviewed' | 'mapped' | 'dismissed';
+    dismissed_reason?: string;
+    dismissed_by?: string;
+  }
+): Promise<void> {
+  const windowRef = doc(db, 'organizations', orgId, 'schedule_windows', windowId);
+  const payload: Record<string, any> = {
+    review_status: updates.review_status,
+    updated_at: serverTimestamp(),
+  };
+
+  if (updates.review_status === 'dismissed') {
+    payload.dismissed_at = serverTimestamp();
+    payload.dismissed_reason = updates.dismissed_reason || 'Dismissed by user';
+    if (updates.dismissed_by) payload.dismissed_by = updates.dismissed_by;
+  } else if (updates.review_status === 'unreviewed') {
+    payload.dismissed_at = deleteField();
+    payload.dismissed_reason = deleteField();
+    payload.dismissed_by = deleteField();
+  }
+
+  await updateDoc(windowRef, payload);
+}
+
+export async function assignOneTimeScheduleWindowDoors(
+  orgId: string,
+  windowId: string,
+  doorsData: {
+    door_ids: string[];
+    door_labels: string[];
+    unlock_offset_min?: number;
+    lock_offset_min?: number;
+    lock_timing_mode?: 'after_end' | 'after_start';
+  }
+): Promise<void> {
+  const windowRef = doc(db, 'organizations', orgId, 'schedule_windows', windowId);
+  await updateDoc(windowRef, {
+    door_ids: doorsData.door_ids,
+    door_labels: doorsData.door_labels,
+    unlock_offset_min: doorsData.unlock_offset_min,
+    lock_offset_min: doorsData.lock_offset_min,
+    lock_timing_mode: doorsData.lock_timing_mode,
+    review_status: 'mapped',
+    updated_at: serverTimestamp(),
   });
 }
 

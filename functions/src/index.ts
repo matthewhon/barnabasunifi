@@ -23,4 +23,6 @@ export { triggerUserSync, getPcoLists } from './pco/userSync';
 export { syncUnifiAccessLogs } from './unifi/accessLogs';
 export { publishAgentRelease, getLatestAgentRelease, listAgentReleases, uploadAgentRelease, downloadAgentRelease } from './agent/releases';
 export { getPcoCampusesAndLocations, assignDoorsToCampusLocation } from './pco/campuses';
+export { sendTestSlackNotification } from './notifications/testNotification';
+export { scheduledEventReviewDigest } from './notifications/scheduledDigest';
 
