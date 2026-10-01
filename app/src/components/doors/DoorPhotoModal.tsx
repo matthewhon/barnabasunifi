@@ -28,6 +28,7 @@ export default function DoorPhotoModal({
   const [activeTab, setActiveTab] = useState<'upload' | 'url'>('upload');
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!door) return null;
@@ -37,13 +38,18 @@ export default function DoorPhotoModal({
   const hasUnifiImage = Boolean(door.unifi_thumbnail_url);
 
   const handleFileSelect = (selectedFile: File) => {
+    setLocalError(null);
     if (!selectedFile.type.startsWith('image/')) {
-      onError?.('Please select a valid image file (JPEG, PNG, WebP).');
+      const msg = 'Please select a valid image file (JPEG, PNG, WebP).';
+      setLocalError(msg);
+      onError?.(msg);
       return;
     }
     // Limit to 10MB
     if (selectedFile.size > 10 * 1024 * 1024) {
-      onError?.('Image must be smaller than 10MB.');
+      const msg = 'Image must be smaller than 10MB.';
+      setLocalError(msg);
+      onError?.(msg);
       return;
     }
 
@@ -63,6 +69,7 @@ export default function DoorPhotoModal({
   const handleSave = async () => {
     if (!door) return;
     setSaving(true);
+    setLocalError(null);
     try {
       if (activeTab === 'upload' && file) {
         await uploadDoorPhoto(orgId, door.id, file);
@@ -74,7 +81,10 @@ export default function DoorPhotoModal({
         handleClose();
       }
     } catch (err: any) {
-      onError?.(err?.message || 'Failed to save door picture.');
+      console.error('[DoorPhotoModal] Error saving door photo:', err);
+      const errMsg = err?.message || 'Failed to save door picture.';
+      setLocalError(errMsg);
+      onError?.(errMsg);
     } finally {
       setSaving(false);
     }
@@ -83,12 +93,16 @@ export default function DoorPhotoModal({
   const handleResetToUnifi = async () => {
     if (!door) return;
     setSaving(true);
+    setLocalError(null);
     try {
       await removeDoorPhoto(orgId, door.id);
       onSuccess?.(`Reverted to UniFi picture for ${door.label}`);
       handleClose();
     } catch (err: any) {
-      onError?.(err?.message || 'Failed to reset picture.');
+      console.error('[DoorPhotoModal] Error reverting photo:', err);
+      const errMsg = err?.message || 'Failed to reset picture.';
+      setLocalError(errMsg);
+      onError?.(errMsg);
     } finally {
       setSaving(false);
     }
@@ -97,12 +111,16 @@ export default function DoorPhotoModal({
   const handleRemoveCustom = async () => {
     if (!door) return;
     setSaving(true);
+    setLocalError(null);
     try {
       await removeDoorPhoto(orgId, door.id);
       onSuccess?.(`Removed custom picture for ${door.label}`);
       handleClose();
     } catch (err: any) {
-      onError?.(err?.message || 'Failed to remove picture.');
+      console.error('[DoorPhotoModal] Error removing photo:', err);
+      const errMsg = err?.message || 'Failed to remove picture.';
+      setLocalError(errMsg);
+      onError?.(errMsg);
     } finally {
       setSaving(false);
     }
@@ -162,6 +180,26 @@ export default function DoorPhotoModal({
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        {/* Error Banner */}
+        {localError && (
+          <div
+            style={{
+              padding: '0.625rem 0.875rem',
+              borderRadius: 'var(--radius-md)',
+              background: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              color: 'var(--color-danger)',
+              fontSize: '0.8125rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+            }}
+          >
+            <span>⚠️</span>
+            <span style={{ flex: 1 }}>{localError}</span>
+          </div>
+        )}
+
         {/* Preview Container */}
         <div>
           <label className="form-label" style={{ fontWeight: 600, marginBottom: '0.375rem', display: 'block' }}>

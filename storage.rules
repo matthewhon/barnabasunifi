@@ -10,6 +10,15 @@ service firebase.storage {
       allow write: if false; // Admin SDK only
     }
 
+    // ─── Door Photos ──────────────────────────────────────────────────────────
+    // Members can view door pictures; authenticated users belonging to the org can upload
+    match /organizations/{orgId}/doors/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
     // ─── Deny everything else ──────────────────────────────────────────────────
     match /{allPaths=**} {
       allow read, write: if false;
