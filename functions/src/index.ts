@@ -6,6 +6,7 @@ export { inviteUser } from './auth/inviteUser';
 export { getOrgUsers } from './auth/getOrgUsers';
 export { changeUserRole } from './auth/changeUserRole';
 export { removeUser } from './auth/removeUser';
+export { adminResetPassword } from './auth/adminResetPassword';
 export { pcoOAuthCallback, pcoOAuthStart } from './pco/oauth';
 export { getPcoResources } from './pco/resources';
 export { triggerPcoSync } from './pco/sync';

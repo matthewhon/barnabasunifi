@@ -4,11 +4,10 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
-import type { UserProfile, UserRole } from '@/lib/types';
+import type { UserRole } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
 
 // ─── Role configuration ───────────────────────────────────────────────────────
 
@@ -60,6 +59,14 @@ function TrashIcon() {
   );
 }
 
+function KeyIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 2l-2 2m-2 2l-2 2m2-2l2 2m-4 0l2 2M5 13a7 7 0 1 0 0-14 7 7 0 0 0 0 14zm0 0l-5 5v3h3l2.5-2.5" />
+    </svg>
+  );
+}
+
 // ─── OrgUser interface (combines profile + role for org) ──────────────────────
 
 interface OrgUser {
@@ -67,6 +74,7 @@ interface OrgUser {
   display_name: string;
   email: string;
   role: UserRole;
+  last_login_at?: string | null;
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -88,6 +96,14 @@ export default function UsersPage() {
   const [removeModalOpen, setRemoveModalOpen] = useState(false);
   const [removingUser, setRemovingUser] = useState<OrgUser | null>(null);
   const [removing, setRemoving] = useState(false);
+
+  // Reset password modal
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetUser, setResetUser] = useState<OrgUser | null>(null);
+  const [resetMode, setResetMode] = useState<'email' | 'manual'>('email');
+  const [newPassword, setNewPassword] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [generatedLink, setGeneratedLink] = useState<string | null>(null);
 
   // Role change loading
   const [changingRole, setChangingRole] = useState<string | null>(null);
@@ -179,6 +195,43 @@ export default function UsersPage() {
     }
   }, [orgId, removingUser, showToast]);
 
+  const handleResetPassword = useCallback(async () => {
+    if (!orgId || !resetUser) return;
+    if (resetMode === 'manual' && (!newPassword || newPassword.length < 6)) {
+      showToast('Password must be at least 6 characters.', 'error');
+      return;
+    }
+
+    setResetting(true);
+    setGeneratedLink(null);
+    try {
+      const adminResetPassword = httpsCallable<
+        { orgId: string; targetUid: string; newPassword?: string; action: 'send_email' | 'set_password' },
+        { success: boolean; message: string; resetLink?: string }
+      >(functions, 'adminResetPassword');
+
+      const res = await adminResetPassword({
+        orgId,
+        targetUid: resetUser.uid,
+        action: resetMode === 'manual' ? 'set_password' : 'send_email',
+        newPassword: resetMode === 'manual' ? newPassword : undefined,
+      });
+
+      if (res.data.resetLink) {
+        setGeneratedLink(res.data.resetLink);
+        showToast('Password reset link generated successfully.', 'success');
+      } else {
+        showToast(res.data.message || 'Password updated successfully.', 'success');
+        setResetModalOpen(false);
+      }
+    } catch (err: unknown) {
+      const msg = (err as { message?: string }).message ?? 'Failed to reset password.';
+      showToast(msg, 'error');
+    } finally {
+      setResetting(false);
+    }
+  }, [orgId, resetUser, resetMode, newPassword, showToast]);
+
   // Access check
   if (!isAdmin) {
     return (
@@ -232,6 +285,7 @@ export default function UsersPage() {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
+                <th>Last Login</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -273,8 +327,32 @@ export default function UsersPage() {
                       {roleLabel(u.role)}
                     </span>
                   </td>
+                  <td style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
+                    {u.last_login_at ? (
+                      <span title={safeFormat(u.last_login_at, 'PPP p')}>
+                        {safeFormatDistanceToNow(u.last_login_at)}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--color-text-muted)' }}>Never</span>
+                    )}
+                  </td>
                   <td>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center' }}>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ color: 'var(--color-warning)', padding: '0.375rem' }}
+                        onClick={() => {
+                          setResetUser(u);
+                          setResetMode('email');
+                          setNewPassword('');
+                          setGeneratedLink(null);
+                          setResetModalOpen(true);
+                        }}
+                        title="Reset password"
+                      >
+                        <KeyIcon />
+                      </button>
+
                       {u.uid !== currentUser?.uid && (
                         <>
                           <select
@@ -358,6 +436,102 @@ export default function UsersPage() {
               ))}
             </select>
           </div>
+        </div>
+      </Modal>
+
+      {/* Reset Password Modal */}
+      <Modal
+        isOpen={resetModalOpen}
+        onClose={() => !resetting && setResetModalOpen(false)}
+        title={`Reset Password: ${resetUser?.display_name || ''}`}
+        footer={
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => setResetModalOpen(false)} disabled={resetting}>
+              {generatedLink ? 'Close' : 'Cancel'}
+            </button>
+            {!generatedLink && (
+              <button
+                className="btn btn-primary"
+                onClick={handleResetPassword}
+                disabled={resetting || (resetMode === 'manual' && newPassword.length < 6)}
+              >
+                {resetting ? 'Processing…' : resetMode === 'manual' ? 'Update Password' : 'Send Reset Link'}
+              </button>
+            )}
+          </div>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <div style={{ display: 'flex', gap: '1rem', borderBottom: '1px solid var(--color-border)', paddingBottom: '0.75rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
+              <input
+                type="radio"
+                name="resetMode"
+                value="email"
+                checked={resetMode === 'email'}
+                onChange={() => { setResetMode('email'); setGeneratedLink(null); }}
+                disabled={resetting}
+              />
+              Send Reset Link
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
+              <input
+                type="radio"
+                name="resetMode"
+                value="manual"
+                checked={resetMode === 'manual'}
+                onChange={() => { setResetMode('manual'); setGeneratedLink(null); }}
+                disabled={resetting}
+              />
+              Set New Password
+            </label>
+          </div>
+
+          {generatedLink ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <p style={{ fontSize: '0.875rem', color: 'var(--color-success)', fontWeight: 500 }}>
+                Reset link generated! Copy and send this link to the user:
+              </p>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  readOnly
+                  className="form-input"
+                  value={generatedLink}
+                  style={{ fontSize: '0.8125rem', fontFamily: 'monospace' }}
+                />
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    navigator.clipboard.writeText(generatedLink);
+                    showToast('Copied to clipboard!', 'success');
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          ) : resetMode === 'email' ? (
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
+              Generate a password reset link for <strong style={{ color: 'var(--color-text-primary)' }}>{resetUser?.email}</strong>.
+            </p>
+          ) : (
+            <div className="form-group">
+              <label className="form-label">New Password</label>
+              <input
+                type="password"
+                className="form-input"
+                placeholder="Minimum 6 characters"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoFocus
+                disabled={resetting}
+              />
+              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
+                This will immediately update the user's password in Firebase Auth.
+              </span>
+            </div>
+          )}
         </div>
       </Modal>
 

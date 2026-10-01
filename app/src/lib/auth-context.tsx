@@ -86,6 +86,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (firebaseUser) {
         try {
+          // Touch last_login_at in background
+          setDoc(
+            doc(db, 'users', firebaseUser.uid),
+            { last_login_at: serverTimestamp() },
+            { merge: true }
+          ).catch((e) => console.warn('Failed to update last_login_at:', e));
+
           let idTokenResult = await firebaseUser.getIdTokenResult();
           const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
 

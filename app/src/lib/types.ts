@@ -14,6 +14,7 @@ export interface UserProfile {
   photo_url?: string;
   org_memberships: OrgMembership[];
   created_at: string; // ISO8601
+  last_login_at?: string | null;
 }
 
 // Firebase custom claims shape
