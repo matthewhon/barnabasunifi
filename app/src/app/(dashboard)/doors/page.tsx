@@ -16,8 +16,11 @@ import {
   getLatestAgentRelease,
   approveAgentUpdate,
   setAgentAutoUpdate,
+  updateDoorHidden,
+  batchUpdateDoorsHidden,
 } from '@/lib/firestore';
 import type { Door, Agent, UnifiSchedule, ScheduleWindow, AgentRelease, PcoCampus, PcoLocation } from '@/lib/types';
+import { isDoorHidden } from '@/lib/types';
 import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
 import { getDoorUnlockStatus } from '@/lib/door-status-utils';
 import Modal from '@/components/ui/Modal';
@@ -94,6 +97,24 @@ function CameraIcon({ size = 14 }: { size?: number }) {
   );
 }
 
+function EyeIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  );
+}
+
 // ─── Door Card ────────────────────────────────────────────────────────────────
 
 interface DoorCardProps {
@@ -104,6 +125,8 @@ interface DoorCardProps {
   onLock: (door: Door) => void;
   onEditCampusLocation?: (door: Door) => void;
   onEditPhoto?: (door: Door) => void;
+  onToggleHide?: (door: Door) => void;
+  isAdmin?: boolean;
   selected?: boolean;
   onSelectToggle?: (door: Door) => void;
   actionLoading: boolean;
@@ -130,6 +153,8 @@ function DoorCard({
   onLock,
   onEditCampusLocation,
   onEditPhoto,
+  onToggleHide,
+  isAdmin = false,
   selected = false,
   onSelectToggle,
   actionLoading,
@@ -143,6 +168,7 @@ function DoorCard({
     return () => clearInterval(interval);
   }, [door.current_state]);
 
+  const isHidden = isDoorHidden(door);
   const isLocked = door.current_state === 'locked';
   const isUnlocked = door.current_state === 'unlocked';
   const isUnknown = door.current_state === 'unknown';
@@ -178,6 +204,8 @@ function DoorCard({
 
   const borderColor = selected
     ? 'var(--color-accent)'
+    : isHidden
+    ? 'rgba(239,68,68,0.45)'
     : isUnknown
     ? 'var(--color-border)'
     : isLocked
@@ -188,6 +216,8 @@ function DoorCard({
 
   const bgGlow = selected
     ? 'rgba(36,101,245,0.06)'
+    : isHidden
+    ? 'rgba(239,68,68,0.04)'
     : isUnknown
     ? 'transparent'
     : isLocked
@@ -204,6 +234,7 @@ function DoorCard({
       className="card"
       style={{
         borderColor,
+        borderStyle: isHidden && !selected ? 'dashed' : 'solid',
         boxShadow: selected ? '0 0 0 2px rgba(36,101,245,0.2)' : undefined,
         background: `linear-gradient(to bottom, ${bgGlow}, var(--color-bg-surface))`,
         display: 'flex',
@@ -212,6 +243,7 @@ function DoorCard({
         position: 'relative',
         overflow: 'hidden',
         padding: 0,
+        opacity: isHidden && !selected ? 0.94 : 1,
       }}
     >
       {/* Full-Width Header Image Banner */}
@@ -289,6 +321,26 @@ function DoorCard({
 
         {/* Top Right: Status Badge Floating on Image */}
         <div style={{ position: 'absolute', top: '0.5rem', right: '0.625rem', zIndex: 2, display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+          {isHidden && (
+            <span
+              className="badge"
+              style={{
+                boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                fontWeight: 600,
+                backdropFilter: 'blur(4px)',
+                background: 'rgba(239, 68, 68, 0.88)',
+                color: '#fff',
+                border: '1px solid rgba(255, 255, 255, 0.25)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                fontSize: '0.6875rem',
+              }}
+              title="Hidden door — not selectable by other users"
+            >
+              🚫 Hidden
+            </span>
+          )}
           <span
             className={`badge ${
               isUnknown
@@ -386,6 +438,22 @@ function DoorCard({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexShrink: 0 }}>
+            {isAdmin && onToggleHide && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{
+                  padding: '0.25rem 0.35rem',
+                  color: isHidden ? 'var(--color-danger)' : 'var(--color-text-muted)',
+                  fontSize: '0.75rem',
+                  height: 'auto',
+                }}
+                onClick={() => onToggleHide(door)}
+                title={isHidden ? 'Unhide door (make selectable by others)' : 'Hide door (prevent selection by others)'}
+              >
+                {isHidden ? <EyeIcon size={14} /> : <EyeOffIcon size={14} />}
+              </button>
+            )}
             {onEditCampusLocation && (
               <button
                 className="btn btn-ghost btn-sm"
@@ -407,6 +475,39 @@ function DoorCard({
             </div>
           </div>
         </div>
+
+        {/* Hidden Alert Banner */}
+        {isHidden && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0.375rem 0.625rem',
+              background: 'rgba(239, 68, 68, 0.08)',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+              borderRadius: 'var(--radius-md)',
+              fontSize: '0.75rem',
+              color: 'var(--color-danger)',
+              gap: '0.5rem',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <span>🚫</span>
+              <span><strong>Hidden</strong> — invisible to other users</span>
+            </div>
+            {isAdmin && onToggleHide && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: '0.6875rem', padding: '0.125rem 0.4rem', height: 'auto', color: 'var(--color-danger)', fontWeight: 600 }}
+                onClick={() => onToggleHide(door)}
+              >
+                Unhide
+              </button>
+            )}
+          </div>
+        )}
 
         {/* State & Location badges */}
         <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -964,7 +1065,8 @@ function AgentStatusRow({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function DoorsPage() {
-  const { orgId, user } = useAuth();
+  const { orgId, user, role, isSuperAdmin } = useAuth();
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
 
   const [doors, setDoors] = useState<Door[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -981,6 +1083,8 @@ export default function DoorsPage() {
   const [selectedCampusFilter, setSelectedCampusFilter] = useState<string>('all'); // 'all' | 'unassigned' | campusId
   const [selectedLocationFilter, setSelectedLocationFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  // Visibility filter for admins: 'all' | 'active' | 'hidden'
+  const [visibilityFilter, setVisibilityFilter] = useState<'all' | 'active' | 'hidden'>('all');
 
   // Batch selection
   const [selectedDoorIds, setSelectedDoorIds] = useState<string[]>([]);
@@ -1006,6 +1110,12 @@ export default function DoorsPage() {
   // Photo Management Modal
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const [photoDoor, setPhotoDoor] = useState<Door | null>(null);
+
+  // Hide / Unhide Confirmation Modal
+  const [hideModalOpen, setHideModalOpen] = useState(false);
+  const [doorToToggleHide, setDoorToToggleHide] = useState<Door | null>(null);
+  const [batchHideAction, setBatchHideAction] = useState<'hide' | 'unhide' | null>(null);
+  const [hiding, setHiding] = useState(false);
 
   // Sync states
   const [syncingDoors, setSyncingDoors] = useState(false);
@@ -1237,6 +1347,53 @@ export default function DoorsPage() {
     }
   }, [orgId, doorsToAssign, targetCampusId, customCampusName, targetLocationId, customLocationName, campuses, locations]);
 
+  const openSingleHideModal = (door: Door) => {
+    setDoorToToggleHide(door);
+    setBatchHideAction(null);
+    setHideModalOpen(true);
+  };
+
+  const openBatchHideModal = (action: 'hide' | 'unhide') => {
+    setDoorToToggleHide(null);
+    setBatchHideAction(action);
+    setHideModalOpen(true);
+  };
+
+  const handleConfirmToggleHide = async () => {
+    if (!orgId) return;
+    setHiding(true);
+    try {
+      if (doorToToggleHide) {
+        const willHide = !isDoorHidden(doorToToggleHide);
+        await updateDoorHidden(orgId, doorToToggleHide.id, willHide, user?.uid);
+        showFeedback(
+          willHide
+            ? `Door "${doorToToggleHide.label}" hidden. Non-admin users cannot select this door.`
+            : `Door "${doorToToggleHide.label}" unhidden. It is now selectable by all users.`,
+          'success'
+        );
+      } else if (batchHideAction && selectedDoorIds.length > 0) {
+        const willHide = batchHideAction === 'hide';
+        await batchUpdateDoorsHidden(orgId, selectedDoorIds, willHide, user?.uid);
+        showFeedback(
+          willHide
+            ? `${selectedDoorIds.length} door(s) hidden from non-admin selection.`
+            : `${selectedDoorIds.length} door(s) unhidden and now selectable.`,
+          'success'
+        );
+        setSelectedDoorIds([]);
+      }
+      setHideModalOpen(false);
+      setDoorToToggleHide(null);
+      setBatchHideAction(null);
+    } catch (err: any) {
+      console.error('Failed to update door hidden status:', err);
+      showFeedback(err.message || 'Failed to update door visibility.', 'error');
+    } finally {
+      setHiding(false);
+    }
+  };
+
   const onlineAgents = agents.filter((a) => a.status === 'online').length;
 
   const validDoors = useMemo(() => {
@@ -1244,9 +1401,19 @@ export default function DoorsPage() {
       const label = (d.label || '').trim();
       if (!label) return false;
       if (isUuid(label) && d.current_state === 'unknown') return false;
+      // If user is not an admin, they cannot see hidden doors
+      if (!isAdmin && isDoorHidden(d)) return false;
       return true;
     });
-  }, [doors]);
+  }, [doors, isAdmin]);
+
+  const activeDoorsCount = useMemo(() => {
+    return validDoors.filter((d) => !isDoorHidden(d)).length;
+  }, [validDoors]);
+
+  const hiddenDoorsCount = useMemo(() => {
+    return validDoors.filter((d) => isDoorHidden(d)).length;
+  }, [validDoors]);
 
   // Derive unique campuses list from both synced campuses and existing door mappings
   const allAvailableCampuses = useMemo(() => {
@@ -1262,9 +1429,15 @@ export default function DoorsPage() {
     return Array.from(map.values());
   }, [campuses, validDoors]);
 
-  // Filtered doors according to campus, location, and search
+  // Filtered doors according to campus, location, search, and visibility
   const filteredDoors = useMemo(() => {
     return validDoors.filter((d) => {
+      // Visibility filter (admin only)
+      if (isAdmin) {
+        if (visibilityFilter === 'active' && isDoorHidden(d)) return false;
+        if (visibilityFilter === 'hidden' && !isDoorHidden(d)) return false;
+      }
+
       // Campus filter
       if (selectedCampusFilter === 'unassigned') {
         if (d.campus_id || d.campus_name) return false;
@@ -1294,7 +1467,7 @@ export default function DoorsPage() {
 
       return true;
     });
-  }, [validDoors, selectedCampusFilter, selectedLocationFilter, searchQuery]);
+  }, [validDoors, selectedCampusFilter, selectedLocationFilter, searchQuery, isAdmin, visibilityFilter]);
 
   const outsidePolicyDoors = useMemo(() => {
     return validDoors.filter((d) => {
@@ -1474,6 +1647,59 @@ export default function DoorsPage() {
           </div>
         </div>
 
+        {/* Admin Visibility Tabs */}
+        {isAdmin && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.375rem',
+              paddingTop: '0.625rem',
+              borderTop: '1px solid var(--color-border)',
+              flexWrap: 'wrap',
+            }}
+          >
+            <span
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                color: 'var(--color-text-muted)',
+                marginRight: '0.25rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+              }}
+            >
+              Visibility:
+            </span>
+            <button
+              className={`btn btn-sm ${visibilityFilter === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ fontSize: '0.8125rem', padding: '0.2rem 0.55rem', height: 'auto' }}
+              onClick={() => setVisibilityFilter('all')}
+            >
+              All Doors ({validDoors.length})
+            </button>
+            <button
+              className={`btn btn-sm ${visibilityFilter === 'active' ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ fontSize: '0.8125rem', padding: '0.2rem 0.55rem', height: 'auto' }}
+              onClick={() => setVisibilityFilter('active')}
+            >
+              Active ({activeDoorsCount})
+            </button>
+            <button
+              className={`btn btn-sm ${visibilityFilter === 'hidden' ? 'btn-primary' : 'btn-ghost'}`}
+              style={{
+                fontSize: '0.8125rem',
+                padding: '0.2rem 0.55rem',
+                height: 'auto',
+                color: visibilityFilter === 'hidden' ? undefined : hiddenDoorsCount > 0 ? 'var(--color-danger)' : undefined,
+              }}
+              onClick={() => setVisibilityFilter('hidden')}
+            >
+              🚫 Hidden ({hiddenDoorsCount})
+            </button>
+          </div>
+        )}
+
         {/* Batch Selection Banner */}
         {selectedDoorIds.length > 0 && (
           <div
@@ -1500,7 +1726,7 @@ export default function DoorsPage() {
               </button>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
               <button
                 className="btn btn-primary btn-sm"
                 style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
@@ -1509,6 +1735,36 @@ export default function DoorsPage() {
                 <MapPinIcon size={13} />
                 Assign Campus & Location
               </button>
+              {isAdmin && (
+                <>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{
+                      fontSize: '0.75rem',
+                      padding: '0.25rem 0.6rem',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      color: 'var(--color-danger)',
+                      borderColor: 'rgba(239, 68, 68, 0.4)',
+                    }}
+                    onClick={() => openBatchHideModal('hide')}
+                    title="Hide selected doors from non-admin users"
+                  >
+                    <EyeOffIcon size={13} />
+                    Hide Selected ({selectedDoorIds.length})
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                    onClick={() => openBatchHideModal('unhide')}
+                    title="Unhide selected doors to make them selectable by all users"
+                  >
+                    <EyeIcon size={13} />
+                    Unhide Selected ({selectedDoorIds.length})
+                  </button>
+                </>
+              )}
               <button
                 className="btn btn-ghost btn-sm"
                 style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem', height: 'auto' }}
@@ -1552,7 +1808,7 @@ export default function DoorsPage() {
           </p>
           <button
             className="btn btn-secondary btn-sm"
-            onClick={() => { setSelectedCampusFilter('all'); setSelectedLocationFilter('all'); setSearchQuery(''); }}
+            onClick={() => { setSelectedCampusFilter('all'); setSelectedLocationFilter('all'); setSearchQuery(''); setVisibilityFilter('all'); }}
           >
             Clear Filters
           </button>
@@ -1572,6 +1828,8 @@ export default function DoorsPage() {
                 setPhotoDoor(d);
                 setPhotoModalOpen(true);
               }}
+              onToggleHide={openSingleHideModal}
+              isAdmin={isAdmin}
               selected={selectedDoorIds.includes(door.id)}
               onSelectToggle={handleDoorSelectToggle}
               actionLoading={actionLoading}
@@ -1818,6 +2076,105 @@ export default function DoorsPage() {
           onError={(err) => showFeedback(err, 'error')}
         />
       )}
+
+      {/* Hide / Unhide Confirmation Modal */}
+      <Modal
+        isOpen={hideModalOpen}
+        onClose={() => !hiding && setHideModalOpen(false)}
+        title={
+          doorToToggleHide
+            ? isDoorHidden(doorToToggleHide)
+              ? `Unhide Door: ${doorToToggleHide.label}`
+              : `Hide Door: ${doorToToggleHide.label}`
+            : batchHideAction === 'hide'
+            ? `Hide ${selectedDoorIds.length} Doors from Selection`
+            : `Unhide ${selectedDoorIds.length} Doors`
+        }
+        footer={
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => setHideModalOpen(false)}
+              disabled={hiding}
+            >
+              Cancel
+            </button>
+            <button
+              className={`btn ${
+                (doorToToggleHide ? !isDoorHidden(doorToToggleHide) : batchHideAction === 'hide')
+                  ? 'btn-danger'
+                  : 'btn-primary'
+              }`}
+              onClick={handleConfirmToggleHide}
+              disabled={hiding}
+            >
+              {hiding
+                ? 'Updating…'
+                : doorToToggleHide
+                ? isDoorHidden(doorToToggleHide)
+                  ? 'Confirm Unhide'
+                  : 'Confirm Hide'
+                : batchHideAction === 'hide'
+                ? `Hide ${selectedDoorIds.length} Doors`
+                : `Unhide ${selectedDoorIds.length} Doors`}
+            </button>
+          </div>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+          {(doorToToggleHide ? !isDoorHidden(doorToToggleHide) : batchHideAction === 'hide') ? (
+            <>
+              <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
+                {doorToToggleHide ? (
+                  <>
+                    Are you sure you want to hide <strong>{doorToToggleHide.label}</strong>?
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to hide <strong>{selectedDoorIds.length} selected door(s)</strong>?
+                  </>
+                )}
+              </p>
+              <div
+                style={{
+                  background: 'rgba(239, 68, 68, 0.08)',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '0.75rem',
+                  fontSize: '0.8125rem',
+                  color: 'var(--color-danger)',
+                  lineHeight: 1.45,
+                }}
+              >
+                <strong>What happens when a door is hidden?</strong>
+                <ul style={{ margin: '0.35rem 0 0 1.25rem', padding: 0 }}>
+                  <li>It will be hidden from selection by other users (managers, viewers).</li>
+                  <li>It cannot be mapped to Planning Center services, events, or rooms by non-admins.</li>
+                  <li>It will not be available for selection when creating or issuing visitor passes.</li>
+                  <li>As an admin, you can unhide it at any time.</li>
+                </ul>
+              </div>
+            </>
+          ) : (
+            <>
+              <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
+                {doorToToggleHide ? (
+                  <>
+                    Are you sure you want to unhide <strong>{doorToToggleHide.label}</strong>?
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to unhide <strong>{selectedDoorIds.length} selected door(s)</strong>?
+                  </>
+                )}
+              </p>
+              <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                This door will become visible and selectable again by all team members across mappings, visitor passes, and schedules.
+              </p>
+            </>
+          )}
+        </div>
+      </Modal>
 
       <style>{`
         @media (max-width: 900px) {

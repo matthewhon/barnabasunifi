@@ -13,6 +13,7 @@ import {
   subscribeToAccessLogs,
 } from '@/lib/firestore';
 import type { Door, ScheduleWindow, UnifiSchedule, AuditLogEntry, AccessLogEntry } from '@/lib/types';
+import { isDoorHidden } from '@/lib/types';
 import { safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
 import { getDoorUnlockStatus } from '@/lib/door-status-utils';
 import { Sparkline } from '@/components/analytics/Sparkline';
@@ -293,7 +294,7 @@ function AuditRow({ entry }: { entry: AuditLogEntry }) {
 // ─── Main Dashboard Page ──────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { orgId, profile } = useAuth();
+  const { orgId, profile, role, isSuperAdmin } = useAuth();
 
   const [doors, setDoors] = useState<Door[]>([]);
   const [doorsLoading, setDoorsLoading] = useState(true);
@@ -375,10 +376,13 @@ export default function DashboardPage() {
   const isUuid = (str: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
+
   const validDoors = doors.filter((d) => {
     const label = (d.label || '').trim();
     if (!label) return false;
     if (isUuid(label) && d.current_state === 'unknown') return false;
+    if (!isAdmin && isDoorHidden(d)) return false;
     return true;
   });
 

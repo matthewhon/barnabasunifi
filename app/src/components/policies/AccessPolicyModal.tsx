@@ -4,11 +4,13 @@ import React, { useState, useEffect } from 'react';
 import Modal from '@/components/ui/Modal';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
+import { useAuth } from '@/lib/auth-context';
 import type {
   UnifiAccessPolicy,
   UnifiSchedule,
   Door,
 } from '@/lib/types';
+import { isDoorHidden } from '@/lib/types';
 
 interface AccessPolicyModalProps {
   isOpen: boolean;
@@ -29,6 +31,8 @@ export default function AccessPolicyModal({
   schedules,
   onSaved,
 }: AccessPolicyModalProps) {
+  const { role, isSuperAdmin } = useAuth();
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
   const isEditing = Boolean(policy?.id);
 
   const [name, setName] = useState('');
@@ -50,6 +54,7 @@ export default function AccessPolicyModal({
     const label = (d.label || '').trim();
     if (!label) return false;
     if (isUuid(label) && d.current_state === 'unknown') return false;
+    if (!isAdmin && isDoorHidden(d)) return false;
     return true;
   });
 
@@ -416,9 +421,26 @@ export default function AccessPolicyModal({
                       disabled={saving || deleting}
                     />
                     <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: '0.125rem' }}>
-                      <span style={{ fontWeight: isSelected ? 600 : 400, color: 'var(--color-text-primary)' }}>
-                        {door.label || door.id}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                        <span style={{ fontWeight: isSelected ? 600 : 400, color: 'var(--color-text-primary)' }}>
+                          {door.label || door.id}
+                        </span>
+                        {isDoorHidden(door) && (
+                          <span
+                            className="badge"
+                            style={{
+                              fontSize: '0.625rem',
+                              padding: '0.05rem 0.3rem',
+                              background: 'rgba(239, 68, 68, 0.15)',
+                              color: 'var(--color-danger)',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              fontWeight: 600,
+                            }}
+                          >
+                            Hidden
+                          </span>
+                        )}
+                      </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
                         {door.campus_name && (
                           <span

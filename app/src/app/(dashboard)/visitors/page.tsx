@@ -10,6 +10,7 @@ import {
   getOrgSettings,
 } from '@/lib/firestore';
 import type { UnifiVisitor, Door, VisitorStatus } from '@/lib/types';
+import { isDoorHidden } from '@/lib/types';
 import VisitorModal from '@/components/visitors/VisitorModal';
 import { format, isFuture } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
@@ -225,14 +226,17 @@ export default function VisitorsPage() {
   const isUuid = (str: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
+
   const validDoors = useMemo(() => {
     return doors.filter((d) => {
       const label = (d.label || '').trim();
       if (!label) return false;
       if (isUuid(label) && d.current_state === 'unknown') return false;
+      if (!isAdmin && isDoorHidden(d)) return false;
       return true;
     });
-  }, [doors]);
+  }, [doors, isAdmin]);
 
   // Sync from UniFi
   const handleSync = async () => {

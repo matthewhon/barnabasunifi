@@ -39,6 +39,7 @@ import type {
   UnifiSchedule,
   PcoList,
 } from '@/lib/types';
+import { isDoorHidden } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import AccessPolicyModal from '@/components/policies/AccessPolicyModal';
 import { UnmappedEventsTab } from '@/components/events/UnmappedEventsTab';
@@ -297,6 +298,7 @@ function ActiveMappingCard({
       position: found?.door_position_status,
       campusName: found?.campus_name,
       locationName: found?.location_name,
+      isHidden: isDoorHidden(found),
       isDoorCustom,
       doorLockMode,
       doorUnlockMin,
@@ -531,6 +533,21 @@ function ActiveMappingCard({
                       {door.isDoorCustom && (
                         <span className="badge badge-info" style={{ fontSize: '0.625rem', padding: '0.05rem 0.3rem' }}>
                           Custom
+                        </span>
+                      )}
+                      {door.isHidden && (
+                        <span
+                          className="badge"
+                          style={{
+                            fontSize: '0.625rem',
+                            padding: '0.05rem 0.3rem',
+                            background: 'rgba(239, 68, 68, 0.15)',
+                            color: 'var(--color-danger)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            fontWeight: 600,
+                          }}
+                        >
+                          Hidden
                         </span>
                       )}
                     </div>
@@ -1660,10 +1677,14 @@ function AddMappingModal({
   const isUuid = (str: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 
+  const { role, isSuperAdmin } = useAuth();
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
+
   const validDoors = doors.filter((d) => {
     const label = (d.label || '').trim();
     if (!label) return false;
     if (isUuid(label) && d.current_state === 'unknown') return false;
+    if (!isAdmin && isDoorHidden(d)) return false;
     return true;
   });
 
@@ -2150,9 +2171,26 @@ function AddMappingModal({
                     onChange={() => toggleDoor(door.id)}
                   />
                   <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: '0.125rem' }}>
-                    <span style={{ color: 'var(--color-text-primary)', fontWeight: selectedDoorIds.includes(door.id) ? 600 : 500 }}>
-                      {door.label}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                      <span style={{ color: 'var(--color-text-primary)', fontWeight: selectedDoorIds.includes(door.id) ? 600 : 500 }}>
+                        {door.label}
+                      </span>
+                      {isDoorHidden(door) && (
+                        <span
+                          className="badge"
+                          style={{
+                            fontSize: '0.625rem',
+                            padding: '0.05rem 0.3rem',
+                            background: 'rgba(239, 68, 68, 0.15)',
+                            color: 'var(--color-danger)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            fontWeight: 600,
+                          }}
+                        >
+                          Hidden
+                        </span>
+                      )}
+                    </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
                       {door.campus_name && (
                         <span

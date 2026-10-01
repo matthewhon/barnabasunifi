@@ -183,7 +183,15 @@ export interface Door {
   image_url?: string | null;
   unifi_thumbnail_url?: string | null;
   image_source?: 'unifi' | 'upload' | 'custom_url' | null;
+  is_hidden?: boolean;
+  hidden?: boolean;
+  hidden_at?: string | null;
+  hidden_by_user_id?: string | null;
   last_synced: string; // ISO8601
+}
+
+export function isDoorHidden(door?: Partial<Door> | null): boolean {
+  return Boolean(door && (door.is_hidden || door.hidden));
 }
 
 // ─── Schedule Windows ─────────────────────────────────────────────────────────

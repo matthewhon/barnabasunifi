@@ -147,6 +147,10 @@ export interface Door {
   last_accessed_by?: string | null;
   last_access_method?: string | null;
   last_access_method_label?: string | null;
+  is_hidden?: boolean;
+  hidden?: boolean;
+  hidden_at?: string | null;
+  hidden_by_user_id?: string | null;
   last_synced: string; // ISO8601
 }
 

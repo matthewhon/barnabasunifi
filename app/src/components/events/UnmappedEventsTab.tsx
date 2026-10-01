@@ -21,6 +21,7 @@ import type {
   DoorTimingConfig,
   OrgSettings,
 } from '@/lib/types';
+import { isDoorHidden } from '@/lib/types';
 import { format } from 'date-fns';
 import { safeIsPast, safeFormatDistanceToNow } from '@/lib/date-utils';
 import { toZonedTime } from 'date-fns-tz';
@@ -340,14 +341,17 @@ export function UnmappedEventsTab() {
   const isUuid = (str: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
+
   const validDoors = useMemo(() => {
     return doors.filter((d) => {
       const label = (d.label || '').trim();
       if (!label) return false;
       if (isUuid(label) && d.current_state === 'unknown') return false;
+      if (!isAdmin && isDoorHidden(d)) return false;
       return true;
     });
-  }, [doors]);
+  }, [doors, isAdmin]);
 
   const campusOptions = useMemo(() => {
     const set = new Set<string>();
@@ -1240,9 +1244,26 @@ export function UnmappedEventsTab() {
                             onChange={() => toggleDoor(door.id)}
                           />
                           <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: '0.125rem' }}>
-                            <span style={{ color: 'var(--color-text-primary)', fontWeight: checked ? 600 : 500 }}>
-                              {door.label}
-                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                              <span style={{ color: 'var(--color-text-primary)', fontWeight: checked ? 600 : 500 }}>
+                                {door.label}
+                              </span>
+                              {isDoorHidden(door) && (
+                                <span
+                                  className="badge"
+                                  style={{
+                                    fontSize: '0.625rem',
+                                    padding: '0.05rem 0.3rem',
+                                    background: 'rgba(239, 68, 68, 0.15)',
+                                    color: 'var(--color-danger)',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  Hidden
+                                </span>
+                              )}
+                            </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
                               {door.campus_name && (
                                 <span

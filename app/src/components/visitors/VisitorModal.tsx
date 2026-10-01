@@ -4,7 +4,9 @@ import React, { useState, useEffect } from 'react';
 import Modal from '@/components/ui/Modal';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
+import { useAuth } from '@/lib/auth-context';
 import type { UnifiVisitor, Door } from '@/lib/types';
+import { isDoorHidden } from '@/lib/types';
 import { format, addHours, addDays, endOfDay, setMinutes, setSeconds, setMilliseconds } from 'date-fns';
 import { parseSafeDate } from '@/lib/date-utils';
 
@@ -79,6 +81,9 @@ export default function VisitorModal({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const { role, isSuperAdmin } = useAuth();
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
+
   const prevIsOpenRef = React.useRef(false);
   const prevVisitorIdRef = React.useRef<string | undefined>(undefined);
 
@@ -90,9 +95,10 @@ export default function VisitorModal({
       const label = (d.label || '').trim();
       if (!label) return false;
       if (isUuid(label) && d.current_state === 'unknown') return false;
+      if (!isAdmin && isDoorHidden(d)) return false;
       return true;
     });
-  }, [doors]);
+  }, [doors, isAdmin]);
 
   useEffect(() => {
     const justOpened = isOpen && !prevIsOpenRef.current;
@@ -666,6 +672,21 @@ export default function VisitorModal({
                       onChange={() => handleDoorToggle(doorId)}
                     />
                     <span style={{ fontWeight: isSelected ? 600 : 400 }}>{door.label}</span>
+                    {isDoorHidden(door) && (
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: '0.625rem',
+                          padding: '0.05rem 0.3rem',
+                          background: 'rgba(239, 68, 68, 0.15)',
+                          color: 'var(--color-danger)',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          fontWeight: 600,
+                        }}
+                      >
+                        Hidden
+                      </span>
+                    )}
                   </label>
                 );
               })}

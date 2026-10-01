@@ -20,6 +20,7 @@ import type {
   Door,
   DayOfWeek,
 } from '@/lib/types';
+import { isDoorHidden } from '@/lib/types';
 import { format } from 'date-fns';
 import { safeIsPast } from '@/lib/date-utils';
 import { toZonedTime } from 'date-fns-tz';
@@ -402,10 +403,13 @@ export default function SchedulePage() {
     }
   }, [orgId, deletingPolicyId]);
 
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
+
   const validDoors = doors.filter((d) => {
     const label = (d.label || '').trim();
     if (!label) return false;
     if (isUuid(label) && d.current_state === 'unknown') return false;
+    if (!isAdmin && isDoorHidden(d)) return false;
     return true;
   });
 

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Modal from '@/components/ui/Modal';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
+import { useAuth } from '@/lib/auth-context';
 import type {
   UnifiSchedule,
   UnifiWeeklyScheduleDay,
@@ -11,6 +12,7 @@ import type {
   DayOfWeek,
   Door,
 } from '@/lib/types';
+import { isDoorHidden } from '@/lib/types';
 
 interface UnifiScheduleModalProps {
   isOpen: boolean;
@@ -47,7 +49,13 @@ export default function UnifiScheduleModal({
   doors,
   onSaved,
 }: UnifiScheduleModalProps) {
+  const { role, isSuperAdmin } = useAuth();
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
   const isEditing = Boolean(schedule?.id);
+
+  const visibleDoors = React.useMemo(() => {
+    return doors.filter((d) => isAdmin || !isDoorHidden(d));
+  }, [doors, isAdmin]);
 
   const [name, setName] = useState('');
   const [type, setType] = useState<'unlock' | 'access'>('unlock');
@@ -564,7 +572,7 @@ export default function UnifiScheduleModal({
           <label className="form-label" style={{ fontSize: '0.8125rem', fontWeight: 600, marginBottom: '0.5rem' }}>
             Assigned Doors ({selectedDoorIds.length} selected)
           </label>
-          {doors.length === 0 ? (
+          {visibleDoors.length === 0 ? (
             <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
               No doors found. Ensure your UniFi Access doors are synced.
             </p>
@@ -582,7 +590,7 @@ export default function UnifiScheduleModal({
                 background: 'var(--color-bg-base)',
               }}
             >
-              {doors.map((door) => {
+              {visibleDoors.map((door) => {
                 const doorKey = door.id || door.unifi_door_id;
                 const checked = selectedDoorIds.includes(doorKey);
                 return (
@@ -611,6 +619,22 @@ export default function UnifiScheduleModal({
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {door.label}
                     </span>
+                    {isDoorHidden(door) && (
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: '0.625rem',
+                          padding: '0.05rem 0.3rem',
+                          background: 'rgba(239, 68, 68, 0.15)',
+                          color: 'var(--color-danger)',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          fontWeight: 600,
+                          flexShrink: 0,
+                        }}
+                      >
+                        Hidden
+                      </span>
+                    )}
                   </label>
                 );
               })}

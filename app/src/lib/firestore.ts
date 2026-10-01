@@ -14,6 +14,7 @@ import {
   limit,
   onSnapshot,
   serverTimestamp,
+  writeBatch,
   Unsubscribe,
   QueryConstraint,
 } from 'firebase/firestore';
@@ -354,6 +355,50 @@ export async function removeDoorPhoto(orgId: string, doorId: string): Promise<vo
     image_source: deleteField(),
     updated_at: serverTimestamp(),
   });
+}
+
+/**
+ * Hide or unhide a door so it cannot be selected by others.
+ */
+export async function updateDoorHidden(
+  orgId: string,
+  doorId: string,
+  isHidden: boolean,
+  userId?: string | null
+): Promise<void> {
+  const doorRef = doc(db, 'organizations', orgId, 'doors', doorId);
+  await updateDoc(doorRef, {
+    is_hidden: isHidden,
+    hidden: isHidden,
+    hidden_at: isHidden ? new Date().toISOString() : null,
+    hidden_by_user_id: isHidden ? (userId ?? null) : null,
+    updated_at: serverTimestamp(),
+  });
+}
+
+/**
+ * Batch hide or unhide multiple doors.
+ */
+export async function batchUpdateDoorsHidden(
+  orgId: string,
+  doorIds: string[],
+  isHidden: boolean,
+  userId?: string | null
+): Promise<void> {
+  if (doorIds.length === 0) return;
+  const batch = writeBatch(db);
+  const nowIso = new Date().toISOString();
+  for (const doorId of doorIds) {
+    const doorRef = doc(db, 'organizations', orgId, 'doors', doorId);
+    batch.update(doorRef, {
+      is_hidden: isHidden,
+      hidden: isHidden,
+      hidden_at: isHidden ? nowIso : null,
+      hidden_by_user_id: isHidden ? (userId ?? null) : null,
+      updated_at: serverTimestamp(),
+    });
+  }
+  await batch.commit();
 }
 
 
