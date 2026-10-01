@@ -352,13 +352,17 @@ export default function UsersPage() {
                     </span>
                   </td>
                   <td style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
-                    {u.last_login_at ? (
-                      <span title={safeFormat(u.last_login_at, 'PPP p')}>
-                        {safeFormatDistanceToNow(u.last_login_at)}
-                      </span>
-                    ) : (
-                      <span style={{ color: 'var(--color-text-muted)' }}>Never</span>
-                    )}
+                    {(() => {
+                      const loginTime = u.last_login_at || (u.uid === currentUser?.uid ? currentUser?.metadata?.lastSignInTime : null);
+                      if (!loginTime) {
+                        return <span style={{ color: 'var(--color-text-muted)' }}>Never</span>;
+                      }
+                      return (
+                        <span title={safeFormat(loginTime, 'PPP p')}>
+                          {safeFormatDistanceToNow(loginTime)}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center' }}>

@@ -500,13 +500,22 @@ export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; uni
     await verifyOrgPermission(request.auth, orgId, ['org_admin', 'manager']);
 
     const db = getFirestore();
+    const visitorDocRef = db.doc(`organizations/${orgId}/visitors/${visitorId}`);
+    const visitorSnap = await visitorDocRef.get().catch(() => null);
+    const visitorData = visitorSnap && visitorSnap.exists ? visitorSnap.data() : null;
+
+    const resolvedUnifiId =
+      unifiVisitorId ||
+      (visitorData?.unifi_visitor_id as string) ||
+      (visitorId.startsWith('vis_') ? '' : visitorId);
+
     const configSnap = await db.collection('organizations').doc(orgId).collection('settings').doc('config').get();
     const configData = configSnap.exists ? configSnap.data() : null;
     const unifiMode = configData?.unifi_mode ?? 'agent';
 
     if (unifiMode === 'remote') {
       const remoteConfig = configData?.unifi_remote;
-      const targetUniFiId = unifiVisitorId || visitorId;
+      const targetUniFiId = resolvedUnifiId || visitorId;
 
       if (remoteConfig?.host && remoteConfig?.access_token) {
         const host = remoteConfig.host.replace(/\/$/, '');
@@ -521,26 +530,37 @@ export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; uni
           timeout: 15000,
         });
 
-        try {
-          await client.delete(`/api/v1/developer/visitors/${encodeURIComponent(targetUniFiId)}`);
-        } catch {
+        if (targetUniFiId && !targetUniFiId.startsWith('vis_')) {
+          const encId = encodeURIComponent(targetUniFiId);
           try {
-            await client.delete(`/proxy/access/integration/v1/developer/visitors/${encodeURIComponent(targetUniFiId)}`);
+            await client.delete(`/api/v1/developer/visitors/${encId}`);
           } catch {
             try {
-              await client.delete(`/proxy/access/api/v2/visitor/${encodeURIComponent(targetUniFiId)}`);
+              await client.delete(`/proxy/access/integration/v1/developer/visitors/${encId}`);
             } catch {
               try {
-                await client.delete(`/proxy/access/api/v2/visitors/${encodeURIComponent(targetUniFiId)}`);
-              } catch (err) {
-                console.warn(`Could not delete visitor ${targetUniFiId} on remote host:`, err);
+                await client.delete(`/proxy/access/api/v2/visitor/${encId}`);
+              } catch {
+                try {
+                  await client.delete(`/proxy/access/api/v2/visitors/${encId}`);
+                } catch {
+                  try {
+                    await client.post('/proxy/access/api/v2/visitors/batch_delete', { ids: [targetUniFiId] });
+                  } catch {
+                    try {
+                      await client.post(`/proxy/access/api/v2/visitor/${encId}/revoke`, {});
+                    } catch (err) {
+                      console.warn(`Could not delete visitor ${targetUniFiId} on remote host:`, err);
+                    }
+                  }
+                }
               }
             }
           }
         }
       }
 
-      await db.doc(`organizations/${orgId}/visitors/${visitorId}`).set({
+      await visitorDocRef.set({
         status: 'revoked',
         sync_status: 'synced',
         updated_at: FieldValue.serverTimestamp(),
@@ -551,7 +571,7 @@ export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; uni
         action: 'visitor_deleted',
         triggered_by: 'manual',
         actor_uid: request.auth?.uid ?? null,
-        message: `Visitor ${visitorId} revoked.`,
+        message: `Visitor ${visitorData?.first_name || visitorId} (${visitorId}) revoked.`,
         result: 'success',
         timestamp: FieldValue.serverTimestamp(),
       });
@@ -562,9 +582,9 @@ export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; uni
       };
     }
 
-    // Agent mode: Queue command
+    // Agent mode: Queue command with rich visitor details
     const nowIso = new Date().toISOString();
-    await db.doc(`organizations/${orgId}/visitors/${visitorId}`).set({
+    await visitorDocRef.set({
       status: 'revoked',
       sync_status: 'pending',
       updated_at: nowIso,
@@ -573,13 +593,31 @@ export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; uni
     const commandRef = await db.collection(`organizations/${orgId}/door_commands`).add({
       action: 'delete_visitor',
       visitor_id: visitorId,
-      visitor_data: { unifi_visitor_id: unifiVisitorId || visitorId },
+      unifi_visitor_id: resolvedUnifiId || null,
+      visitor_data: {
+        unifi_visitor_id: resolvedUnifiId || null,
+        first_name: visitorData?.first_name || '',
+        last_name: visitorData?.last_name || '',
+        email: visitorData?.email || '',
+        mobile_phone: visitorData?.mobile_phone || '',
+        pin_code: visitorData?.pin_code || '',
+      },
       status: 'queued',
       execute_at: nowIso,
       triggered_by: 'manual',
       actor_uid: request.auth?.uid ?? null,
       created_at: nowIso,
       org_id: orgId,
+    });
+
+    // Audit Log
+    await db.collection(`organizations/${orgId}/audit_log`).add({
+      action: 'visitor_deleted',
+      triggered_by: 'manual',
+      actor_uid: request.auth?.uid ?? null,
+      message: `Visitor ${visitorData?.first_name || visitorId} (${visitorId}) deletion queued for agent.`,
+      result: 'success',
+      timestamp: FieldValue.serverTimestamp(),
     });
 
     return {

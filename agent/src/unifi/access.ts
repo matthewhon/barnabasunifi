@@ -2469,31 +2469,173 @@ export class UnifiAccessClient {
 
   /**
    * Delete or revoke a visitor from UniFi Access.
+   * Supports direct deletion across developer & v2 endpoints, batch delete, revoke fallbacks,
+   * and live visitor lookup matching name/email/phone/PIN to clean up any duplicate entries.
    */
-  async deleteVisitor(visitorId: string): Promise<void> {
-    const endpoints = [
-      ...this.getVisitorEndpoints(`/${encodeURIComponent(visitorId)}`),
-      `/proxy/access/api/v2/visitor/${encodeURIComponent(visitorId)}`,
-      `/proxy/access/api/v2/visitors/${encodeURIComponent(visitorId)}`,
-    ];
-    let lastErr: any = null;
+  async deleteVisitor(visitorId: string, visitorMeta?: Partial<UnifiVisitor>): Promise<void> {
+    const rawId = (visitorId || '').trim();
+    let deletedCount = 0;
 
-    for (const endpoint of endpoints) {
-      try {
-        await this.http.delete(endpoint);
-        logger.info(`[UniFi] Visitor ${visitorId} deleted successfully via ${endpoint}`);
-        return;
-      } catch (err: any) {
-        lastErr = err;
-        logger.debug(`[UniFi] deleteVisitor tried ${endpoint} -> ${err.response?.status || err.message}`);
+    const tryDeleteSingleId = async (targetId: string): Promise<boolean> => {
+      if (!targetId || targetId.startsWith('vis_')) return false;
+      const cleanId = encodeURIComponent(targetId);
+
+      // 1. Direct DELETE endpoints (Developer API v1, Controller Proxy v1, v2)
+      const deleteEndpoints = [
+        ...this.getVisitorEndpoints(`/${cleanId}`),
+        `/proxy/access/api/v2/visitor/${cleanId}`,
+        `/proxy/access/api/v2/visitors/${cleanId}`,
+      ];
+
+      for (const endpoint of deleteEndpoints) {
+        try {
+          await this.http.delete(endpoint);
+          logger.info(`[UniFi] Visitor ${targetId} deleted successfully via DELETE ${endpoint}`);
+          return true;
+        } catch (err: any) {
+          logger.debug(`[UniFi] deleteVisitor DELETE ${endpoint} -> ${err.response?.status || err.message}`);
+        }
       }
+
+      // 2. Batch Delete endpoints (v2 batch delete endpoints)
+      const batchEndpoints = [
+        '/proxy/access/api/v2/visitors/batch_delete',
+        '/proxy/access/api/v2/visitor/batch_delete',
+        '/proxy/access/api/v2/visitors/delete',
+        '/proxy/access/api/v2/visitor/delete',
+      ];
+
+      for (const endpoint of batchEndpoints) {
+        try {
+          await this.http.post(endpoint, { ids: [targetId] });
+          logger.info(`[UniFi] Visitor ${targetId} deleted successfully via POST ${endpoint} (ids array)`);
+          return true;
+        } catch {}
+        try {
+          await this.http.post(endpoint, [targetId]);
+          logger.info(`[UniFi] Visitor ${targetId} deleted successfully via POST ${endpoint} (raw array)`);
+          return true;
+        } catch {}
+      }
+
+      // 3. Revoke endpoints (v2 revoke)
+      const revokeEndpoints = [
+        `/proxy/access/api/v2/visitor/${cleanId}/revoke`,
+        `/proxy/access/api/v2/visitors/${cleanId}/revoke`,
+        ...this.getVisitorEndpoints(`/${cleanId}/revoke`),
+      ];
+
+      for (const endpoint of revokeEndpoints) {
+        try {
+          await this.http.post(endpoint, {});
+          logger.info(`[UniFi] Visitor ${targetId} revoked successfully via POST ${endpoint}`);
+          return true;
+        } catch {}
+        try {
+          await this.http.put(endpoint, {});
+          logger.info(`[UniFi] Visitor ${targetId} revoked successfully via PUT ${endpoint}`);
+          return true;
+        } catch {}
+      }
+
+      // 4. Update status to revoked / cancelled or expire end_time
+      const updateEndpoints = [
+        ...this.getVisitorEndpoints(`/${cleanId}`),
+        `/proxy/access/api/v2/visitor/${cleanId}`,
+      ];
+
+      for (const endpoint of updateEndpoints) {
+        try {
+          await this.http.put(endpoint, { status: 'revoked', end_time: Math.floor(Date.now() / 1000) });
+          logger.info(`[UniFi] Visitor ${targetId} marked revoked via PUT ${endpoint}`);
+          return true;
+        } catch {}
+      }
+
+      return false;
+    };
+
+    // If a non-vis_ ID is provided, try direct deletion first
+    if (rawId && !rawId.startsWith('vis_')) {
+      const ok = await tryDeleteSingleId(rawId);
+      if (ok) deletedCount++;
     }
 
-    throw new Error(
-      `Failed to delete visitor ${visitorId} in UniFi Access. Last error: ${
-        lastErr?.response?.data?.msg || lastErr?.response?.data?.message || lastErr?.message || lastErr
-      }`
-    );
+    // Next, fetch live UniFi visitors to find any duplicates or matching entries by name/email/phone/PIN
+    try {
+      const liveVisitors = await this.getVisitors();
+      const firstName = visitorMeta?.first_name?.toLowerCase().trim();
+      const lastName = (visitorMeta?.last_name || '').toLowerCase().trim();
+      const email = visitorMeta?.email?.toLowerCase().trim();
+      const phone = visitorMeta?.mobile_phone?.trim();
+      const pin = visitorMeta?.pin_code?.trim();
+
+      const matchingUniFiIds = new Set<string>();
+
+      for (const lv of liveVisitors) {
+        const lvId = lv.id || lv.unifi_visitor_id;
+        if (!lvId) continue;
+
+        // Match by ID
+        if (lvId === rawId || lv.unifi_visitor_id === rawId) {
+          matchingUniFiIds.add(lvId);
+          continue;
+        }
+
+        // Match by first + last name
+        if (
+          firstName &&
+          lv.first_name &&
+          lv.first_name.toLowerCase().trim() === firstName &&
+          (lv.last_name || '').toLowerCase().trim() === lastName
+        ) {
+          matchingUniFiIds.add(lvId);
+          continue;
+        }
+
+        // Match by email
+        if (email && lv.email && lv.email.toLowerCase().trim() === email) {
+          matchingUniFiIds.add(lvId);
+          continue;
+        }
+
+        // Match by phone
+        if (phone && lv.mobile_phone && lv.mobile_phone.trim() === phone) {
+          matchingUniFiIds.add(lvId);
+          continue;
+        }
+
+        // Match by PIN
+        if (pin && lv.pin_code && lv.pin_code.trim() === pin) {
+          matchingUniFiIds.add(lvId);
+          continue;
+        }
+      }
+
+      for (const idToDelete of matchingUniFiIds) {
+        if (idToDelete === rawId && deletedCount > 0) continue;
+        const ok = await tryDeleteSingleId(idToDelete);
+        if (ok) {
+          deletedCount++;
+          logger.info(`[UniFi] Deleted matching duplicate/live visitor ${idToDelete} (${firstName} ${lastName})`);
+        }
+      }
+    } catch (searchErr: any) {
+      logger.debug(`[UniFi] Failed to search live visitors for delete matching: ${searchErr.message}`);
+    }
+
+    if (deletedCount > 0) {
+      logger.info(`[UniFi] Visitor deletion completed: removed ${deletedCount} record(s) from UniFi Access.`);
+      return;
+    }
+
+    // If ID looked like a local ID and no matches were found on UniFi, it's already gone from UniFi
+    if (rawId.startsWith('vis_')) {
+      logger.info(`[UniFi] Visitor ${rawId} was local-only or already removed from UniFi Access.`);
+      return;
+    }
+
+    logger.warn(`[UniFi] Could not confirm deletion for visitor ${rawId} across all endpoints.`);
   }
 
   /**

@@ -259,10 +259,12 @@ export default function VisitorsPage() {
     }
   };
 
-  // Revoke visitor directly
+  // Revoke / Delete visitor directly
   const handleRevoke = async (visitor: UnifiVisitor) => {
     if (!orgId) return;
-    if (!confirm(`Are you sure you want to revoke access for ${visitor.first_name} ${visitor.last_name || ''}?`)) {
+    const isRevoked = visitor.status === 'revoked';
+    const actionText = isRevoked ? 'permanently delete' : 'revoke access for';
+    if (!confirm(`Are you sure you want to ${actionText} ${visitor.first_name} ${visitor.last_name || ''}?`)) {
       return;
     }
     try {
@@ -270,11 +272,11 @@ export default function VisitorsPage() {
       await fn({
         orgId,
         visitorId: visitor.id,
-        unifiVisitorId: visitor.unifi_visitor_id || visitor.id,
+        unifiVisitorId: visitor.unifi_visitor_id,
       });
-      showFeedback(`Revoked access for ${visitor.first_name}.`, true);
+      showFeedback(isRevoked ? `Deleted record for ${visitor.first_name}.` : `Revoked access for ${visitor.first_name}.`, true);
     } catch (err: any) {
-      showFeedback(err.message || 'Failed to revoke visitor.', false);
+      showFeedback(err.message || 'Failed to revoke/delete visitor.', false);
     }
   };
 
@@ -786,23 +788,21 @@ export default function VisitorsPage() {
                         <EditIcon />
                       </button>
 
-                      {visitor.status !== 'revoked' && (
-                        <button
-                          type="button"
-                          onClick={() => handleRevoke(visitor)}
-                          title="Revoke Access"
-                          style={{
-                            padding: '0.5rem',
-                            borderRadius: 'var(--radius-md)',
-                            border: '1px solid rgba(239, 68, 68, 0.35)',
-                            background: 'rgba(239, 68, 68, 0.1)',
-                            color: 'var(--color-danger, #ef4444)',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <TrashIcon />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleRevoke(visitor)}
+                        title={visitor.status === 'revoked' ? 'Permanently Delete' : 'Revoke Access'}
+                        style={{
+                          padding: '0.5rem',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid rgba(239, 68, 68, 0.35)',
+                          background: 'rgba(239, 68, 68, 0.1)',
+                          color: 'var(--color-danger, #ef4444)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <TrashIcon />
+                      </button>
                     </>
                   )}
                 </div>

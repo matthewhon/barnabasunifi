@@ -471,19 +471,30 @@ export function startCommandListener(
         );
       } else if (command.action === 'delete_visitor') {
         if (!command.visitor_id) throw new Error('Missing visitor_id for delete_visitor');
+        const visitorDocSnap = await db.doc(`organizations/${orgId}/visitors/${command.visitor_id}`).get().catch(() => null);
+        const visitorDocData = visitorDocSnap && visitorDocSnap.exists ? visitorDocSnap.data() : null;
+
         const targetUniFiId =
           (command.visitor_data?.unifi_visitor_id as string) ||
+          (visitorDocData?.unifi_visitor_id as string) ||
           (command.unifi_visitor_id as string) ||
           command.visitor_id;
 
-        if (targetUniFiId) {
-          try {
-            await unifiClient.deleteVisitor(targetUniFiId);
-            logger.info(`[CommandListener] Deleted visitor ${targetUniFiId} from UniFi Access.`);
-          } catch (delErr: any) {
-            logger.warn(`[CommandListener] UniFi deleteVisitor notice: ${delErr.message}`);
-          }
+        const visitorMeta = {
+          first_name: (command.visitor_data?.first_name as string) || visitorDocData?.first_name,
+          last_name: (command.visitor_data?.last_name as string) || visitorDocData?.last_name,
+          email: (command.visitor_data?.email as string) || visitorDocData?.email,
+          mobile_phone: (command.visitor_data?.mobile_phone as string) || visitorDocData?.mobile_phone,
+          pin_code: (command.visitor_data?.pin_code as string) || visitorDocData?.pin_code,
+        };
+
+        try {
+          await unifiClient.deleteVisitor(targetUniFiId, visitorMeta);
+          logger.info(`[CommandListener] Deleted visitor ${targetUniFiId} from UniFi Access.`);
+        } catch (delErr: any) {
+          logger.warn(`[CommandListener] UniFi deleteVisitor notice: ${delErr.message}`);
         }
+
         await db.doc(`organizations/${orgId}/visitors/${command.visitor_id}`).set(
           {
             status: 'revoked',
@@ -492,6 +503,12 @@ export function startCommandListener(
           },
           { merge: true }
         );
+
+        // Immediate background sync to clean up orphaned/duplicate records
+        syncVisitors(orgId, unifiClient).catch((err) => {
+          logger.debug(`[CommandListener] Post-delete visitor sync notice: ${err}`);
+        });
+
         resultMessage = `Visitor ${command.visitor_id} revoked successfully.`;
       } else if (command.action === 'sync_access_logs') {
         const backfill = Boolean((command as any).backfill);
