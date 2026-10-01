@@ -26,6 +26,20 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   visitor_updated: 'Visitor Updated',
   visitor_deleted: 'Visitor Revoked/Deleted',
   visitor_synced: 'Visitor Synced',
+  user_login: 'User Login',
+  mapping_created: 'Door Mapping Created',
+  mapping_updated: 'Door Mapping Updated',
+  mapping_deleted: 'Door Mapping Deleted',
+  access_policy_mapping_created: 'Policy Mapping Created',
+  access_policy_mapping_updated: 'Policy Mapping Updated',
+  access_policy_mapping_deleted: 'Policy Mapping Deleted',
+  door_hidden: 'Door Hidden',
+  door_unhidden: 'Door Unhidden',
+  door_updated: 'Door Details Updated',
+  user_invited: 'User Invited',
+  user_role_changed: 'User Role Changed',
+  user_removed: 'User Removed',
+  user_password_reset: 'User Password Reset',
 };
 
 const ALL_ACTIONS: AuditAction[] = [
@@ -34,6 +48,10 @@ const ALL_ACTIONS: AuditAction[] = [
   'schedule_created', 'schedule_cancelled',
   'schedule_updated', 'schedule_synced', 'schedule_deleted',
   'visitor_created', 'visitor_updated', 'visitor_deleted', 'visitor_synced',
+  'user_login', 'mapping_created', 'mapping_updated', 'mapping_deleted',
+  'access_policy_mapping_created', 'access_policy_mapping_updated', 'access_policy_mapping_deleted',
+  'door_hidden', 'door_unhidden', 'door_updated',
+  'user_invited', 'user_role_changed', 'user_removed', 'user_password_reset',
 ];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────

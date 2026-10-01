@@ -2405,9 +2405,9 @@ export class UnifiAccessClient {
     for (const endpoint of endpoints) {
       try {
         const res = await this.http.post<any>(endpoint, payload);
-        const rawData = res.data?.data || res.data;
-        if (rawData) {
-          logger.info(`[UniFi] Visitor ${rawData.id || visitor.first_name} created successfully via ${endpoint}`);
+        const rawData = res.data?.data || (res.data?.id ? res.data : null);
+        if (rawData && (rawData.id || rawData.unique_id || rawData.visitor_id || rawData._id)) {
+          logger.info(`[UniFi] Visitor ${rawData.id || rawData.unique_id || visitor.first_name} created successfully via ${endpoint}`);
           const normalized = normalizeUnifiVisitor(rawData);
           // If PIN code is specified, assign via PUT /visitors/:id/pin_codes (official Developer API)
           if (visitor.pin_code && normalized.id) {
@@ -2444,7 +2444,7 @@ export class UnifiAccessClient {
     for (const endpoint of endpoints) {
       try {
         const res = await this.http.put<any>(endpoint, payload);
-        const rawData = res.data?.data || res.data;
+        const rawData = res.data?.data || (res.data?.id ? res.data : null);
         if (rawData) {
           logger.info(`[UniFi] Visitor ${visitorId} updated successfully via ${endpoint}`);
           const normalized = normalizeUnifiVisitor(rawData);
@@ -2471,7 +2471,11 @@ export class UnifiAccessClient {
    * Delete or revoke a visitor from UniFi Access.
    */
   async deleteVisitor(visitorId: string): Promise<void> {
-    const endpoints = this.getVisitorEndpoints(`/${encodeURIComponent(visitorId)}`);
+    const endpoints = [
+      ...this.getVisitorEndpoints(`/${encodeURIComponent(visitorId)}`),
+      `/proxy/access/api/v2/visitor/${encodeURIComponent(visitorId)}`,
+      `/proxy/access/api/v2/visitors/${encodeURIComponent(visitorId)}`,
+    ];
     let lastErr: any = null;
 
     for (const endpoint of endpoints) {

@@ -19,7 +19,7 @@ import {
   QueryConstraint,
 } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
-import { db, storage } from '@/lib/firebase';
+import { db, storage, auth } from '@/lib/firebase';
 import type {
   Organization,
   OrgSettings,
@@ -32,6 +32,7 @@ import type {
   ScheduleWindow,
   DoorCommand,
   AuditLogEntry,
+  AuditAction,
   Agent,
   UnifiSchedule,
   UnifiVisitor,
@@ -118,6 +119,12 @@ export async function createMapping(
     updated_at: serverTimestamp(),
   });
   const ref = await addDoc(collection(db, 'organizations', orgId, 'mappings'), data);
+
+  writeAuditLog(orgId, {
+    action: 'mapping_created',
+    message: `Created door mapping: "${mapping.pco_resource_label}" -> ${mapping.door_labels?.join(', ') || 'no doors'}`,
+  }).catch((err) => console.warn('Failed to write audit log:', err));
+
   return ref.id;
 }
 
@@ -131,10 +138,21 @@ export async function updateMapping(
     updated_at: serverTimestamp(),
   });
   await updateDoc(doc(db, 'organizations', orgId, 'mappings', mappingId), data);
+
+  const label = updates.pco_resource_label ? ` "${updates.pco_resource_label}"` : '';
+  writeAuditLog(orgId, {
+    action: 'mapping_updated',
+    message: `Updated door mapping${label}`,
+  }).catch((err) => console.warn('Failed to write audit log:', err));
 }
 
 export async function deleteMapping(orgId: string, mappingId: string): Promise<void> {
   await deleteDoc(doc(db, 'organizations', orgId, 'mappings', mappingId));
+
+  writeAuditLog(orgId, {
+    action: 'mapping_deleted',
+    message: `Deleted door mapping (${mappingId})`,
+  }).catch((err) => console.warn('Failed to write audit log:', err));
 }
 
 // ─── Access Policy Mappings ──────────────────────────────────────────────────
@@ -176,6 +194,12 @@ export async function createAccessPolicyMapping(
     updated_at: serverTimestamp(),
   });
   const ref = await addDoc(collection(db, 'organizations', orgId, 'access_policy_mappings'), data);
+
+  writeAuditLog(orgId, {
+    action: 'access_policy_mapping_created',
+    message: `Mapped list "${mapping.pco_list_name}" to policy "${mapping.unifi_policy_name}"`,
+  }).catch((err) => console.warn('Failed to write audit log:', err));
+
   return ref.id;
 }
 
@@ -189,10 +213,20 @@ export async function updateAccessPolicyMapping(
     updated_at: serverTimestamp(),
   });
   await updateDoc(doc(db, 'organizations', orgId, 'access_policy_mappings', mappingId), data);
+
+  writeAuditLog(orgId, {
+    action: 'access_policy_mapping_updated',
+    message: `Updated access policy mapping (${mappingId})`,
+  }).catch((err) => console.warn('Failed to write audit log:', err));
 }
 
 export async function deleteAccessPolicyMapping(orgId: string, mappingId: string): Promise<void> {
   await deleteDoc(doc(db, 'organizations', orgId, 'access_policy_mappings', mappingId));
+
+  writeAuditLog(orgId, {
+    action: 'access_policy_mapping_deleted',
+    message: `Deleted access policy mapping (${mappingId})`,
+  }).catch((err) => console.warn('Failed to write audit log:', err));
 }
 
 // ─── Synced Users & Access Policies ──────────────────────────────────────────
@@ -299,6 +333,12 @@ export async function updateDoorCampusLocation(
     ...updates,
     updated_at: serverTimestamp(),
   });
+
+  writeAuditLog(orgId, {
+    action: 'door_updated',
+    door_id: doorId,
+    message: `Updated door campus/location details`,
+  }).catch((err) => console.warn('Failed to write audit log:', err));
 }
 
 /**
@@ -374,6 +414,12 @@ export async function updateDoorHidden(
     hidden_by_user_id: isHidden ? (userId ?? null) : null,
     updated_at: serverTimestamp(),
   });
+
+  writeAuditLog(orgId, {
+    action: isHidden ? 'door_hidden' : 'door_unhidden',
+    door_id: doorId,
+    message: `${isHidden ? 'Hid' : 'Unhid'} door (${doorId})`,
+  }).catch((err) => console.warn('Failed to write audit log:', err));
 }
 
 /**
@@ -399,6 +445,11 @@ export async function batchUpdateDoorsHidden(
     });
   }
   await batch.commit();
+
+  writeAuditLog(orgId, {
+    action: isHidden ? 'door_hidden' : 'door_unhidden',
+    message: `${isHidden ? 'Hid' : 'Unhid'} ${doorIds.length} door(s)`,
+  }).catch((err) => console.warn('Failed to write audit log:', err));
 }
 
 
@@ -581,6 +632,39 @@ export function subscribeToRecentCommands(
 }
 
 // ─── Audit Log ────────────────────────────────────────────────────────────────
+
+export async function writeAuditLog(
+  orgId: string,
+  entry: {
+    action: AuditAction;
+    triggered_by?: 'scheduler' | 'manual' | 'agent' | 'system';
+    actor_uid?: string;
+    actor_label?: string;
+    door_id?: string;
+    door_label?: string;
+    result?: 'success' | 'error';
+    message?: string;
+  }
+): Promise<string> {
+  const currentUser = auth.currentUser;
+  const actorUid = entry.actor_uid || currentUser?.uid || null;
+  const actorLabel = entry.actor_label || currentUser?.displayName || currentUser?.email || null;
+
+  const data = cleanAddPayload({
+    org_id: orgId,
+    action: entry.action,
+    triggered_by: entry.triggered_by || 'manual',
+    actor_uid: actorUid,
+    actor_label: actorLabel,
+    door_id: entry.door_id || null,
+    door_label: entry.door_label || null,
+    result: entry.result || 'success',
+    message: entry.message || null,
+    timestamp: serverTimestamp(),
+  });
+  const ref = await addDoc(collection(db, 'organizations', orgId, 'audit_log'), data);
+  return ref.id;
+}
 
 export function subscribeToAuditLog(
   orgId: string,

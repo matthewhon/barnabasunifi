@@ -529,8 +529,12 @@ export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; uni
           } catch {
             try {
               await client.delete(`/proxy/access/api/v2/visitor/${encodeURIComponent(targetUniFiId)}`);
-            } catch (err) {
-              console.warn(`Could not delete visitor ${targetUniFiId} on remote host:`, err);
+            } catch {
+              try {
+                await client.delete(`/proxy/access/api/v2/visitors/${encodeURIComponent(targetUniFiId)}`);
+              } catch (err) {
+                console.warn(`Could not delete visitor ${targetUniFiId} on remote host:`, err);
+              }
             }
           }
         }

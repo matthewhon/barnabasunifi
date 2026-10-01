@@ -314,7 +314,21 @@ export type AuditAction =
   | 'visitor_created'
   | 'visitor_updated'
   | 'visitor_deleted'
-  | 'visitor_synced';
+  | 'visitor_synced'
+  | 'user_login'
+  | 'mapping_created'
+  | 'mapping_updated'
+  | 'mapping_deleted'
+  | 'access_policy_mapping_created'
+  | 'access_policy_mapping_updated'
+  | 'access_policy_mapping_deleted'
+  | 'door_hidden'
+  | 'door_unhidden'
+  | 'door_updated'
+  | 'user_invited'
+  | 'user_role_changed'
+  | 'user_removed'
+  | 'user_password_reset';
 
 export interface AuditLogEntry {
   id: string;

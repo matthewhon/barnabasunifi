@@ -430,17 +430,19 @@ export function startCommandListener(
         resultMessage = `Synced ${synced.length} visitor(s) from UniFi Access.`;
       } else if (command.action === 'create_visitor' || command.action === 'update_visitor') {
         const rawUnifiId = (command.visitor_data?.unifi_visitor_id as string) || (command.unifi_visitor_id as string);
-        const unifiVisitorId = (rawUnifiId && rawUnifiId !== command.visitor_id) ? rawUnifiId : undefined;
+        const unifiVisitorId = rawUnifiId || (command.visitor_id && command.visitor_id.length > 20 ? command.visitor_id : undefined);
         let resultVisitor: UnifiVisitor;
 
-        if (command.action === 'update_visitor' && unifiVisitorId) {
+        if (command.action === 'update_visitor' || unifiVisitorId) {
+          const targetId = unifiVisitorId || command.visitor_id;
+          if (!targetId) throw new Error('Missing visitor ID for update_visitor');
           try {
-            resultVisitor = await unifiClient.updateVisitor(unifiVisitorId, command.visitor_data || {});
-            resultMessage = `Visitor ${command.visitor_id} updated successfully in UniFi.`;
+            resultVisitor = await unifiClient.updateVisitor(targetId, command.visitor_data || {});
+            resultMessage = `Visitor ${targetId} updated successfully in UniFi.`;
           } catch (updateErr: any) {
             const errStr = String(updateErr);
             if (errStr.includes('160001') || errStr.includes('not found') || updateErr?.response?.status === 404) {
-              logger.warn(`[CommandListener] Visitor ${unifiVisitorId} not found in UniFi. Creating new visitor…`);
+              logger.warn(`[CommandListener] Visitor ${targetId} not found in UniFi. Creating new visitor…`);
               resultVisitor = await unifiClient.createVisitor(command.visitor_data || {});
               resultMessage = `Visitor created in UniFi (ID: ${resultVisitor.id}).`;
             } else {
@@ -453,12 +455,13 @@ export function startCommandListener(
         }
 
         const targetVisitorId = command.visitor_id || resultVisitor.id;
+        const finalUnifiId = resultVisitor.unifi_visitor_id || resultVisitor.id;
         await db.doc(`organizations/${orgId}/visitors/${targetVisitorId}`).set(
           {
             ...resultVisitor,
             id: targetVisitorId,
             org_id: orgId,
-            unifi_visitor_id: resultVisitor.unifi_visitor_id || resultVisitor.id,
+            unifi_visitor_id: finalUnifiId,
             last_synced: nowTimestamp(),
             sync_status: 'synced',
             sync_error: null,
@@ -468,10 +471,15 @@ export function startCommandListener(
         );
       } else if (command.action === 'delete_visitor') {
         if (!command.visitor_id) throw new Error('Missing visitor_id for delete_visitor');
-        const unifiVisitorId = (command.visitor_data?.unifi_visitor_id as string) || (command.unifi_visitor_id as string);
-        if (unifiVisitorId && unifiVisitorId !== command.visitor_id) {
+        const targetUniFiId =
+          (command.visitor_data?.unifi_visitor_id as string) ||
+          (command.unifi_visitor_id as string) ||
+          command.visitor_id;
+
+        if (targetUniFiId) {
           try {
-            await unifiClient.deleteVisitor(unifiVisitorId);
+            await unifiClient.deleteVisitor(targetUniFiId);
+            logger.info(`[CommandListener] Deleted visitor ${targetUniFiId} from UniFi Access.`);
           } catch (delErr: any) {
             logger.warn(`[CommandListener] UniFi deleteVisitor notice: ${delErr.message}`);
           }

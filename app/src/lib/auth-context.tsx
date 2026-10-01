@@ -13,6 +13,7 @@ import {
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import type { UserProfile, AuthClaims, UserRole } from '@/lib/types';
+import { writeAuditLog } from '@/lib/firestore';
 
 interface AuthContextValue {
   user: User | null;
@@ -111,6 +112,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
 
           setClaims(idTokenResult.claims as AuthClaims);
+
+          const targetOrgId = (idTokenResult.claims.orgId as string) || (
+            userProfile?.org_memberships
+              ? (Array.isArray(userProfile.org_memberships)
+                  ? userProfile.org_memberships[0]?.org_id
+                  : Object.keys(userProfile.org_memberships)[0])
+              : null
+          );
+
+          if (targetOrgId) {
+            writeAuditLog(targetOrgId, {
+              action: 'user_login',
+              actor_uid: firebaseUser.uid,
+              actor_label: firebaseUser.displayName || firebaseUser.email || 'User',
+              message: `User ${firebaseUser.email || firebaseUser.uid} logged into portal`,
+            }).catch((e) => console.warn('Failed to write login audit log:', e));
+          }
         } catch (err) {
           console.error('Error fetching user auth profile or claims:', err);
         }

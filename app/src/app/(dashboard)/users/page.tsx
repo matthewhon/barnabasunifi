@@ -8,6 +8,7 @@ import type { UserRole } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
+import { writeAuditLog } from '@/lib/firestore';
 
 // ─── Role configuration ───────────────────────────────────────────────────────
 
@@ -140,6 +141,12 @@ export default function UsersPage() {
         { success: boolean }
       >(functions, 'inviteUser');
       await inviteUser({ orgId, email: inviteEmail.trim(), role: inviteRole });
+
+      writeAuditLog(orgId, {
+        action: 'user_invited',
+        message: `Invited user ${inviteEmail.trim()} as ${inviteRole}`,
+      }).catch((e) => console.warn('Audit log error:', e));
+
       showToast(`Invitation sent to ${inviteEmail.trim()}.`, 'success');
       setInviteOpen(false);
       setInviteEmail('');
@@ -166,6 +173,12 @@ export default function UsersPage() {
         setUsers((prev) =>
           prev.map((u) => (u.uid === uid ? { ...u, role: newRole } : u)),
         );
+
+        writeAuditLog(orgId, {
+          action: 'user_role_changed',
+          message: `Changed role for user (${uid}) to ${newRole}`,
+        }).catch((e) => console.warn('Audit log error:', e));
+
         showToast('Role updated.', 'success');
       } catch {
         showToast('Failed to change role. Please try again.', 'error');
@@ -187,6 +200,12 @@ export default function UsersPage() {
       await removeUser({ orgId, targetUid: removingUser.uid });
       setUsers((prev) => prev.filter((u) => u.uid !== removingUser.uid));
       setRemoveModalOpen(false);
+
+      writeAuditLog(orgId, {
+        action: 'user_removed',
+        message: `Removed user ${removingUser.display_name} (${removingUser.email})`,
+      }).catch((e) => console.warn('Audit log error:', e));
+
       showToast(`${removingUser.display_name} removed from organization.`, 'success');
     } catch {
       showToast('Failed to remove user. Please try again.', 'error');
@@ -216,6 +235,11 @@ export default function UsersPage() {
         action: resetMode === 'manual' ? 'set_password' : 'send_email',
         newPassword: resetMode === 'manual' ? newPassword : undefined,
       });
+
+      writeAuditLog(orgId, {
+        action: 'user_password_reset',
+        message: `Reset password for user ${resetUser.display_name} (${resetUser.email})`,
+      }).catch((e) => console.warn('Audit log error:', e));
 
       if (res.data.resetLink) {
         setGeneratedLink(res.data.resetLink);
