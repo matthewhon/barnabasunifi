@@ -257,6 +257,11 @@ export const syncUnifiVisitors = onCall<{ orgId: string }>(
         });
 
         if (existingMatch) {
+          const existingData = existingMatch.data();
+          if (existingData?.status === 'revoked') {
+            // Do not revive revoked visitors into active
+            continue;
+          }
           targetDocId = existingMatch.id;
           if (existingMatch.id !== unifiId) {
             const orphanDoc = existingDocs.find((d) => d.id === unifiId);

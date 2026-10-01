@@ -63,6 +63,21 @@ export async function syncVisitors(
     });
 
     if (existingMatch) {
+      const existingData = existingMatch.data();
+      // If this visitor was revoked, do NOT revive it to active!
+      // Instead, ensure it is deleted from UniFi Access and keep it revoked.
+      if (existingData.status === 'revoked') {
+        unifiClient.deleteVisitor(unifiId, {
+          first_name: visitor.first_name,
+          last_name: visitor.last_name,
+          email: visitor.email,
+          mobile_phone: visitor.mobile_phone,
+          pin_code: visitor.pin_code,
+        }).catch((e) => logger.debug(`[VisitorSync] Auto-purge revoked visitor from UniFi: ${e}`));
+        matchedDocIds.add(existingMatch.id);
+        continue;
+      }
+
       targetDocId = existingMatch.id;
       // If we matched an existing doc whose Firestore document ID differs from UniFi's raw ID,
       // make sure we don't also leave an orphaned document with the raw UniFi ID
