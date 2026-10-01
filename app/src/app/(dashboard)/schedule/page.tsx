@@ -240,6 +240,7 @@ export default function SchedulePage() {
   const [tab, setTab] = useState<TabKey>('upcoming');
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [pcoSyncLoading, setPcoSyncLoading] = useState(false);
+  const [expandedWindowIds, setExpandedWindowIds] = useState<Set<string>>(new Set());
 
   // Common notifications
   const [feedbackMessage, setFeedbackMessage] = useState<{ text: string; ok: boolean } | null>(null);
@@ -1107,6 +1108,7 @@ export default function SchedulePage() {
               <table>
                 <thead>
                   <tr>
+                    <th style={{ width: '2.5rem' }}></th>
                     <th>Source</th>
                     <th>Label</th>
                     <th>Unlock At</th>
@@ -1118,7 +1120,7 @@ export default function SchedulePage() {
                 {displayedWindows.length === 0 ? (
                   <tbody>
                     <tr>
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <div className="empty-state" style={{ padding: '3rem 1rem' }}>
                           <p className="empty-state-title">
                             No {tab} windows{sourceFilter !== 'all' ? ` for ${sourceFilter}` : ''}
@@ -1132,48 +1134,178 @@ export default function SchedulePage() {
                   </tbody>
                 ) : (
                   <tbody>
-                    {displayedWindows.map((win) => (
-                      <tr key={win.id}>
-                        <td>
-                          <span className={`badge ${sourceTypeBadgeClass(win.source_type)}`}>
-                            {win.source_type === 'service' ? 'Service' : 'Group'}
-                          </span>
-                        </td>
-                        <td>
-                          <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>
-                            {win.source_label}
-                          </div>
-                        </td>
-                        <td style={{ whiteSpace: 'nowrap', color: 'var(--color-text-secondary)' }}>
-                          {formatWindowTime(win.unlock_at, timezone)}
-                        </td>
-                        <td style={{ whiteSpace: 'nowrap', color: 'var(--color-text-secondary)' }}>
-                          {formatWindowTimeShort(win.lock_at, timezone)}
-                        </td>
-                        <td>
-                          <div
-                            style={{
-                              fontSize: '0.8125rem',
-                              color: 'var(--color-text-secondary)',
-                              maxWidth: '12rem',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                            title={win.door_labels.join(', ')}
+                    {displayedWindows.map((win) => {
+                      const isExpanded = expandedWindowIds.has(win.id);
+                      const hasDoorTimings = win.door_timings && Object.keys(win.door_timings).length > 0;
+                      const hasDoors = win.door_ids && win.door_ids.length > 0;
+
+                      const toggleExpand = () => {
+                        setExpandedWindowIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(win.id)) {
+                            next.delete(win.id);
+                          } else {
+                            next.add(win.id);
+                          }
+                          return next;
+                        });
+                      };
+
+                      return (
+                        <React.Fragment key={win.id}>
+                          <tr
+                            style={{ cursor: hasDoors ? 'pointer' : 'default' }}
+                            onClick={() => hasDoors && toggleExpand()}
                           >
-                            {win.door_labels && win.door_labels.length > 0
-                              ? win.door_labels.join(', ')
-                              : <span className="badge badge-neutral" style={{ opacity: 0.75 }}>Unmapped</span>}
-                          </div>
-                        </td>
-                        <td>
-                          <span className={`badge ${statusBadgeClass(win.status)}`}>
-                            {win.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                            <td style={{ textAlign: 'center', padding: '0.5rem 0.25rem' }}>
+                              {hasDoors ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm"
+                                  style={{ padding: '0.15rem 0.35rem', fontSize: '0.75rem', height: 'auto', lineHeight: 1 }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleExpand();
+                                  }}
+                                  title={isExpanded ? 'Collapse door timings' : 'Expand per-door timings'}
+                                >
+                                  {isExpanded ? '▼' : '▶'}
+                                </button>
+                              ) : (
+                                <span style={{ opacity: 0.3, fontSize: '0.75rem' }}>•</span>
+                              )}
+                            </td>
+                            <td>
+                              <span className={`badge ${sourceTypeBadgeClass(win.source_type)}`}>
+                                {win.source_type === 'service' ? 'Service' : 'Group'}
+                              </span>
+                            </td>
+                            <td>
+                              <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>
+                                {win.source_label}
+                              </div>
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap', color: 'var(--color-text-secondary)' }}>
+                              {formatWindowTime(win.unlock_at, timezone)}
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap', color: 'var(--color-text-secondary)' }}>
+                              {formatWindowTimeShort(win.lock_at, timezone)}
+                            </td>
+                            <td>
+                              <div
+                                style={{
+                                  fontSize: '0.8125rem',
+                                  color: 'var(--color-text-secondary)',
+                                  maxWidth: '12rem',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title={win.door_labels.join(', ')}
+                              >
+                                {win.door_labels && win.door_labels.length > 0
+                                  ? win.door_labels.join(', ')
+                                  : <span className="badge badge-neutral" style={{ opacity: 0.75 }}>Unmapped</span>}
+                              </div>
+                            </td>
+                            <td>
+                              <span className={`badge ${statusBadgeClass(win.status)}`}>
+                                {win.status}
+                              </span>
+                            </td>
+                          </tr>
+
+                          {/* Expanded Per-Door Timing Breakdown Sub-row */}
+                          {isExpanded && hasDoors && (
+                            <tr style={{ background: 'var(--color-bg-elevated, rgba(255,255,255,0.03))' }}>
+                              <td colSpan={7} style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid var(--color-border)' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                    <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                                      🚪 Individual Door Schedules for this Window
+                                    </span>
+                                    {hasDoorTimings && (
+                                      <span className="badge badge-info" style={{ fontSize: '0.6875rem' }}>
+                                        Custom Per-Door Schedule Active
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div style={{ overflowX: 'auto' }}>
+                                    <table style={{ width: '100%', fontSize: '0.8125rem', borderCollapse: 'collapse' }}>
+                                      <thead>
+                                        <tr style={{ borderBottom: '1px solid var(--color-border)', color: 'var(--color-text-muted)', textAlign: 'left' }}>
+                                          <th style={{ padding: '0.35rem 0.5rem', fontWeight: 600 }}>Door</th>
+                                          <th style={{ padding: '0.35rem 0.5rem', fontWeight: 600 }}>Unlock Time</th>
+                                          <th style={{ padding: '0.35rem 0.5rem', fontWeight: 600 }}>Lock Time</th>
+                                          <th style={{ padding: '0.35rem 0.5rem', fontWeight: 600 }}>Timing Rule / Mode</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {win.door_ids.map((doorId, idx) => {
+                                          const doorLabel = win.door_labels?.[idx] || (doorId.length > 8 ? `Door ${doorId.slice(0, 8)}` : doorId);
+                                          const timing = win.door_timings?.[doorId];
+                                          const doorUnlockAt = timing?.unlock_at || win.unlock_at;
+                                          const doorLockAt = timing?.lock_at || win.lock_at;
+                                          const mode = timing?.lock_timing_mode || win.lock_timing_mode || 'after_end';
+                                          const lockOffset = timing?.lock_offset_min;
+                                          const unlockOffset = timing?.unlock_offset_min;
+
+                                          let modeLabel = 'Mapping Default';
+                                          if (timing) {
+                                            if (mode === 'after_start') {
+                                              modeLabel = lockOffset === 0
+                                                ? '🔒 Locks at service start'
+                                                : `🛡️ Security (+${lockOffset ?? 15}m after start)`;
+                                            } else {
+                                              modeLabel = lockOffset === 0
+                                                ? '🚪 Open entire service'
+                                                : `🕒 Standard (+${lockOffset ?? 15}m after end)`;
+                                            }
+                                          }
+
+                                          return (
+                                            <tr key={doorId} style={{ borderBottom: '1px dashed var(--color-border)' }}>
+                                              <td style={{ padding: '0.35rem 0.5rem', fontWeight: 500, color: 'var(--color-text-primary)' }}>
+                                                {doorLabel}
+                                              </td>
+                                              <td style={{ padding: '0.35rem 0.5rem', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                                                {formatWindowTime(doorUnlockAt, timezone)}
+                                                {unlockOffset !== undefined && (
+                                                  <span style={{ fontSize: '0.6875rem', opacity: 0.7, marginLeft: '0.35rem' }}>
+                                                    (-{unlockOffset}m)
+                                                  </span>
+                                                )}
+                                              </td>
+                                              <td style={{ padding: '0.35rem 0.5rem', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                                                {formatWindowTimeShort(doorLockAt, timezone)}
+                                                {lockOffset !== undefined && (
+                                                  <span style={{ fontSize: '0.6875rem', opacity: 0.7, marginLeft: '0.35rem' }}>
+                                                    (+{lockOffset}m)
+                                                  </span>
+                                                )}
+                                              </td>
+                                              <td style={{ padding: '0.35rem 0.5rem' }}>
+                                                <span
+                                                  className={`badge ${timing ? 'badge-info' : 'badge-neutral'}`}
+                                                  style={{ fontSize: '0.6875rem' }}
+                                                >
+                                                  {modeLabel}
+                                                </span>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 )}
               </table>

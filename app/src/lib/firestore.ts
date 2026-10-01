@@ -487,10 +487,11 @@ export async function assignOneTimeScheduleWindowDoors(
     unlock_offset_min?: number;
     lock_offset_min?: number;
     lock_timing_mode?: 'after_end' | 'after_start';
+    door_timings?: Record<string, DoorTimingConfig>;
   }
 ): Promise<void> {
   const windowRef = doc(db, 'organizations', orgId, 'schedule_windows', windowId);
-  await updateDoc(windowRef, {
+  const payload: any = {
     door_ids: doorsData.door_ids,
     door_labels: doorsData.door_labels,
     unlock_offset_min: doorsData.unlock_offset_min,
@@ -498,7 +499,11 @@ export async function assignOneTimeScheduleWindowDoors(
     lock_timing_mode: doorsData.lock_timing_mode,
     review_status: 'mapped',
     updated_at: serverTimestamp(),
-  });
+  };
+  if (doorsData.door_timings && Object.keys(doorsData.door_timings).length > 0) {
+    payload.door_timings = doorsData.door_timings;
+  }
+  await updateDoc(windowRef, payload);
 }
 
 // ─── Door Commands ────────────────────────────────────────────────────────────

@@ -204,6 +204,8 @@ export interface ScheduleWindow {
   org_id: string;
   source_type: MappingSourceType;
   source_label: string;       // e.g. "Sunday Morning Service"
+  time_type?: PlanTimeType;   // 'service' | 'rehearsal' | 'other'
+  time_type_name?: string | null; // e.g. "Band Rehearsal" or "Sunday Service"
   pco_plan_id?: string;
   pco_event_id?: string;
   pco_service_type_id?: string;

@@ -18,6 +18,7 @@ import type {
   MappingSourceType,
   PlanTimeType,
   LockTimingMode,
+  DoorTimingConfig,
 } from '@/lib/types';
 import { format } from 'date-fns';
 import { safeIsPast, safeFormatDistanceToNow } from '@/lib/date-utils';
@@ -156,6 +157,7 @@ export function UnmappedEventsTab() {
   const [unlockOffsetMin, setUnlockOffsetMin] = useState<number>(15);
   const [lockOffsetMin, setLockOffsetMin] = useState<number>(15);
   const [lockTimingMode, setLockTimingMode] = useState<LockTimingMode>('after_end');
+  const [doorTimings, setDoorTimings] = useState<Record<string, DoorTimingConfig>>({});
   const [timeTypes, setTimeTypes] = useState<PlanTimeType[]>(['service']);
   const [savingMapping, setSavingMapping] = useState<boolean>(false);
 
@@ -302,7 +304,9 @@ export function UnmappedEventsTab() {
     setUnlockOffsetMin(15);
     setLockOffsetMin(15);
     setLockTimingMode('after_end');
-    setTimeTypes(['service']);
+    setDoorTimings(win.door_timings ? JSON.parse(JSON.stringify(win.door_timings)) : {});
+    const isRehearsal = win.time_type === 'rehearsal' || win.source_label.toLowerCase().includes('(rehearsal)');
+    setTimeTypes([win.time_type || (isRehearsal ? 'rehearsal' : 'service')]);
   };
 
   // Save Mapping (One-Time or Recurring)
@@ -318,6 +322,18 @@ export function UnmappedEventsTab() {
       (id) => doors.find((d) => d.id === id || d.unifi_door_id === id)?.label || id
     );
 
+    // Clean per-door timings for only selected doors
+    const cleanedDoorTimings: Record<string, DoorTimingConfig> = {};
+    for (const dId of selectedDoorIds) {
+      if (doorTimings[dId]) {
+        cleanedDoorTimings[dId] = {
+          lock_timing_mode: doorTimings[dId].lock_timing_mode,
+          lock_offset_min: doorTimings[dId].lock_offset_min,
+          unlock_offset_min: doorTimings[dId].unlock_offset_min,
+        };
+      }
+    }
+
     try {
       if (mappingMode === 'one_time') {
         // Assign doors specifically to this one-time window
@@ -327,6 +343,7 @@ export function UnmappedEventsTab() {
           unlock_offset_min: unlockOffsetMin,
           lock_offset_min: lockOffsetMin,
           lock_timing_mode: lockTimingMode,
+          door_timings: Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined,
         });
 
         showToast('Doors assigned to event window successfully.', 'success');
@@ -352,6 +369,7 @@ export function UnmappedEventsTab() {
           unlock_offset_min: unlockOffsetMin,
           lock_offset_min: lockOffsetMin,
           lock_timing_mode: lockTimingMode,
+          door_timings: Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined,
           enabled: true,
         });
 
@@ -632,33 +650,77 @@ export function UnmappedEventsTab() {
                         </td>
                       )}
 
-                      <td style={{ padding: '0.75rem 1rem', whiteSpace: 'nowrap' }}>
-                        <span className={`badge ${win.source_type === 'service' ? 'badge-info' : 'badge-neutral'}`}>
-                          {win.source_type === 'service' ? 'Service' : 'Group'}
-                        </span>
-                      </td>
+                      {(() => {
+                        const isRehearsal = win.time_type === 'rehearsal' || win.source_label.toLowerCase().includes('(rehearsal)');
+                        const isServiceTime = win.time_type === 'service' || win.source_label.toLowerCase().includes('(service)');
 
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                          {win.source_label}
-                        </div>
-                        {win.dismissed_reason && (
-                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.125rem' }}>
-                            Dismissed note: <em>{win.dismissed_reason}</em>
-                          </div>
-                        )}
-                      </td>
+                        return (
+                          <>
+                            <td style={{ padding: '0.75rem 1rem', whiteSpace: 'nowrap' }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-start' }}>
+                                <span className={`badge ${win.source_type === 'service' ? 'badge-info' : 'badge-neutral'}`}>
+                                  {win.source_type === 'service' ? 'Service' : 'Group'}
+                                </span>
+                                {isRehearsal && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.6875rem',
+                                      padding: '0.125rem 0.375rem',
+                                      borderRadius: 'var(--radius-sm)',
+                                      background: 'rgba(139, 92, 246, 0.15)',
+                                      color: '#8b5cf6',
+                                      border: '1px solid rgba(139, 92, 246, 0.3)',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    Rehearsal
+                                  </span>
+                                )}
+                                {isServiceTime && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.6875rem',
+                                      padding: '0.125rem 0.375rem',
+                                      borderRadius: 'var(--radius-sm)',
+                                      background: 'rgba(34, 197, 94, 0.15)',
+                                      color: 'var(--color-success)',
+                                      border: '1px solid rgba(34, 197, 94, 0.3)',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    Service Time
+                                  </span>
+                                )}
+                              </div>
+                            </td>
 
-                      <td style={{ padding: '0.75rem 1rem', whiteSpace: 'nowrap' }}>
-                        <div style={{ color: 'var(--color-text-primary)' }}>
-                          {formatWindowTime(win.starts_at, timezone)}
-                        </div>
-                        {urgent && (
-                          <span className="badge badge-danger" style={{ fontSize: '0.6875rem', marginTop: '0.25rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                            <AlertTriangleIcon color="currentColor" /> Starts in &lt; 48h
-                          </span>
-                        )}
-                      </td>
+                            <td style={{ padding: '0.75rem 1rem' }}>
+                              <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                                {win.source_label}
+                              </div>
+                              {win.dismissed_reason && (
+                                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.125rem' }}>
+                                  Dismissed note: <em>{win.dismissed_reason}</em>
+                                </div>
+                              )}
+                            </td>
+
+                            <td style={{ padding: '0.75rem 1rem', whiteSpace: 'nowrap' }}>
+                              <div style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>
+                                {formatWindowTime(win.starts_at, timezone)}
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: isRehearsal ? '#8b5cf6' : 'var(--color-text-muted)', marginTop: '0.15rem', fontWeight: isRehearsal ? 500 : 400 }}>
+                                {isRehearsal ? '🎵 Rehearsal Time' : isServiceTime ? '⛪ Service Time' : 'Event Time'}
+                              </div>
+                              {urgent && (
+                                <span className="badge badge-danger" style={{ fontSize: '0.6875rem', marginTop: '0.25rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                  <AlertTriangleIcon color="currentColor" /> Starts in &lt; 48h
+                                </span>
+                              )}
+                            </td>
+                          </>
+                        );
+                      })()}
 
                       <td style={{ padding: '0.75rem 1rem', whiteSpace: 'nowrap' }}>
                         {win.door_labels && win.door_labels.length > 0 ? (
@@ -782,15 +844,15 @@ export function UnmappedEventsTab() {
             {/* Mode selection */}
             <div className="form-group">
               <label className="form-label" style={{ fontWeight: 600 }}>Mapping Scope</label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(13rem, 1fr))', gap: '0.75rem' }}>
                 <button
                   type="button"
                   className={`btn ${mappingMode === 'one_time' ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => setMappingMode('one_time')}
-                  style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.75rem' }}
+                  style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.75rem', height: 'auto', whiteSpace: 'normal' }}
                 >
                   <span style={{ fontWeight: 600 }}>One-Time Override</span>
-                  <span style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: '0.25rem' }}>
+                  <span style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: '0.25rem', lineHeight: 1.3 }}>
                     Assign doors only for this specific event instance.
                   </span>
                 </button>
@@ -799,15 +861,58 @@ export function UnmappedEventsTab() {
                   type="button"
                   className={`btn ${mappingMode === 'recurring' ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => setMappingMode('recurring')}
-                  style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.75rem' }}
+                  style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.75rem', height: 'auto', whiteSpace: 'normal' }}
                 >
                   <span style={{ fontWeight: 600 }}>Recurring Mapping</span>
-                  <span style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: '0.25rem' }}>
+                  <span style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: '0.25rem', lineHeight: 1.3 }}>
                     Save mapping for all future instances of this {mappingModalWindow.source_type}.
                   </span>
                 </button>
               </div>
             </div>
+
+            {/* Time Types Checkboxes for recurring service mapping */}
+            {mappingModalWindow.source_type === 'service' && mappingMode === 'recurring' && (
+              <div className="form-group">
+                <label className="form-label" style={{ fontWeight: 600 }}>
+                  Which plan times should this mapping trigger for?
+                </label>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  {(['rehearsal', 'service', 'other'] as PlanTimeType[]).map((tt) => (
+                    <label
+                      key={tt}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.375rem',
+                        cursor: 'pointer',
+                        fontSize: '0.8125rem',
+                        padding: '0.375rem 0.625rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: `1px solid ${timeTypes.includes(tt) ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                        background: timeTypes.includes(tt) ? 'rgba(36, 101, 245, 0.1)' : 'transparent',
+                        fontWeight: timeTypes.includes(tt) ? 600 : 400,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={timeTypes.includes(tt)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setTimeTypes((prev) => [...prev, tt]);
+                          } else {
+                            setTimeTypes((prev) => prev.filter((t) => t !== tt));
+                          }
+                        }}
+                      />
+                      <span style={{ textTransform: 'capitalize' }}>
+                        {tt === 'service' ? 'Service Time' : tt === 'rehearsal' ? 'Rehearsal Time' : 'Other Times'}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Door Selection */}
             <div className="form-group">
@@ -819,12 +924,25 @@ export function UnmappedEventsTab() {
                   No doors configured. Please sync doors in Settings/Hardware first.
                 </div>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(12rem, 1fr))', gap: '0.5rem', maxHeight: '12rem', overflowY: 'auto', padding: '0.5rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 10.5rem), 1fr))',
+                    gap: '0.5rem',
+                    maxHeight: '12rem',
+                    overflowY: 'auto',
+                    padding: '0.5rem',
+                    background: 'var(--color-bg-base)',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                  }}
+                >
                   {doors.map((d) => {
                     const checked = selectedDoorIds.includes(d.id) || selectedDoorIds.includes(d.unifi_door_id);
                     return (
                       <label
                         key={d.id}
+                        title={d.label}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -834,11 +952,13 @@ export function UnmappedEventsTab() {
                           background: checked ? 'rgba(36, 101, 245, 0.1)' : 'transparent',
                           cursor: 'pointer',
                           fontSize: '0.875rem',
+                          minWidth: 0,
                         }}
                       >
                         <input
                           type="checkbox"
                           checked={checked}
+                          style={{ flexShrink: 0 }}
                           onChange={(e) => {
                             const doorId = d.id;
                             if (e.target.checked) {
@@ -848,7 +968,16 @@ export function UnmappedEventsTab() {
                             }
                           }}
                         />
-                        <span>{d.label}</span>
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            minWidth: 0,
+                          }}
+                        >
+                          {d.label}
+                        </span>
                       </label>
                     );
                   })}
@@ -857,7 +986,7 @@ export function UnmappedEventsTab() {
             </div>
 
             {/* Offsets & Timing */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(10rem, 1fr))', gap: '1rem' }}>
               <div className="form-group">
                 <label className="form-label">Unlock Buffer Before Start</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -869,12 +998,14 @@ export function UnmappedEventsTab() {
                     min={0}
                     max={120}
                   />
-                  <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>min</span>
+                  <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', flexShrink: 0 }}>min</span>
                 </div>
               </div>
 
               <div className="form-group">
-                <label className="form-label">Lock Buffer After Event</label>
+                <label className="form-label">
+                  {lockTimingMode === 'after_start' ? 'Lock After Start' : 'Lock After End'}
+                </label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <input
                     type="number"
@@ -884,10 +1015,230 @@ export function UnmappedEventsTab() {
                     min={0}
                     max={120}
                   />
-                  <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>min</span>
+                  <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', flexShrink: 0 }}>min</span>
                 </div>
               </div>
             </div>
+
+            {/* Per-Door Timing Overrides (Optional) */}
+            {selectedDoorIds.length > 0 && (
+              <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.875rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <label className="form-label" style={{ marginBottom: 0, fontWeight: 600 }}>
+                    Per-Door Timing Overrides (Optional)
+                  </label>
+                  {Object.keys(doorTimings).length > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem', color: 'var(--color-text-muted)' }}
+                      onClick={() => setDoorTimings({})}
+                    >
+                      Reset All to Default
+                    </button>
+                  )}
+                </div>
+                <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
+                  Set different lock/unlock times per door (e.g. main door open entire service, side doors locked at start).
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '14rem', overflowY: 'auto' }}>
+                  {selectedDoorIds.map((dId) => {
+                    const doorObj = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
+                    const doorLabel = doorObj?.label || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId);
+                    const isCustom = doorTimings[dId] !== undefined;
+                    const dTiming = doorTimings[dId] || {};
+                    const dMode = dTiming.lock_timing_mode ?? 'after_start';
+                    const dUnlock = dTiming.unlock_offset_min ?? unlockOffsetMin;
+                    const dLock = dTiming.lock_offset_min ?? 15;
+
+                    return (
+                      <div
+                        key={dId}
+                        style={{
+                          padding: '0.625rem 0.75rem',
+                          background: 'var(--color-bg-base)',
+                          border: `1px solid ${isCustom ? 'rgba(36, 101, 245, 0.4)' : 'var(--color-border)'}`,
+                          borderRadius: 'var(--radius-sm)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.5rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--color-text-primary)' }}>
+                              {doorLabel}
+                            </span>
+                            <span className={`badge ${isCustom ? 'badge-info' : 'badge-neutral'}`} style={{ fontSize: '0.625rem' }}>
+                              {isCustom ? 'Custom' : 'Default'}
+                            </span>
+                          </div>
+                          <div>
+                            {isCustom ? (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.35rem' }}
+                                onClick={() => {
+                                  const next = { ...doorTimings };
+                                  delete next[dId];
+                                  setDoorTimings(next);
+                                }}
+                              >
+                                ↩️ Reset
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.35rem' }}
+                                onClick={() => {
+                                  setDoorTimings((prev) => ({
+                                    ...prev,
+                                    [dId]: {
+                                      lock_timing_mode: 'after_start',
+                                      lock_offset_min: 15,
+                                      unlock_offset_min: unlockOffsetMin,
+                                    },
+                                  }));
+                                }}
+                              >
+                                ⚙️ Customize
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {isCustom && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            {/* Mode Selection */}
+                            <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                className={`btn btn-sm ${dMode === 'after_start' ? 'btn-primary' : 'btn-secondary'}`}
+                                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem' }}
+                                onClick={() => {
+                                  setDoorTimings((prev) => ({
+                                    ...prev,
+                                    [dId]: { ...prev[dId], lock_timing_mode: 'after_start' },
+                                  }));
+                                }}
+                              >
+                                🛡️ Security (after start)
+                              </button>
+                              <button
+                                type="button"
+                                className={`btn btn-sm ${dMode === 'after_end' ? 'btn-primary' : 'btn-secondary'}`}
+                                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem' }}
+                                onClick={() => {
+                                  setDoorTimings((prev) => ({
+                                    ...prev,
+                                    [dId]: { ...prev[dId], lock_timing_mode: 'after_end' },
+                                  }));
+                                }}
+                              >
+                                🕒 Standard (after end)
+                              </button>
+                            </div>
+
+                            {/* Presets */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '0.625rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Presets:</span>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)', background: 'rgba(36, 101, 245, 0.08)', color: 'var(--color-accent)' }}
+                                onClick={() => {
+                                  setDoorTimings((prev) => ({
+                                    ...prev,
+                                    [dId]: { lock_timing_mode: 'after_end', lock_offset_min: 0, unlock_offset_min: unlockOffsetMin },
+                                  }));
+                                }}
+                              >
+                                🚪 Open entire service
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
+                                onClick={() => {
+                                  setDoorTimings((prev) => ({
+                                    ...prev,
+                                    [dId]: { lock_timing_mode: 'after_start', lock_offset_min: 0, unlock_offset_min: 15 },
+                                  }));
+                                }}
+                              >
+                                🔒 Lock at start (0m)
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
+                                onClick={() => {
+                                  setDoorTimings((prev) => ({
+                                    ...prev,
+                                    [dId]: { lock_timing_mode: 'after_start', lock_offset_min: 15, unlock_offset_min: 15 },
+                                  }));
+                                }}
+                              >
+                                🔒 Lock 15m after start
+                              </button>
+                            </div>
+
+                            {/* Sliders */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.2rem' }}>
+                              <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem' }}>
+                                  <span>Unlock before:</span>
+                                  <strong style={{ color: 'var(--color-accent)' }}>{dUnlock}m</strong>
+                                </div>
+                                <input
+                                  type="range"
+                                  className="form-range"
+                                  min="0"
+                                  max="60"
+                                  step="5"
+                                  value={dUnlock}
+                                  onChange={(e) => {
+                                    const val = Number(e.target.value);
+                                    setDoorTimings((prev) => ({
+                                      ...prev,
+                                      [dId]: { ...prev[dId], unlock_offset_min: val },
+                                    }));
+                                  }}
+                                />
+                              </div>
+                              <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem' }}>
+                                  <span>{dMode === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
+                                  <strong style={{ color: 'var(--color-accent)' }}>{dLock}m</strong>
+                                </div>
+                                <input
+                                  type="range"
+                                  className="form-range"
+                                  min="0"
+                                  max={dMode === 'after_start' ? '120' : '60'}
+                                  step="5"
+                                  value={dLock}
+                                  onChange={(e) => {
+                                    const val = Number(e.target.value);
+                                    setDoorTimings((prev) => ({
+                                      ...prev,
+                                      [dId]: { ...prev[dId], lock_offset_min: val },
+                                    }));
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </Modal>
       )}

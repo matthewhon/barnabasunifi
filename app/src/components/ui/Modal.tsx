@@ -93,18 +93,26 @@ export default function Modal({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            gap: '0.75rem',
             padding: '1.25rem 1.5rem',
             borderBottom: '1px solid var(--color-border)',
             flexShrink: 0,
+            minWidth: 0,
           }}
         >
           <h2
             id="modal-title"
+            title={title}
             style={{
               fontSize: '1rem',
               fontWeight: 700,
               color: 'var(--color-text-primary)',
               margin: 0,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              minWidth: 0,
+              flex: 1,
             }}
           >
             {title}
@@ -124,6 +132,7 @@ export default function Modal({
               justifyContent: 'center',
               transition: 'color var(--transition-fast)',
               lineHeight: 0,
+              flexShrink: 0,
             }}
             onMouseEnter={(e) => {
               (e.currentTarget as HTMLButtonElement).style.color = 'var(--color-text-primary)';

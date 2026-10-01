@@ -573,16 +573,31 @@ function ActiveMappingCard({
                         }}
                       >
                         {door.doorLockMode === 'after_start'
-                          ? `🛡️ Locks +${door.doorLockMin}m after start`
-                          : `🕒 Locks +${door.doorLockMin}m after end`}
+                          ? door.doorLockMin === 0
+                            ? `🔒 Locks at start (-${door.doorUnlockMin}m unlock)`
+                            : `🛡️ Locks +${door.doorLockMin}m after start (-${door.doorUnlockMin}m unlock)`
+                          : door.doorLockMin === 0
+                          ? `🚪 Open entire service (-${door.doorUnlockMin}m unlock)`
+                          : `🕒 Locks +${door.doorLockMin}m after end (-${door.doorUnlockMin}m unlock)`}
                       </span>
                     </div>
                   </div>
+                  {onEditTiming && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ padding: '0.15rem 0.35rem', height: 'auto', fontSize: '0.6875rem', opacity: 0.7 }}
+                      onClick={() => onEditTiming(mapping)}
+                      title={`Configure timing override for ${door.label}`}
+                    >
+                      ⚙️
+                    </button>
+                  )}
                   <span
                     className={`badge ${
                       isUnlocked ? 'badge-success' : isLocked ? 'badge-danger' : 'badge-neutral'
                     }`}
-                    style={{ fontSize: '0.6875rem', marginLeft: 'auto' }}
+                    style={{ fontSize: '0.6875rem', marginLeft: onEditTiming ? '0.25rem' : 'auto' }}
                   >
                     {door.isHeld ? 'Held Open' : door.state}
                   </span>
@@ -1234,6 +1249,24 @@ function EditTimingModal({
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
+                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.45rem', border: '1px solid var(--color-border)', background: 'rgba(36, 101, 245, 0.08)', color: 'var(--color-accent)' }}
+                            title="Keeps this door unlocked for the entire service (unlocks before, locks when service ends)"
+                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 0, unlock_offset_min: effectiveDefaultUnlock })}
+                          >
+                            🚪 Open entire service
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
+                            title="Unlocks before service and locks exactly when service starts"
+                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 0, unlock_offset_min: 15 })}
+                          >
+                            🔒 Lock at service start (0m)
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
                             style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
                             onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 10 })}
                           >
@@ -1269,7 +1302,7 @@ function EditTimingModal({
                             style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
                             onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 0 })}
                           >
-                            🕒 Lock at service end (0m)
+                            🕒 Lock at end (0m)
                           </button>
                         </div>
 
@@ -2415,6 +2448,44 @@ function AddMappingModal({
                               onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end' })}
                             >
                               🕒 Standard Mode (after end)
+                            </button>
+                          </div>
+
+                          {/* Quick Presets */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Presets:</span>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)', background: 'rgba(36, 101, 245, 0.08)', color: 'var(--color-accent)' }}
+                              title="Keeps this door unlocked for the entire service"
+                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 0, unlock_offset_min: effectiveDefaultUnlock })}
+                            >
+                              🚪 Open entire service
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
+                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 0, unlock_offset_min: 15 })}
+                            >
+                              🔒 Lock at start (0m)
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
+                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 15 })}
+                            >
+                              🔒 Lock 15m after start
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
+                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 15 })}
+                            >
+                              🕒 Lock 15m after end
                             </button>
                           </div>
 
