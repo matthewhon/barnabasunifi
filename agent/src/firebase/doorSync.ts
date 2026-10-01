@@ -130,6 +130,17 @@ export async function syncDoors(
           : `${label} Unlock Schedule`;
     }
 
+    const unifiThumbnail =
+      (door as any).thumbnail_url ||
+      (door as any).thumbnail ||
+      (door as any).avatar ||
+      (door as any).cover_image ||
+      (door as any).picture ||
+      null;
+    if (unifiThumbnail && typeof unifiThumbnail === 'string') {
+      record.unifi_thumbnail_url = unifiThumbnail;
+    }
+
     // set with merge:true so we don't overwrite fields managed by the web app or schedule sync
     batch.set(doorRef, record, { merge: true });
   }

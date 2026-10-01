@@ -41,6 +41,7 @@ import type {
 } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import AccessPolicyModal from '@/components/policies/AccessPolicyModal';
+import { UnmappedEventsTab } from '@/components/events/UnmappedEventsTab';
 import { safeFormat, safeFormatDistanceToNow, parseSafeDate } from '@/lib/date-utils';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -1613,7 +1614,7 @@ function AddMappingModal({
   const [step, setStep] = useState(1);
   const [selectedResourceId, setSelectedResourceId] = useState('');
   const [selectedDoorIds, setSelectedDoorIds] = useState<string[]>([]);
-  const [timeTypes, setTimeTypes] = useState<PlanTimeType[]>(['service']);
+  const [timeTypes, setTimeTypes] = useState<PlanTimeType[]>(['service', 'rehearsal']);
   const [timingChoice, setTimingChoice] = useState<'default' | 'after_start' | 'after_end'>('default');
   const [customUnlockMin, setCustomUnlockMin] = useState(15);
   const [customLockMin, setCustomLockMin] = useState(15);
@@ -1663,7 +1664,7 @@ function AddMappingModal({
     setStep(1);
     setSelectedResourceId('');
     setSelectedDoorIds([]);
-    setTimeTypes(['service']);
+    setTimeTypes(['service', 'rehearsal']);
     setTimingChoice('default');
     setCustomUnlockMin(orgSettings?.unlock_buffer_before_min ?? 15);
     setCustomLockMin(15);
@@ -2525,7 +2526,7 @@ function AddMappingModal({
 export default function MappingsPage() {
   const { orgId } = useAuth();
 
-  const [tab, setTab] = useState<MappingSourceType | 'user_policy'>('service');
+  const [tab, setTab] = useState<MappingSourceType | 'user_policy' | 'unmapped'>('service');
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [policyMappings, setPolicyMappings] = useState<AccessPolicyMapping[]>([]);
   const [syncedUsers, setSyncedUsers] = useState<SyncedUser[]>([]);
@@ -2640,7 +2641,7 @@ export default function MappingsPage() {
 
   // Load PCO resources when tab changes or orgId changes
   const fetchPcoResources = useCallback(() => {
-    if (!orgId || tab === 'user_policy') return;
+    if (!orgId || tab === 'user_policy' || tab === 'unmapped') return;
     setPcoLoading(true);
     setPcoError(null);
     const getPcoResources = httpsCallable<
@@ -2687,7 +2688,9 @@ export default function MappingsPage() {
     }
   }, [tab, fetchPcoResources, fetchPcoLists]);
 
-  const filteredMappings = mappings.filter((m) => m.source_type === tab);
+  const filteredMappings = (tab !== 'user_policy' && tab !== 'unmapped')
+    ? mappings.filter((m) => m.source_type === tab)
+    : [];
 
   const handleToggle = useCallback(
     async (id: string, enabled: boolean) => {
@@ -2741,7 +2744,7 @@ export default function MappingsPage() {
       door_timings?: Record<string, DoorTimingConfig>;
       enabled: boolean;
     }) => {
-      if (!orgId || tab === 'user_policy') return;
+      if (!orgId || tab === 'user_policy' || tab === 'unmapped') return;
       setSaving(true);
       try {
         const id = await createMapping(orgId, {
@@ -2971,6 +2974,14 @@ export default function MappingsPage() {
     return nameMatch || emailMatch || listMatch || policyMatch;
   });
 
+  // Compute unmapped count for badge display on the Unmapped Events tab
+  const unmappedCount = scheduleWindows.filter((w) => {
+    if (w.status === 'cancelled') return false;
+    const lockAt = w.lock_at ? new Date(w.lock_at) : null;
+    if (lockAt && lockAt < new Date()) return false;
+    return (!w.door_ids || w.door_ids.length === 0) && w.review_status !== 'dismissed';
+  }).length;
+
   return (
     <div>
       {/* Header */}
@@ -2991,7 +3002,7 @@ export default function MappingsPage() {
               Add List Mapping
             </button>
           </div>
-        ) : (
+        ) : tab === 'unmapped' ? null : (
           <button className="btn btn-primary btn-sm" onClick={() => setModalOpen(true)}>
             <PlusIcon />
             Add Mapping
@@ -3025,7 +3036,27 @@ export default function MappingsPage() {
         >
           Lists & Users
         </button>
+        <button
+          className={`tab ${tab === 'unmapped' ? 'active' : ''}`}
+          onClick={() => setTab('unmapped')}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}
+        >
+          Unmapped Events
+          {unmappedCount > 0 && (
+            <span
+              className="badge badge-warning"
+              style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem', borderRadius: '1rem', fontWeight: 700 }}
+            >
+              {unmappedCount}
+            </span>
+          )}
+        </button>
       </div>
+
+      {/* ─── TAB: Unmapped Events ─── */}
+      {tab === 'unmapped' && (
+        <UnmappedEventsTab />
+      )}
 
       {/* ─── TAB: Lists & Users ─── */}
       {tab === 'user_policy' && (
@@ -3309,7 +3340,7 @@ export default function MappingsPage() {
       )}
 
       {/* ─── TABS: Services / Groups ─── */}
-      {tab !== 'user_policy' && (
+      {tab !== 'user_policy' && tab !== 'unmapped' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.9fr', gap: '1.5rem', alignItems: 'start' }}>
           {/* Left panel: PCO resources & Pulled Times */}
           <div className="card" style={{ padding: '1.25rem' }}>
@@ -3512,7 +3543,7 @@ export default function MappingsPage() {
       <AddMappingModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        sourceType={tab === 'user_policy' ? 'service' : tab}
+        sourceType={(tab === 'user_policy' || tab === 'unmapped') ? 'service' : tab}
         pcoResources={pcoResources}
         doors={doors}
         pcoError={pcoError}

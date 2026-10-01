@@ -178,6 +178,9 @@ export interface Door {
   last_accessed_by?: string | null;
   last_access_method?: string | null;
   last_access_method_label?: string | null;
+  image_url?: string | null;
+  unifi_thumbnail_url?: string | null;
+  image_source?: 'unifi' | 'upload' | 'custom_url' | null;
   last_synced: string; // ISO8601
 }
 

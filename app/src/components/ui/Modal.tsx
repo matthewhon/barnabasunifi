@@ -73,6 +73,7 @@ export default function Modal({
     >
       <div
         ref={contentRef}
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',
           maxWidth,

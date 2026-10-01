@@ -79,17 +79,31 @@ export default function VisitorModal({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const prevIsOpenRef = React.useRef(false);
+  const prevVisitorIdRef = React.useRef<string | undefined>(undefined);
+
   const isUuid = (str: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 
-  const validDoors = doors.filter((d) => {
-    const label = (d.label || '').trim();
-    if (!label) return false;
-    if (isUuid(label) && d.current_state === 'unknown') return false;
-    return true;
-  });
+  const validDoors = React.useMemo(() => {
+    return doors.filter((d) => {
+      const label = (d.label || '').trim();
+      if (!label) return false;
+      if (isUuid(label) && d.current_state === 'unknown') return false;
+      return true;
+    });
+  }, [doors]);
 
   useEffect(() => {
+    const justOpened = isOpen && !prevIsOpenRef.current;
+    const visitorChanged = visitor?.id !== prevVisitorIdRef.current;
+
+    prevIsOpenRef.current = isOpen;
+    prevVisitorIdRef.current = visitor?.id;
+
+    if (!isOpen) return;
+    if (!justOpened && !visitorChanged) return;
+
     if (visitor) {
       setFirstName(typeof visitor.first_name === 'string' ? visitor.first_name : '');
       setLastName(typeof visitor.last_name === 'string' ? visitor.last_name : '');
@@ -119,7 +133,7 @@ export default function VisitorModal({
       setEndTime(toLocalDatetimeInputString(addHours(roundedNow, 2)));
     }
     setError(null);
-  }, [visitor, doors, isOpen]);
+  }, [isOpen, visitor?.id]); // Only initialize when modal opens or edited visitor changes
 
   const handleDoorToggle = (doorId: string) => {
     setSelectedDoorIds((prev) =>
@@ -128,10 +142,10 @@ export default function VisitorModal({
   };
 
   const handleSelectAllDoors = () => {
-    if (selectedDoorIds.length === doors.length) {
+    if (selectedDoorIds.length === validDoors.length) {
       setSelectedDoorIds([]);
     } else {
-      setSelectedDoorIds(doors.map((d) => d.unifi_door_id || d.id));
+      setSelectedDoorIds(validDoors.map((d) => d.unifi_door_id || d.id));
     }
   };
 

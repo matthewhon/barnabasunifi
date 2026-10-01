@@ -17,7 +17,8 @@ import {
   Unsubscribe,
   QueryConstraint,
 } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { db, storage } from '@/lib/firebase';
 import type {
   Organization,
   OrgSettings,
@@ -297,6 +298,63 @@ export async function updateDoorCampusLocation(
     updated_at: serverTimestamp(),
   });
 }
+
+/**
+ * Upload a custom door picture to Firebase Storage and update the door doc.
+ */
+export async function uploadDoorPhoto(
+  orgId: string,
+  doorId: string,
+  file: File | Blob
+): Promise<string> {
+  const fileExt = (file as File).name ? (file as File).name.split('.').pop() || 'jpg' : 'jpg';
+  const filePath = `organizations/${orgId}/doors/${doorId}/photo_${Date.now()}.${fileExt}`;
+  const fileRef = storageRef(storage, filePath);
+
+  await uploadBytes(fileRef, file, {
+    contentType: file.type || 'image/jpeg',
+  });
+
+  const downloadUrl = await getDownloadURL(fileRef);
+
+  const doorRef = doc(db, 'organizations', orgId, 'doors', doorId);
+  await updateDoc(doorRef, {
+    image_url: downloadUrl,
+    image_source: 'upload',
+    updated_at: serverTimestamp(),
+  });
+
+  return downloadUrl;
+}
+
+/**
+ * Update door image URL directly (e.g. custom image URL)
+ */
+export async function updateDoorImageUrl(
+  orgId: string,
+  doorId: string,
+  imageUrl: string | null
+): Promise<void> {
+  const doorRef = doc(db, 'organizations', orgId, 'doors', doorId);
+  await updateDoc(doorRef, {
+    image_url: imageUrl,
+    image_source: imageUrl ? 'custom_url' : null,
+    updated_at: serverTimestamp(),
+  });
+}
+
+/**
+ * Remove custom door picture, allowing fallback to UniFi-synced thumbnail if present.
+ */
+export async function removeDoorPhoto(orgId: string, doorId: string): Promise<void> {
+  const doorRef = doc(db, 'organizations', orgId, 'doors', doorId);
+  await updateDoc(doorRef, {
+    image_url: deleteField(),
+    image_source: deleteField(),
+    updated_at: serverTimestamp(),
+  });
+}
+
 
 // ─── Campuses & Locations ───────────────────────────────────────────────────
 

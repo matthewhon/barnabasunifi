@@ -15,6 +15,7 @@ interface NavItem {
   badge?: React.ReactNode;
   adminOnly?: boolean;
   superAdminOnly?: boolean;
+  indent?: boolean;
 }
 
 function HouseIcon() {
@@ -189,14 +190,17 @@ function NavLink({ item, pathname, onClick }: { item: NavItem; pathname: string;
         alignItems: 'center',
         gap: '0.625rem',
         padding: '0.5rem 0.75rem',
-        borderRadius: 'var(--radius-md)',
-        fontSize: '0.875rem',
+        paddingLeft: item.indent ? '2rem' : '0.75rem',
+        fontSize: item.indent ? '0.8125rem' : '0.875rem',
         fontWeight: isActive ? 600 : 400,
         color: isActive ? 'var(--color-accent)' : 'var(--color-text-secondary)',
         background: isActive ? 'rgba(36, 101, 245, 0.1)' : 'transparent',
         textDecoration: 'none',
         transition: 'all var(--transition-fast)',
         border: `1px solid ${isActive ? 'rgba(36,101,245,0.25)' : 'transparent'}`,
+        borderLeft: item.indent ? `2px solid ${isActive ? 'rgba(36,101,245,0.4)' : 'var(--color-border)'}` : `1px solid ${isActive ? 'rgba(36,101,245,0.25)' : 'transparent'}`,
+        marginLeft: item.indent ? '0.75rem' : '0',
+        borderRadius: item.indent ? '0 var(--radius-md) var(--radius-md) 0' : 'var(--radius-md)',
       }}
     >
       <span style={{ opacity: isActive ? 1 : 0.7 }}>{item.icon}</span>
@@ -304,24 +308,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       title: 'Planning Center',
       items: [
         { href: '/schedule', label: 'Schedules & Windows', icon: <CalendarIcon /> },
-        {
-          href: '/events/unmapped',
-          label: 'Unmapped Events',
-          icon: <CalendarIcon />,
-          badge: unmappedCount > 0 ? (
-            <span
-              className="badge badge-warning"
-              style={{
-                fontSize: '0.75rem',
-                padding: '0.1rem 0.45rem',
-                borderRadius: '1rem',
-                fontWeight: 700,
-              }}
-            >
-              {unmappedCount}
-            </span>
-          ) : undefined,
-        },
         { href: '/mappings', label: 'Mappings & Sync', icon: <LinkIcon /> },
       ],
     },

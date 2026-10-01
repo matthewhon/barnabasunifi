@@ -21,6 +21,7 @@ import type { Door, Agent, UnifiSchedule, ScheduleWindow, AgentRelease, PcoCampu
 import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
 import { getDoorUnlockStatus } from '@/lib/door-status-utils';
 import Modal from '@/components/ui/Modal';
+import DoorPhotoModal from '@/components/doors/DoorPhotoModal';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,15 @@ function MapPinIcon({ size = 14 }: { size?: number }) {
   );
 }
 
+function CameraIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </svg>
+  );
+}
+
 // ─── Door Card ────────────────────────────────────────────────────────────────
 
 interface DoorCardProps {
@@ -93,6 +103,7 @@ interface DoorCardProps {
   onUnlock: (door: Door) => void;
   onLock: (door: Door) => void;
   onEditCampusLocation?: (door: Door) => void;
+  onEditPhoto?: (door: Door) => void;
   selected?: boolean;
   onSelectToggle?: (door: Door) => void;
   actionLoading: boolean;
@@ -118,6 +129,7 @@ function DoorCard({
   onUnlock,
   onLock,
   onEditCampusLocation,
+  onEditPhoto,
   selected = false,
   onSelectToggle,
   actionLoading,
@@ -166,6 +178,9 @@ function DoorCard({
     ? 'rgba(245,158,11,0.05)'
     : 'rgba(34,197,94,0.03)';
 
+  // Active display image: Custom upload/URL takes priority, then UniFi thumbnail
+  const activeImage = door.image_url || door.unifi_thumbnail_url || null;
+
   return (
     <div
       className="card"
@@ -177,20 +192,160 @@ function DoorCard({
         flexDirection: 'column',
         gap: '0.875rem',
         position: 'relative',
+        overflow: 'hidden',
+        padding: 0,
       }}
     >
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.625rem', minWidth: 0, flex: 1 }}>
+      {/* Full-Width Header Image Banner */}
+      <div
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: '145px',
+          background: activeImage
+            ? '#0f172a'
+            : 'linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98))',
+          overflow: 'hidden',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {activeImage ? (
+          <img
+            src={activeImage}
+            alt={door.label}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              display: 'block',
+              transition: 'transform 0.4s ease',
+            }}
+            loading="lazy"
+          />
+        ) : (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--color-text-muted)',
+              opacity: 0.6,
+              userSelect: 'none',
+            }}
+          >
+            <div style={{ fontSize: '2.5rem', lineHeight: 1 }}>🚪</div>
+          </div>
+        )}
+
+        {/* Top Gradient & Selection / Status Overlays */}
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 40%, rgba(0,0,0,0.65) 100%)',
+            pointerEvents: 'none',
+          }}
+        />
+
+        {/* Top Left: Select Checkbox */}
+        <div style={{ position: 'absolute', top: '0.5rem', left: '0.625rem', zIndex: 2, display: 'flex', alignItems: 'center' }}>
           {onSelectToggle && (
             <input
               type="checkbox"
               checked={selected}
               onChange={() => onSelectToggle(door)}
-              style={{ marginTop: '0.2rem', cursor: 'pointer', flexShrink: 0 }}
+              style={{
+                cursor: 'pointer',
+                width: '1.05rem',
+                height: '1.05rem',
+                accentColor: 'var(--color-accent)',
+                filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.5))',
+              }}
               title="Select for batch campus/location mapping"
             />
           )}
+        </div>
+
+        {/* Top Right: Status Badge Floating on Image */}
+        <div style={{ position: 'absolute', top: '0.5rem', right: '0.625rem', zIndex: 2, display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+          <span
+            className={`badge ${
+              isUnknown
+                ? 'badge-neutral'
+                : isLocked
+                ? 'badge-danger'
+                : statusInfo.isOutsidePolicy
+                ? 'badge-warning'
+                : 'badge-success'
+            }`}
+            style={{
+              boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+              fontWeight: 600,
+              backdropFilter: 'blur(4px)',
+            }}
+          >
+            {isUnknown ? 'Unknown' : isLocked ? 'Locked' : 'Unlocked'}
+          </span>
+        </div>
+
+        {/* Bottom Left: Change Photo Action Trigger */}
+        {onEditPhoto && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => onEditPhoto(door)}
+            title={activeImage ? 'Change / Manage Door Photo' : 'Add Door Photo'}
+            style={{
+              position: 'absolute',
+              bottom: '0.45rem',
+              left: '0.625rem',
+              zIndex: 2,
+              padding: '0.2rem 0.45rem',
+              background: 'rgba(15, 23, 42, 0.75)',
+              backdropFilter: 'blur(4px)',
+              color: '#fff',
+              fontSize: '0.6875rem',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid rgba(255,255,255,0.2)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.3rem',
+              height: 'auto',
+            }}
+          >
+            <CameraIcon size={12} />
+            <span>{activeImage ? 'Edit Photo' : '+ Photo'}</span>
+          </button>
+        )}
+
+        {/* Bottom Right: Image Source Badge (if available) */}
+        {activeImage && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '0.45rem',
+              right: '0.625rem',
+              zIndex: 2,
+              fontSize: '0.625rem',
+              color: 'rgba(255,255,255,0.75)',
+              background: 'rgba(0,0,0,0.5)',
+              padding: '0.15rem 0.35rem',
+              borderRadius: 'var(--radius-sm)',
+              pointerEvents: 'none',
+            }}
+          >
+            {door.image_source === 'upload' ? 'Uploaded' : door.unifi_thumbnail_url ? 'UniFi' : 'Photo'}
+          </div>
+        )}
+      </div>
+
+      {/* Card Content Body */}
+      <div style={{ padding: '0 1rem 1rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.875rem', flex: 1 }}>
+        {/* Header Title Row */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
           <div style={{ minWidth: 0, flex: 1 }}>
             <h3
               style={{
@@ -200,6 +355,7 @@ function DoorCard({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
+                margin: 0,
               }}
             >
               {door.label}
@@ -210,33 +366,32 @@ function DoorCard({
                 : 'Never synced'}
             </div>
           </div>
-        </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexShrink: 0 }}>
-          {onEditCampusLocation && (
-            <button
-              className="btn btn-ghost btn-sm"
-              style={{ padding: '0.25rem 0.35rem', color: 'var(--color-text-muted)', fontSize: '0.75rem', height: 'auto' }}
-              onClick={() => onEditCampusLocation(door)}
-              title="Assign Campus & Location"
-            >
-              <MapPinIcon />
-            </button>
-          )}
-          <div style={{ marginTop: '0.125rem' }}>
-            {isUnknown ? (
-              <LockIcon color="var(--color-text-muted)" />
-            ) : isLocked ? (
-              <LockIcon color="var(--color-danger)" />
-            ) : (
-              <UnlockIcon color={statusInfo.isOutsidePolicy ? 'var(--color-warning)' : 'var(--color-success)'} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexShrink: 0 }}>
+            {onEditCampusLocation && (
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ padding: '0.25rem 0.35rem', color: 'var(--color-text-muted)', fontSize: '0.75rem', height: 'auto' }}
+                onClick={() => onEditCampusLocation(door)}
+                title="Assign Campus & Location"
+              >
+                <MapPinIcon />
+              </button>
             )}
+            <div style={{ marginTop: '0.125rem' }}>
+              {isUnknown ? (
+                <LockIcon color="var(--color-text-muted)" />
+              ) : isLocked ? (
+                <LockIcon color="var(--color-danger)" />
+              ) : (
+                <UnlockIcon color={statusInfo.isOutsidePolicy ? 'var(--color-warning)' : 'var(--color-success)'} />
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* State & Location badges */}
-      <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* State & Location badges */}
+        <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', alignItems: 'center' }}>
         <span
           className={`badge ${
             isUnknown
@@ -443,6 +598,7 @@ function DoorCard({
           <LockIcon size={14} color="currentColor" />
           Lock
         </button>
+      </div>
       </div>
     </div>
   );
@@ -777,6 +933,10 @@ export default function DoorsPage() {
   const [targetLocationId, setTargetLocationId] = useState<string>('');
   const [customLocationName, setCustomLocationName] = useState<string>('');
   const [assigning, setAssigning] = useState(false);
+
+  // Photo Management Modal
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [photoDoor, setPhotoDoor] = useState<Door | null>(null);
 
   // Sync states
   const [syncingDoors, setSyncingDoors] = useState(false);
@@ -1339,6 +1499,10 @@ export default function DoorsPage() {
               onUnlock={openUnlockModal}
               onLock={openLockModal}
               onEditCampusLocation={openAssignModalForSingle}
+              onEditPhoto={(d) => {
+                setPhotoDoor(d);
+                setPhotoModalOpen(true);
+              }}
               selected={selectedDoorIds.includes(door.id)}
               onSelectToggle={handleDoorSelectToggle}
               actionLoading={actionLoading}
@@ -1570,6 +1734,21 @@ export default function DoorsPage() {
           This will override any active schedule window. The action will be recorded in the audit log.
         </p>
       </Modal>
+
+      {/* Door Photo Management Modal */}
+      {orgId && (
+        <DoorPhotoModal
+          isOpen={photoModalOpen}
+          onClose={() => {
+            setPhotoModalOpen(false);
+            setPhotoDoor(null);
+          }}
+          door={photoDoor}
+          orgId={orgId}
+          onSuccess={(msg) => showFeedback(msg, 'success')}
+          onError={(err) => showFeedback(err, 'error')}
+        />
+      )}
 
       <style>{`
         @media (max-width: 900px) {

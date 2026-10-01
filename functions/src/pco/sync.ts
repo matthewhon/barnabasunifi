@@ -382,14 +382,11 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       const serviceTypeId = st.id;
       const serviceTypeName = (st.attributes?.name ?? 'Service') as string;
 
-      // Find matching enabled mapping if available
-      const mapping = serviceMappings.find(
+      // Find ALL enabled mappings for this service type — supports separate
+      // mappings for rehearsal vs service (each with different doors/timing).
+      const allMappingsForType = serviceMappings.filter(
         (m) => (m.pco_resource_id ?? m.service_type_id) === serviceTypeId
       );
-
-      const doorIds = mapping?.door_ids ?? [];
-      const doorLabels = mapping?.door_labels ?? [];
-      const enabledTimeTypes = mapping?.time_types ?? mapping?.enabled_time_types;
 
       let plans: PcoResource[];
       try {
@@ -420,14 +417,6 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
           const normalizedType = normalizePlanTimeType(attrs.time_type, attrs.name);
 
-          // Filter by enabled time_types if specified on mapping (e.g. rehearsal, service, other)
-          if (enabledTimeTypes && enabledTimeTypes.length > 0) {
-            const allowed = enabledTimeTypes.map((t) => normalizePlanTimeType(t));
-            if (!allowed.includes(normalizedType)) {
-              continue;
-            }
-          }
-
           if (!attrs.starts_at || !attrs.ends_at) continue;
 
           const startsAt = new Date(attrs.starts_at);
@@ -435,36 +424,81 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
           if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) continue;
 
-          const idempotencyKey = `service:${serviceTypeId}:plan:${planId}:time:${planTime.id}`;
           const planDetail = (plan.attributes?.title ?? plan.attributes?.series_title ?? plan.attributes?.dates) as string | undefined;
           const timeTypeLabel = attrs.name || (normalizedType === 'rehearsal' ? 'Rehearsal' : normalizedType === 'service' ? 'Service' : 'Other');
           const planTitle = planDetail ? `${serviceTypeName}: ${planDetail} (${timeTypeLabel})` : `${serviceTypeName} (${timeTypeLabel})`;
 
-          await upsertWindow(
-            idempotencyKey,
-            startsAt,
-            endsAt,
-            {
-              source: 'pco_service',
-              source_type: 'service',
-              source_label: planTitle,
-              time_type: normalizedType,
-              time_type_name: attrs.name || null,
-              pco_plan_id: planId,
-              pco_plan_time_id: planTime.id,
-              pco_service_type_id: serviceTypeId,
-              service_mapping_id: mapping?.id ?? null,
-              door_ids: doorIds,
-              door_labels: doorLabels,
-              status: 'pending',
-            },
-            {
-              unlock_offset_min: mapping?.unlock_offset_min,
-              lock_offset_min: mapping?.lock_offset_min,
-              lock_timing_mode: mapping?.lock_timing_mode,
-              door_timings: mapping?.door_timings,
+          // Find all mappings whose time_types include this plan time's type.
+          // A mapping with an empty/missing time_types array matches everything.
+          const applicableMappings = allMappingsForType.filter((m) => {
+            const enabledTimeTypes = m.time_types ?? m.enabled_time_types;
+            if (!enabledTimeTypes || enabledTimeTypes.length === 0) return true;
+            return enabledTimeTypes.map((t) => normalizePlanTimeType(t)).includes(normalizedType);
+          });
+
+          if (applicableMappings.length === 0) {
+            // No mapping covers this time type — create an unmapped window so it
+            // still appears in the schedule UI for review.
+            const idempotencyKey = `service:${serviceTypeId}:plan:${planId}:time:${planTime.id}`;
+            await upsertWindow(
+              idempotencyKey,
+              startsAt,
+              endsAt,
+              {
+                source: 'pco_service',
+                source_type: 'service',
+                source_label: planTitle,
+                time_type: normalizedType,
+                time_type_name: attrs.name || null,
+                pco_plan_id: planId,
+                pco_plan_time_id: planTime.id,
+                pco_service_type_id: serviceTypeId,
+                service_mapping_id: null,
+                door_ids: [],
+                door_labels: [],
+                status: 'pending',
+              },
+              {}
+            );
+          } else {
+            // When only one mapping applies, reuse the legacy key for backward
+            // compatibility with existing schedule_windows documents. When multiple
+            // mappings apply (e.g. a separate rehearsal mapping + service mapping),
+            // append the mapping ID so each gets its own independent window.
+            const useMultiKey = applicableMappings.length > 1;
+
+            for (const mapping of applicableMappings) {
+              const idempotencyKey = useMultiKey
+                ? `service:${serviceTypeId}:plan:${planId}:time:${planTime.id}:mapping:${mapping.id}`
+                : `service:${serviceTypeId}:plan:${planId}:time:${planTime.id}`;
+
+              await upsertWindow(
+                idempotencyKey,
+                startsAt,
+                endsAt,
+                {
+                  source: 'pco_service',
+                  source_type: 'service',
+                  source_label: planTitle,
+                  time_type: normalizedType,
+                  time_type_name: attrs.name || null,
+                  pco_plan_id: planId,
+                  pco_plan_time_id: planTime.id,
+                  pco_service_type_id: serviceTypeId,
+                  service_mapping_id: mapping.id ?? null,
+                  door_ids: mapping.door_ids ?? [],
+                  door_labels: mapping.door_labels ?? [],
+                  status: 'pending',
+                },
+                {
+                  unlock_offset_min: mapping.unlock_offset_min,
+                  lock_offset_min: mapping.lock_offset_min,
+                  lock_timing_mode: mapping.lock_timing_mode,
+                  door_timings: mapping.door_timings,
+                }
+              );
             }
-          );
+          }
         }
       }
     }

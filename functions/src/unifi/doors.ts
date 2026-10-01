@@ -159,6 +159,21 @@ export const syncUnifiDoors = onCall<{ orgId: string }>(
               : `${label} Unlock Schedule`;
         }
 
+        const unifiThumbnail =
+          door.thumbnail_url ||
+          door.thumbnail ||
+          door.avatar ||
+          door.cover_image ||
+          door.picture ||
+          null;
+        if (unifiThumbnail && typeof unifiThumbnail === 'string') {
+          // If relative URL and host is configured, ensure full URL
+          const fullThumb = unifiThumbnail.startsWith('http')
+            ? unifiThumbnail
+            : `${host}${unifiThumbnail.startsWith('/') ? '' : '/'}${unifiThumbnail}`;
+          record.unifi_thumbnail_url = fullThumb;
+        }
+
         batch.set(doorRef, record, { merge: true });
       }
 

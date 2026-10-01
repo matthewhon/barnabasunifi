@@ -105,6 +105,8 @@ export default function DoorCard({
     ? `Synced ${safeFormatDistanceToNow(door.last_synced)}`
     : 'Never synced';
 
+  const activeImage = door.image_url || door.unifi_thumbnail_url || null;
+
   return (
     <div
       className="card"
@@ -115,15 +117,77 @@ export default function DoorCard({
         flexDirection: 'column',
         gap: '0.875rem',
         transition: 'border-color 0.3s ease, box-shadow 0.3s ease',
+        overflow: 'hidden',
+        padding: 0,
       }}
     >
+      {/* Full-width Cover Image */}
+      <div
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: '140px',
+          background: activeImage
+            ? '#0f172a'
+            : 'linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98))',
+          overflow: 'hidden',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {activeImage ? (
+          <img
+            src={activeImage}
+            alt={door.label}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              display: 'block',
+            }}
+            loading="lazy"
+          />
+        ) : (
+          <div style={{ fontSize: '2.5rem', opacity: 0.6, userSelect: 'none' }}>🚪</div>
+        )}
+
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'linear-gradient(to bottom, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0) 50%, rgba(0,0,0,0.6) 100%)',
+            pointerEvents: 'none',
+          }}
+        />
+
+        {/* State badge floating on image */}
+        <div style={{ position: 'absolute', top: '0.5rem', right: '0.625rem', zIndex: 2 }}>
+          <span
+            className={`badge ${
+              isUnknown
+                ? 'badge-neutral'
+                : isLocked
+                ? 'badge-danger'
+                : statusInfo.isOutsidePolicy
+                ? 'badge-warning'
+                : 'badge-success'
+            }`}
+            style={{ fontWeight: 600, backdropFilter: 'blur(4px)', boxShadow: '0 2px 6px rgba(0,0,0,0.3)' }}
+          >
+            {isUnknown ? 'Unknown' : isLocked ? 'Locked' : 'Unlocked'}
+          </span>
+        </div>
+      </div>
+
+      <div style={{ padding: '0 1rem 1rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.875rem', flex: 1 }}>
       {/* State icon + name row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem' }}>
         <div
           style={{
-            width: '3rem',
-            height: '3rem',
-            borderRadius: 'var(--radius-lg)',
+            width: '2.5rem',
+            height: '2.5rem',
+            borderRadius: 'var(--radius-md)',
             background: isUnknown
               ? 'var(--color-bg-elevated)'
               : isLocked
@@ -323,6 +387,7 @@ export default function DoorCard({
           <LockIcon size={14} />
           Lock
         </button>
+      </div>
       </div>
     </div>
   );
