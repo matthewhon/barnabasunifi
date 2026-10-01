@@ -233,15 +233,48 @@ export const syncUnifiVisitors = onCall<{ orgId: string }>(
       const batch = db.batch();
       const now = FieldValue.serverTimestamp();
 
+      // Preload existing visitors for this org to prevent duplicate documents
+      const existingSnap = await db.collection(`organizations/${orgId}/visitors`).get();
+      const existingDocs = existingSnap.docs;
+
       for (const visitor of normalizedVisitors) {
-        if (!visitor.id) continue;
-        const ref = db.doc(`organizations/${orgId}/visitors/${visitor.id}`);
-        const snap = await ref.get();
-        const existingData = snap.exists ? snap.data() : {};
+        const unifiId = visitor.unifi_visitor_id || visitor.id;
+        if (!unifiId && !visitor.first_name) continue;
+
+        // Check if there is already a Firestore document with this unifi_visitor_id or matching record
+        let targetDocId = unifiId;
+        const existingMatch = existingDocs.find((d) => {
+          const data = d.data();
+          if (data.unifi_visitor_id === unifiId || d.id === unifiId) return true;
+          if (
+            data.first_name?.toLowerCase() === visitor.first_name?.toLowerCase() &&
+            (data.last_name || '').toLowerCase() === (visitor.last_name || '').toLowerCase()
+          ) {
+            if (data.sync_status === 'pending') return true;
+            if (data.start_time && visitor.start_time && data.start_time === visitor.start_time) return true;
+          }
+          return false;
+        });
+
+        if (existingMatch) {
+          targetDocId = existingMatch.id;
+          if (existingMatch.id !== unifiId) {
+            const orphanDoc = existingDocs.find((d) => d.id === unifiId);
+            if (orphanDoc) {
+              batch.delete(db.doc(`organizations/${orgId}/visitors/${unifiId}`));
+            }
+          }
+        }
+
+        if (!targetDocId) continue;
+        const ref = db.doc(`organizations/${orgId}/visitors/${targetDocId}`);
+        const existingData = existingMatch ? existingMatch.data() : {};
 
         batch.set(ref, {
           ...visitor,
+          id: targetDocId,
           org_id: orgId,
+          unifi_visitor_id: unifiId || targetDocId,
           // Preserve existing PIN if remote did not return plaintext
           pin_code: visitor.pin_code || existingData?.pin_code || '',
           last_synced: now,

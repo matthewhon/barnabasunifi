@@ -19,6 +19,7 @@ import type {
   PlanTimeType,
   LockTimingMode,
   DoorTimingConfig,
+  OrgSettings,
 } from '@/lib/types';
 import { format } from 'date-fns';
 import { safeIsPast, safeFormatDistanceToNow } from '@/lib/date-utils';
@@ -145,15 +146,23 @@ export function UnmappedEventsTab() {
   const [tab, setTab] = useState<'unreviewed' | 'dismissed' | 'all'>('unreviewed');
   const [daysAhead, setDaysAhead] = useState<number>(30);
   const [sourceFilter, setSourceFilter] = useState<'all' | 'service' | 'group'>('all');
+  const [timeTypeFilter, setTimeTypeFilter] = useState<'all' | 'service' | 'rehearsal' | 'other'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Selection state for batch actions
   const [selectedWindowIds, setSelectedWindowIds] = useState<string[]>([]);
 
-  // Modals state
+  // Org Settings
+  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
+
+  // Wizard Modals state
   const [mappingModalWindow, setMappingModalWindow] = useState<ScheduleWindow | null>(null);
+  const [wizardStep, setWizardStep] = useState<number>(1);
   const [mappingMode, setMappingMode] = useState<'one_time' | 'recurring'>('one_time');
   const [selectedDoorIds, setSelectedDoorIds] = useState<string[]>([]);
+  const [doorSearch, setDoorSearch] = useState<string>('');
+  const [selectedCampusFilter, setSelectedCampusFilter] = useState<string>('all');
+  const [timingChoice, setTimingChoice] = useState<'default' | 'after_start' | 'after_end'>('default');
   const [unlockOffsetMin, setUnlockOffsetMin] = useState<number>(15);
   const [lockOffsetMin, setLockOffsetMin] = useState<number>(15);
   const [lockTimingMode, setLockTimingMode] = useState<LockTimingMode>('after_end');
@@ -171,6 +180,7 @@ export function UnmappedEventsTab() {
     if (!orgId) return;
 
     getOrgSettings(orgId).then((settings) => {
+      setOrgSettings(settings);
       if (settings?.timezone) setTimezone(settings.timezone);
       if (settings?.unlock_buffer_before_min) setUnlockOffsetMin(settings.unlock_buffer_before_min);
       if (settings?.lock_buffer_after_min) setLockOffsetMin(settings.lock_buffer_after_min);
@@ -250,6 +260,15 @@ export function UnmappedEventsTab() {
 
     return sourceList.filter((w) => {
       if (sourceFilter !== 'all' && w.source_type !== sourceFilter) return false;
+      
+      if (timeTypeFilter !== 'all') {
+        const isRehearsal = w.time_type === 'rehearsal' || w.source_label.toLowerCase().includes('(rehearsal)');
+        const isService = w.time_type === 'service' || (!isRehearsal && w.source_type === 'service');
+        if (timeTypeFilter === 'service' && !isService) return false;
+        if (timeTypeFilter === 'rehearsal' && !isRehearsal) return false;
+        if (timeTypeFilter === 'other' && (isService || isRehearsal)) return false;
+      }
+
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const labelMatch = w.source_label.toLowerCase().includes(q);
@@ -259,7 +278,7 @@ export function UnmappedEventsTab() {
       }
       return true;
     });
-  }, [upcomingWindows, unreviewedWindows, dismissedWindows, tab, sourceFilter, searchQuery]);
+  }, [upcomingWindows, unreviewedWindows, dismissedWindows, tab, sourceFilter, timeTypeFilter, searchQuery]);
 
   // Checkbox batch selection handlers
   const handleSelectAll = (checked: boolean) => {
@@ -296,18 +315,75 @@ export function UnmappedEventsTab() {
     }
   };
 
-  // Open Quick Map Modal
+  // Open Quick Map Modal Wizard
   const handleOpenMapModal = (win: ScheduleWindow) => {
     setMappingModalWindow(win);
+    setWizardStep(1);
     setMappingMode('one_time');
     setSelectedDoorIds(win.door_ids || []);
-    setUnlockOffsetMin(15);
-    setLockOffsetMin(15);
+    setDoorSearch('');
+    setSelectedCampusFilter('all');
+
+    const defaultUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
+    const defaultLock = orgSettings?.lock_buffer_after_min ?? 15;
+    setTimingChoice('default');
+    setUnlockOffsetMin(defaultUnlock);
+    setLockOffsetMin(defaultLock);
     setLockTimingMode('after_end');
     setDoorTimings(win.door_timings ? JSON.parse(JSON.stringify(win.door_timings)) : {});
+
     const isRehearsal = win.time_type === 'rehearsal' || win.source_label.toLowerCase().includes('(rehearsal)');
     setTimeTypes([win.time_type || (isRehearsal ? 'rehearsal' : 'service')]);
   };
+
+  // Door filtering for wizard
+  const isUuid = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+
+  const validDoors = useMemo(() => {
+    return doors.filter((d) => {
+      const label = (d.label || '').trim();
+      if (!label) return false;
+      if (isUuid(label) && d.current_state === 'unknown') return false;
+      return true;
+    });
+  }, [doors]);
+
+  const campusOptions = useMemo(() => {
+    const set = new Set<string>();
+    validDoors.forEach((d) => {
+      if (d.campus_name) set.add(d.campus_name);
+    });
+    return Array.from(set).sort();
+  }, [validDoors]);
+
+  const filteredDoors = useMemo(() => {
+    return validDoors.filter((d) => {
+      if (selectedCampusFilter === 'unassigned') {
+        if (d.campus_name || d.campus_id) return false;
+      } else if (selectedCampusFilter !== 'all') {
+        if (d.campus_name !== selectedCampusFilter && d.campus_id !== selectedCampusFilter) return false;
+      }
+
+      if (!doorSearch.trim()) return true;
+      const q = doorSearch.toLowerCase();
+      return (
+        (d.label && d.label.toLowerCase().includes(q)) ||
+        (d.campus_name && d.campus_name.toLowerCase().includes(q)) ||
+        (d.location_name && d.location_name.toLowerCase().includes(q)) ||
+        (d.floor && d.floor.toLowerCase().includes(q)) ||
+        (d.building && d.building.toLowerCase().includes(q))
+      );
+    });
+  }, [validDoors, selectedCampusFilter, doorSearch]);
+
+  const orgMode = orgSettings?.lock_timing_mode ?? 'after_end';
+  const orgUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
+  const orgLock = orgMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15);
+
+  const effectiveDefaultUnlock = timingChoice !== 'default' ? unlockOffsetMin : orgUnlock;
+  const effectiveDefaultLock = timingChoice !== 'default' ? lockOffsetMin : orgLock;
+  const effectiveDefaultMode = timingChoice !== 'default' ? (timingChoice === 'after_start' ? 'after_start' : 'after_end') : orgMode;
 
   // Save Mapping (One-Time or Recurring)
   const handleSaveMapping = async () => {
@@ -340,9 +416,9 @@ export function UnmappedEventsTab() {
         await assignOneTimeScheduleWindowDoors(orgId, mappingModalWindow.id, {
           door_ids: selectedDoorIds,
           door_labels: doorLabels,
-          unlock_offset_min: unlockOffsetMin,
-          lock_offset_min: lockOffsetMin,
-          lock_timing_mode: lockTimingMode,
+          unlock_offset_min: timingChoice === 'default' ? undefined : unlockOffsetMin,
+          lock_offset_min: timingChoice === 'default' ? undefined : lockOffsetMin,
+          lock_timing_mode: timingChoice === 'default' ? undefined : (timingChoice === 'after_start' ? 'after_start' : 'after_end'),
           door_timings: Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined,
         });
 
@@ -366,9 +442,9 @@ export function UnmappedEventsTab() {
           door_ids: selectedDoorIds,
           door_labels: doorLabels,
           time_types: mappingModalWindow.source_type === 'service' ? timeTypes : undefined,
-          unlock_offset_min: unlockOffsetMin,
-          lock_offset_min: lockOffsetMin,
-          lock_timing_mode: lockTimingMode,
+          unlock_offset_min: timingChoice === 'default' ? undefined : unlockOffsetMin,
+          lock_offset_min: timingChoice === 'default' ? undefined : lockOffsetMin,
+          lock_timing_mode: timingChoice === 'default' ? undefined : (timingChoice === 'after_start' ? 'after_start' : 'after_end'),
           door_timings: Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined,
           enabled: true,
         });
@@ -545,6 +621,19 @@ export function UnmappedEventsTab() {
               <option value="all">All Sources</option>
               <option value="service">Services Only</option>
               <option value="group">Groups Only</option>
+            </select>
+
+            <select
+              className="form-select"
+              value={timeTypeFilter}
+              onChange={(e) => setTimeTypeFilter(e.target.value as any)}
+              style={{ width: '11.5rem', height: '2.125rem', fontSize: '0.8125rem' }}
+              title="Filter by Plan Time Type"
+            >
+              <option value="all">All Time Types</option>
+              <option value="service">⛪ Services Only (exclude rehearsals)</option>
+              <option value="rehearsal">🎵 Rehearsals Only</option>
+              <option value="other">🕒 Other Times Only</option>
             </select>
 
             <select
@@ -783,465 +872,870 @@ export function UnmappedEventsTab() {
         )}
       </div>
 
-      {/* Modal: Quick Map Doors */}
-      {mappingModalWindow && (
-        <Modal
-          isOpen={true}
-          onClose={() => setMappingModalWindow(null)}
-          title={`Map Doors: ${mappingModalWindow.source_label}`}
-          maxWidth="38rem"
-          footer={
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-              <button
-                className="btn btn-secondary"
-                onClick={() => setMappingModalWindow(null)}
-                disabled={savingMapping}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleSaveMapping}
-                disabled={savingMapping || selectedDoorIds.length === 0}
-              >
-                {savingMapping ? 'Saving...' : 'Apply Door Schedule'}
-              </button>
+      {/* Modal: Map Doors Wizard */}
+      {mappingModalWindow && (() => {
+        const totalSteps = 4;
+        const stepLabels: Record<number, string> = {
+          1: 'Scope & Details',
+          2: 'Select Doors',
+          3: 'Timing & Rules',
+          4: 'Review & Confirm',
+        };
+
+        const handleSelectAllDoors = () => {
+          setSelectedDoorIds(validDoors.map((d) => d.id));
+        };
+
+        const handleSelectCampusDoors = (campusName: string) => {
+          const campusDoorIds = validDoors
+            .filter((d) => (campusName === 'unassigned' ? !d.campus_name && !d.campus_id : d.campus_name === campusName || d.campus_id === campusName))
+            .map((d) => d.id);
+          setSelectedDoorIds((prev) => Array.from(new Set([...prev, ...campusDoorIds])));
+        };
+
+        const handleDeselectAllDoors = () => {
+          setSelectedDoorIds([]);
+        };
+
+        const toggleDoor = (id: string) => {
+          setSelectedDoorIds((prev) =>
+            prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]
+          );
+        };
+
+        const toggleTimeType = (tt: PlanTimeType) => {
+          setTimeTypes((prev) =>
+            prev.includes(tt) ? prev.filter((t) => t !== tt) : [...prev, tt]
+          );
+        };
+
+        return (
+          <Modal
+            isOpen={true}
+            onClose={() => setMappingModalWindow(null)}
+            title={`Map Doors: ${mappingModalWindow.source_label}`}
+            maxWidth="40rem"
+            footer={
+              <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                <button
+                  className="btn btn-secondary"
+                  onClick={wizardStep === 1 ? () => setMappingModalWindow(null) : () => setWizardStep((s) => s - 1)}
+                  disabled={savingMapping}
+                >
+                  {wizardStep === 1 ? 'Cancel' : '← Back'}
+                </button>
+
+                {wizardStep < totalSteps ? (
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => setWizardStep((s) => s + 1)}
+                    disabled={
+                      (wizardStep === 2 && selectedDoorIds.length === 0) ||
+                      (wizardStep === 1 && mappingMode === 'recurring' && mappingModalWindow.source_type === 'service' && timeTypes.length === 0)
+                    }
+                  >
+                    Next →
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleSaveMapping}
+                    disabled={savingMapping || selectedDoorIds.length === 0}
+                  >
+                    {savingMapping ? 'Saving...' : 'Apply Door Schedule'}
+                  </button>
+                )}
+              </div>
+            }
+          >
+            {/* Step Progress Indicators */}
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', alignItems: 'center' }}>
+              {Array.from({ length: totalSteps }, (_, i) => i + 1).map((s) => (
+                <React.Fragment key={s}>
+                  <div
+                    style={{
+                      width: '1.5rem',
+                      height: '1.5rem',
+                      borderRadius: '50%',
+                      background: s <= wizardStep ? 'var(--color-accent)' : 'var(--color-bg-elevated)',
+                      border: `2px solid ${s <= wizardStep ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '0.6875rem',
+                      fontWeight: 700,
+                      color: s <= wizardStep ? '#fff' : 'var(--color-text-muted)',
+                      transition: 'all 0.2s ease',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {s}
+                  </div>
+                  {s < totalSteps && (
+                    <div
+                      style={{
+                        flex: 1,
+                        height: '2px',
+                        background: s < wizardStep ? 'var(--color-accent)' : 'var(--color-border)',
+                        transition: 'background 0.2s ease',
+                      }}
+                    />
+                  )}
+                </React.Fragment>
+              ))}
             </div>
-          }
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {/* Event Time Info */}
+
             <div
               style={{
-                background: 'var(--color-bg-base)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '0.75rem 1rem',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.375rem',
+                fontSize: '0.75rem',
+                color: 'var(--color-text-muted)',
+                marginBottom: '1rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                fontWeight: 600,
               }}
             >
-              <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Event Window
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.875rem' }}>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <span style={{ color: 'var(--color-text-muted)', minWidth: '2.5rem' }}>Start:</span>
-                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                    {formatWindowTime(mappingModalWindow.starts_at, timezone)}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <span style={{ color: 'var(--color-text-muted)', minWidth: '2.5rem' }}>End:</span>
-                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                    {formatWindowTime(mappingModalWindow.ends_at, timezone)}
-                  </span>
-                </div>
-              </div>
+              Step {wizardStep}: {stepLabels[wizardStep]}
             </div>
 
-            {/* Mode selection */}
-            <div className="form-group">
-              <label className="form-label" style={{ fontWeight: 600 }}>Mapping Scope</label>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(13rem, 1fr))', gap: '0.75rem' }}>
-                <button
-                  type="button"
-                  className={`btn ${mappingMode === 'one_time' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setMappingMode('one_time')}
-                  style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.75rem', height: 'auto', whiteSpace: 'normal' }}
+            {/* STEP 1: Scope & Details */}
+            {wizardStep === 1 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                {/* Event Time Info */}
+                <div
+                  style={{
+                    background: 'var(--color-bg-base)',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '0.75rem 1rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.375rem',
+                  }}
                 >
-                  <span style={{ fontWeight: 600 }}>One-Time Override</span>
-                  <span style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: '0.25rem', lineHeight: 1.3 }}>
-                    Assign doors only for this specific event instance.
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`btn ${mappingMode === 'recurring' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setMappingMode('recurring')}
-                  style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.75rem', height: 'auto', whiteSpace: 'normal' }}
-                >
-                  <span style={{ fontWeight: 600 }}>Recurring Mapping</span>
-                  <span style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: '0.25rem', lineHeight: 1.3 }}>
-                    Save mapping for all future instances of this {mappingModalWindow.source_type}.
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {/* Time Types Checkboxes for recurring service mapping */}
-            {mappingModalWindow.source_type === 'service' && mappingMode === 'recurring' && (
-              <div className="form-group">
-                <label className="form-label" style={{ fontWeight: 600 }}>
-                  Which plan times should this mapping trigger for?
-                </label>
-                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                  {(['rehearsal', 'service', 'other'] as PlanTimeType[]).map((tt) => (
-                    <label
-                      key={tt}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.375rem',
-                        cursor: 'pointer',
-                        fontSize: '0.8125rem',
-                        padding: '0.375rem 0.625rem',
-                        borderRadius: 'var(--radius-sm)',
-                        border: `1px solid ${timeTypes.includes(tt) ? 'var(--color-accent)' : 'var(--color-border)'}`,
-                        background: timeTypes.includes(tt) ? 'rgba(36, 101, 245, 0.1)' : 'transparent',
-                        fontWeight: timeTypes.includes(tt) ? 600 : 400,
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={timeTypes.includes(tt)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setTimeTypes((prev) => [...prev, tt]);
-                          } else {
-                            setTimeTypes((prev) => prev.filter((t) => t !== tt));
-                          }
-                        }}
-                      />
-                      <span style={{ textTransform: 'capitalize' }}>
-                        {tt === 'service' ? 'Service Time' : tt === 'rehearsal' ? 'Rehearsal Time' : 'Other Times'}
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Event Window
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.875rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <span style={{ color: 'var(--color-text-muted)', minWidth: '3.5rem' }}>Name:</span>
+                      <strong style={{ color: 'var(--color-text-primary)' }}>{mappingModalWindow.source_label}</strong>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <span style={{ color: 'var(--color-text-muted)', minWidth: '3.5rem' }}>Start:</span>
+                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                        {formatWindowTime(mappingModalWindow.starts_at, timezone)}
                       </span>
-                    </label>
-                  ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <span style={{ color: 'var(--color-text-muted)', minWidth: '3.5rem' }}>End:</span>
+                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                        {formatWindowTime(mappingModalWindow.ends_at, timezone)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
+
+                {/* Mode selection */}
+                <div className="form-group">
+                  <label className="form-label" style={{ fontWeight: 600 }}>Mapping Scope</label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(13rem, 1fr))', gap: '0.75rem' }}>
+                    <button
+                      type="button"
+                      className={`btn ${mappingMode === 'one_time' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setMappingMode('one_time')}
+                      style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.75rem', height: 'auto', whiteSpace: 'normal' }}
+                    >
+                      <span style={{ fontWeight: 600 }}>One-Time Override</span>
+                      <span style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: '0.25rem', lineHeight: 1.3 }}>
+                        Assign doors only for this specific event instance.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className={`btn ${mappingMode === 'recurring' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setMappingMode('recurring')}
+                      style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.75rem', height: 'auto', whiteSpace: 'normal' }}
+                    >
+                      <span style={{ fontWeight: 600 }}>Recurring Mapping</span>
+                      <span style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: '0.25rem', lineHeight: 1.3 }}>
+                        Save mapping for all future instances of this {mappingModalWindow.source_type}.
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Time Types Checkboxes for recurring service mapping */}
+                {mappingModalWindow.source_type === 'service' && mappingMode === 'recurring' && (
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontWeight: 600 }}>
+                      Which plan times should this recurring mapping trigger for?
+                    </label>
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      {(['service', 'rehearsal', 'other'] as PlanTimeType[]).map((tt) => (
+                        <label
+                          key={tt}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.375rem',
+                            cursor: 'pointer',
+                            fontSize: '0.8125rem',
+                            padding: '0.375rem 0.625rem',
+                            borderRadius: 'var(--radius-sm)',
+                            border: `1px solid ${timeTypes.includes(tt) ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                            background: timeTypes.includes(tt) ? 'rgba(36, 101, 245, 0.1)' : 'transparent',
+                            fontWeight: timeTypes.includes(tt) ? 600 : 400,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={timeTypes.includes(tt)}
+                            onChange={() => toggleTimeType(tt)}
+                          />
+                          <span style={{ textTransform: 'capitalize' }}>
+                            {tt === 'service' ? '⛪ Service Time' : tt === 'rehearsal' ? '🎵 Rehearsal Time' : '🕒 Other Times'}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    {timeTypes.length === 0 && (
+                      <span style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
+                        Please select at least one time type to trigger.
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Door Selection */}
-            <div className="form-group">
-              <label className="form-label" style={{ fontWeight: 600 }}>
-                Select Doors ({selectedDoorIds.length} selected)
-              </label>
-              {doors.length === 0 ? (
-                <div style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>
-                  No doors configured. Please sync doors in Settings/Hardware first.
-                </div>
-              ) : (
+            {/* STEP 2: Door Selection with Campus Filter & Search */}
+            {wizardStep === 2 && (
+              <div>
                 <div
                   style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 10.5rem), 1fr))',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: '0.5rem',
+                    flexWrap: 'wrap',
                     gap: '0.5rem',
-                    maxHeight: '12rem',
-                    overflowY: 'auto',
-                    padding: '0.5rem',
+                  }}
+                >
+                  <label className="form-label" style={{ marginBottom: 0, display: 'block', fontWeight: 600 }}>
+                    Select UniFi Doors ({selectedDoorIds.length} of {validDoors.length} selected)
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {campusOptions.length > 0 && selectedCampusFilter !== 'all' && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', height: 'auto', color: 'var(--color-accent)' }}
+                        onClick={() => handleSelectCampusDoors(selectedCampusFilter)}
+                        title={`Select all doors in ${selectedCampusFilter}`}
+                      >
+                        Select All {selectedCampusFilter === 'unassigned' ? 'Unassigned' : selectedCampusFilter}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', height: 'auto' }}
+                      onClick={handleSelectAllDoors}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', height: 'auto' }}
+                      onClick={handleDeselectAllDoors}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                {/* Campus Filter Chips */}
+                {campusOptions.length > 0 && (
+                  <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${selectedCampusFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', height: 'auto' }}
+                      onClick={() => setSelectedCampusFilter('all')}
+                    >
+                      All Campuses ({validDoors.length})
+                    </button>
+                    {campusOptions.map((c) => {
+                      const count = validDoors.filter((d) => d.campus_name === c || d.campus_id === c).length;
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          className={`btn btn-sm ${selectedCampusFilter === c ? 'btn-primary' : 'btn-secondary'}`}
+                          style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', height: 'auto' }}
+                          onClick={() => setSelectedCampusFilter(c)}
+                        >
+                          🏫 {c} ({count})
+                        </button>
+                      );
+                    })}
+                    {validDoors.some((d) => !d.campus_name && !d.campus_id) && (
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${selectedCampusFilter === 'unassigned' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', height: 'auto' }}
+                        onClick={() => setSelectedCampusFilter('unassigned')}
+                      >
+                        Unassigned ({validDoors.filter((d) => !d.campus_name && !d.campus_id).length})
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {validDoors.length > 6 && (
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Filter doors by name, campus, location, building…"
+                    value={doorSearch}
+                    onChange={(e) => setDoorSearch(e.target.value)}
+                    style={{ marginBottom: '0.5rem', fontSize: '0.8125rem', padding: '0.375rem 0.625rem' }}
+                  />
+                )}
+
+                {validDoors.length === 0 ? (
+                  <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
+                    No doors available. Configure doors in Settings/Hardware first.
+                  </p>
+                ) : filteredDoors.length === 0 ? (
+                  <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', padding: '0.75rem', textAlign: 'center' }}>
+                    No doors match the selected filter.
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '16rem', overflowY: 'auto' }}>
+                    {filteredDoors.map((door) => {
+                      const checked = selectedDoorIds.includes(door.id) || selectedDoorIds.includes(door.unifi_door_id);
+                      return (
+                        <label
+                          key={door.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.625rem',
+                            padding: '0.625rem',
+                            borderRadius: 'var(--radius-md)',
+                            cursor: 'pointer',
+                            background: checked ? 'rgba(36,101,245,0.1)' : 'var(--color-bg-base)',
+                            border: `1px solid ${checked ? 'rgba(36,101,245,0.3)' : 'var(--color-border)'}`,
+                            transition: 'all 0.15s ease',
+                            fontSize: '0.875rem',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleDoor(door.id)}
+                          />
+                          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: '0.125rem' }}>
+                            <span style={{ color: 'var(--color-text-primary)', fontWeight: checked ? 600 : 500 }}>
+                              {door.label}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+                              {door.campus_name && (
+                                <span
+                                  style={{
+                                    fontSize: '0.6875rem',
+                                    padding: '0.1rem 0.35rem',
+                                    borderRadius: 'var(--radius-sm, 4px)',
+                                    background: 'rgba(36, 101, 245, 0.1)',
+                                    color: 'var(--color-accent, #2465f5)',
+                                    border: '1px solid rgba(36, 101, 245, 0.2)',
+                                    fontWeight: 500,
+                                  }}
+                                >
+                                  🏫 {door.campus_name}
+                                </span>
+                              )}
+                              {door.location_name && (
+                                <span
+                                  style={{
+                                    fontSize: '0.6875rem',
+                                    padding: '0.1rem 0.35rem',
+                                    borderRadius: 'var(--radius-sm, 4px)',
+                                    background: 'rgba(168, 85, 247, 0.1)',
+                                    color: '#9333ea',
+                                    border: '1px solid rgba(168, 85, 247, 0.2)',
+                                    fontWeight: 500,
+                                  }}
+                                >
+                                  📍 {door.location_name}
+                                </span>
+                              )}
+                              {(door.building || door.floor) && (
+                                <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
+                                  {[door.building, door.floor].filter(Boolean).join(' · ')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <span
+                            className={`badge ${
+                              door.current_state === 'locked' ? 'badge-danger' :
+                              door.current_state === 'unlocked' ? 'badge-success' :
+                              'badge-neutral'
+                            }`}
+                            style={{ marginLeft: 'auto', fontSize: '0.6875rem' }}
+                          >
+                            {door.current_state}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                {selectedDoorIds.length === 0 && (
+                  <span style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.75rem', marginTop: '0.5rem', display: 'block' }}>
+                    Please select at least one door to continue.
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* STEP 3: Timing & Rules (Presets + Overrides) */}
+            {wizardStep === 3 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {/* Baseline Locking Rule */}
+                <div
+                  style={{
+                    padding: '0.875rem',
+                    background: 'var(--color-bg-base)',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
+                    Baseline Door Locking Rule
+                  </label>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="timingChoice"
+                        value="default"
+                        checked={timingChoice === 'default'}
+                        onChange={() => setTimingChoice('default')}
+                      />
+                      <span>
+                        Org Default ({orgMode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'} · {orgMode === 'after_start' ? `+${orgLock}m after start` : `+${orgLock}m after end`})
+                      </span>
+                    </label>
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="timingChoice"
+                        value="after_start"
+                        checked={timingChoice === 'after_start'}
+                        onChange={() => setTimingChoice('after_start')}
+                      />
+                      <span style={{ fontWeight: timingChoice === 'after_start' ? 600 : 400 }}>
+                        🛡️ Security Mode (Lock shortly after event starts)
+                      </span>
+                    </label>
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="timingChoice"
+                        value="after_end"
+                        checked={timingChoice === 'after_end'}
+                        onChange={() => setTimingChoice('after_end')}
+                      />
+                      <span style={{ fontWeight: timingChoice === 'after_end' ? 600 : 400 }}>
+                        🕒 Standard Mode (Lock after event ends)
+                      </span>
+                    </label>
+                  </div>
+
+                  {timingChoice !== 'default' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid var(--color-border)' }}>
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                          <span>Unlock before:</span>
+                          <strong style={{ color: 'var(--color-accent)' }}>{unlockOffsetMin}m</strong>
+                        </div>
+                        <input
+                          type="range"
+                          className="form-range"
+                          min="0"
+                          max="60"
+                          step="5"
+                          value={unlockOffsetMin}
+                          onChange={(e) => setUnlockOffsetMin(Number(e.target.value))}
+                        />
+                      </div>
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                          <span>{timingChoice === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
+                          <strong style={{ color: 'var(--color-accent)' }}>{lockOffsetMin}m</strong>
+                        </div>
+                        <input
+                          type="range"
+                          className="form-range"
+                          min="0"
+                          max={timingChoice === 'after_start' ? '120' : '60'}
+                          step="5"
+                          value={lockOffsetMin}
+                          onChange={(e) => setLockOffsetMin(Number(e.target.value))}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Per-Door Timing Overrides (Optional) */}
+                {selectedDoorIds.length > 0 && (
+                  <div
+                    style={{
+                      padding: '0.875rem',
+                      background: 'var(--color-bg-base)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--color-border)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.75rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
+                        Per-Door Timing Overrides (Optional)
+                      </label>
+                      {Object.keys(doorTimings).length > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem', color: 'var(--color-text-muted)' }}
+                          onClick={() => setDoorTimings({})}
+                        >
+                          Reset All to Default
+                        </button>
+                      )}
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', margin: 0 }}>
+                      Set different lock/unlock times per door (e.g. main door open entire service, side doors locked at start).
+                    </p>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '14rem', overflowY: 'auto' }}>
+                      {selectedDoorIds.map((dId) => {
+                        const doorObj = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
+                        const doorLabel = doorObj?.label || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId);
+                        const isCustom = doorTimings[dId] !== undefined;
+                        const dTiming = doorTimings[dId] || {};
+                        const dMode = dTiming.lock_timing_mode ?? 'after_start';
+                        const dUnlock = dTiming.unlock_offset_min ?? effectiveDefaultUnlock;
+                        const dLock = dTiming.lock_offset_min ?? 15;
+
+                        return (
+                          <div
+                            key={dId}
+                            style={{
+                              padding: '0.625rem 0.75rem',
+                              background: 'var(--color-bg-elevated, #fff)',
+                              border: `1px solid ${isCustom ? 'rgba(36, 101, 245, 0.4)' : 'var(--color-border)'}`,
+                              borderRadius: 'var(--radius-sm)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.5rem',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--color-text-primary)' }}>
+                                  {doorLabel}
+                                </span>
+                                <span className={`badge ${isCustom ? 'badge-info' : 'badge-neutral'}`} style={{ fontSize: '0.625rem' }}>
+                                  {isCustom ? 'Custom' : 'Default'}
+                                </span>
+                              </div>
+                              <div>
+                                {isCustom ? (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ fontSize: '0.6875rem', padding: '0.15rem 0.35rem' }}
+                                    onClick={() => {
+                                      const next = { ...doorTimings };
+                                      delete next[dId];
+                                      setDoorTimings(next);
+                                    }}
+                                  >
+                                    ↩️ Reset
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ fontSize: '0.6875rem', padding: '0.15rem 0.35rem' }}
+                                    onClick={() => {
+                                      setDoorTimings((prev) => ({
+                                        ...prev,
+                                        [dId]: {
+                                          lock_timing_mode: 'after_start',
+                                          lock_offset_min: 15,
+                                          unlock_offset_min: effectiveDefaultUnlock,
+                                        },
+                                      }));
+                                    }}
+                                  >
+                                    ⚙️ Customize
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {isCustom && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                {/* Mode Selection */}
+                                <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                                  <button
+                                    type="button"
+                                    className={`btn btn-sm ${dMode === 'after_start' ? 'btn-primary' : 'btn-secondary'}`}
+                                    style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem' }}
+                                    onClick={() => {
+                                      setDoorTimings((prev) => ({
+                                        ...prev,
+                                        [dId]: { ...prev[dId], lock_timing_mode: 'after_start' },
+                                      }));
+                                    }}
+                                  >
+                                    🛡️ Security (after start)
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={`btn btn-sm ${dMode === 'after_end' ? 'btn-primary' : 'btn-secondary'}`}
+                                    style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem' }}
+                                    onClick={() => {
+                                      setDoorTimings((prev) => ({
+                                        ...prev,
+                                        [dId]: { ...prev[dId], lock_timing_mode: 'after_end' },
+                                      }));
+                                    }}
+                                  >
+                                    🕒 Standard (after end)
+                                  </button>
+                                </div>
+
+                                {/* Quick Presets */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+                                  <span style={{ fontSize: '0.625rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Presets:</span>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)', background: 'rgba(36, 101, 245, 0.08)', color: 'var(--color-accent)' }}
+                                    onClick={() => {
+                                      setDoorTimings((prev) => ({
+                                        ...prev,
+                                        [dId]: { lock_timing_mode: 'after_end', lock_offset_min: 0, unlock_offset_min: effectiveDefaultUnlock },
+                                      }));
+                                    }}
+                                  >
+                                    🚪 Open entire service
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
+                                    onClick={() => {
+                                      setDoorTimings((prev) => ({
+                                        ...prev,
+                                        [dId]: { lock_timing_mode: 'after_start', lock_offset_min: 0, unlock_offset_min: 15 },
+                                      }));
+                                    }}
+                                  >
+                                    🔒 Lock at start (0m)
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
+                                    onClick={() => {
+                                      setDoorTimings((prev) => ({
+                                        ...prev,
+                                        [dId]: { lock_timing_mode: 'after_start', lock_offset_min: 15, unlock_offset_min: 15 },
+                                      }));
+                                    }}
+                                  >
+                                    🔒 Lock 15m after start
+                                  </button>
+                                </div>
+
+                                {/* Sliders */}
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.2rem' }}>
+                                  <div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem' }}>
+                                      <span>Unlock before:</span>
+                                      <strong style={{ color: 'var(--color-accent)' }}>{dUnlock}m</strong>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      className="form-range"
+                                      min="0"
+                                      max="60"
+                                      step="5"
+                                      value={dUnlock}
+                                      onChange={(e) => {
+                                        const val = Number(e.target.value);
+                                        setDoorTimings((prev) => ({
+                                          ...prev,
+                                          [dId]: { ...prev[dId], unlock_offset_min: val },
+                                        }));
+                                      }}
+                                    />
+                                  </div>
+                                  <div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem' }}>
+                                      <span>{dMode === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
+                                      <strong style={{ color: 'var(--color-accent)' }}>{dLock}m</strong>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      className="form-range"
+                                      min="0"
+                                      max={dMode === 'after_start' ? '120' : '60'}
+                                      step="5"
+                                      value={dLock}
+                                      onChange={(e) => {
+                                        const val = Number(e.target.value);
+                                        setDoorTimings((prev) => ({
+                                          ...prev,
+                                          [dId]: { ...prev[dId], lock_offset_min: val },
+                                        }));
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* STEP 4: Review & Confirm */}
+            {wizardStep === 4 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div
+                  style={{
+                    padding: '0.875rem 1rem',
+                    background: 'var(--color-bg-base)',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.625rem',
+                  }}
+                >
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Mapping Summary
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(11rem, 1fr))', gap: '0.5rem', fontSize: '0.8125rem' }}>
+                    <div>
+                      <span style={{ color: 'var(--color-text-muted)' }}>Target Event:</span>
+                      <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{mappingModalWindow.source_label}</div>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--color-text-muted)' }}>Mapping Scope:</span>
+                      <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                        {mappingMode === 'one_time' ? 'One-Time Window' : 'Recurring (All future)'}
+                      </div>
+                    </div>
+                    {mappingMode === 'recurring' && mappingModalWindow.source_type === 'service' && (
+                      <div>
+                        <span style={{ color: 'var(--color-text-muted)' }}>Triggers For:</span>
+                        <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', textTransform: 'capitalize' }}>
+                          {timeTypes.join(', ')}
+                        </div>
+                      </div>
+                    )}
+                    <div>
+                      <span style={{ color: 'var(--color-text-muted)' }}>Baseline Rule:</span>
+                      <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                        {effectiveDefaultMode === 'after_start'
+                          ? `🛡️ Lock +${effectiveDefaultLock}m after start`
+                          : `🕒 Lock +${effectiveDefaultLock}m after end`} (-{effectiveDefaultUnlock}m unlock)
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Selected Doors Breakdown */}
+                <div
+                  style={{
+                    padding: '0.875rem 1rem',
                     background: 'var(--color-bg-base)',
                     borderRadius: 'var(--radius-md)',
                     border: '1px solid var(--color-border)',
                   }}
                 >
-                  {doors.map((d) => {
-                    const checked = selectedDoorIds.includes(d.id) || selectedDoorIds.includes(d.unifi_door_id);
-                    return (
-                      <label
-                        key={d.id}
-                        title={d.label}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          padding: '0.375rem 0.5rem',
-                          borderRadius: 'var(--radius-sm)',
-                          background: checked ? 'rgba(36, 101, 245, 0.1)' : 'transparent',
-                          cursor: 'pointer',
-                          fontSize: '0.875rem',
-                          minWidth: 0,
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          style={{ flexShrink: 0 }}
-                          onChange={(e) => {
-                            const doorId = d.id;
-                            if (e.target.checked) {
-                              setSelectedDoorIds((prev) => [...prev, doorId]);
-                            } else {
-                              setSelectedDoorIds((prev) => prev.filter((id) => id !== doorId && id !== d.unifi_door_id));
-                            }
-                          }}
-                        />
-                        <span
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
+                    Doors to Unlock ({selectedDoorIds.length})
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', maxHeight: '12rem', overflowY: 'auto' }}>
+                    {selectedDoorIds.map((dId) => {
+                      const doorObj = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
+                      const doorLabel = doorObj?.label || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId);
+                      const isCustom = doorTimings[dId] !== undefined;
+                      const dTiming = doorTimings[dId] || {};
+                      const dMode = isCustom ? dTiming.lock_timing_mode ?? 'after_start' : effectiveDefaultMode;
+                      const dLock = isCustom ? dTiming.lock_offset_min ?? 15 : effectiveDefaultLock;
+                      const dUnlock = isCustom ? dTiming.unlock_offset_min ?? effectiveDefaultUnlock : effectiveDefaultUnlock;
+
+                      return (
+                        <div
+                          key={dId}
                           style={{
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                            minWidth: 0,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '0.375rem 0.5rem',
+                            borderRadius: 'var(--radius-sm)',
+                            background: 'var(--color-bg-elevated, #fff)',
+                            fontSize: '0.8125rem',
                           }}
                         >
-                          {d.label}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Offsets & Timing */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(10rem, 1fr))', gap: '1rem' }}>
-              <div className="form-group">
-                <label className="form-label">Unlock Buffer Before Start</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <input
-                    type="number"
-                    className="form-input"
-                    value={unlockOffsetMin}
-                    onChange={(e) => setUnlockOffsetMin(Number(e.target.value))}
-                    min={0}
-                    max={120}
-                  />
-                  <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', flexShrink: 0 }}>min</span>
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">
-                  {lockTimingMode === 'after_start' ? 'Lock After Start' : 'Lock After End'}
-                </label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <input
-                    type="number"
-                    className="form-input"
-                    value={lockOffsetMin}
-                    onChange={(e) => setLockOffsetMin(Number(e.target.value))}
-                    min={0}
-                    max={120}
-                  />
-                  <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', flexShrink: 0 }}>min</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Per-Door Timing Overrides (Optional) */}
-            {selectedDoorIds.length > 0 && (
-              <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.875rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                  <label className="form-label" style={{ marginBottom: 0, fontWeight: 600 }}>
-                    Per-Door Timing Overrides (Optional)
-                  </label>
-                  {Object.keys(doorTimings).length > 0 && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem', color: 'var(--color-text-muted)' }}
-                      onClick={() => setDoorTimings({})}
-                    >
-                      Reset All to Default
-                    </button>
-                  )}
-                </div>
-                <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
-                  Set different lock/unlock times per door (e.g. main door open entire service, side doors locked at start).
-                </p>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '14rem', overflowY: 'auto' }}>
-                  {selectedDoorIds.map((dId) => {
-                    const doorObj = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
-                    const doorLabel = doorObj?.label || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId);
-                    const isCustom = doorTimings[dId] !== undefined;
-                    const dTiming = doorTimings[dId] || {};
-                    const dMode = dTiming.lock_timing_mode ?? 'after_start';
-                    const dUnlock = dTiming.unlock_offset_min ?? unlockOffsetMin;
-                    const dLock = dTiming.lock_offset_min ?? 15;
-
-                    return (
-                      <div
-                        key={dId}
-                        style={{
-                          padding: '0.625rem 0.75rem',
-                          background: 'var(--color-bg-base)',
-                          border: `1px solid ${isCustom ? 'rgba(36, 101, 245, 0.4)' : 'var(--color-border)'}`,
-                          borderRadius: 'var(--radius-sm)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.5rem',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--color-text-primary)' }}>
-                              {doorLabel}
-                            </span>
-                            <span className={`badge ${isCustom ? 'badge-info' : 'badge-neutral'}`} style={{ fontSize: '0.625rem' }}>
-                              {isCustom ? 'Custom' : 'Default'}
-                            </span>
-                          </div>
-                          <div>
-                            {isCustom ? (
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.35rem' }}
-                                onClick={() => {
-                                  const next = { ...doorTimings };
-                                  delete next[dId];
-                                  setDoorTimings(next);
-                                }}
-                              >
-                                ↩️ Reset
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.35rem' }}
-                                onClick={() => {
-                                  setDoorTimings((prev) => ({
-                                    ...prev,
-                                    [dId]: {
-                                      lock_timing_mode: 'after_start',
-                                      lock_offset_min: 15,
-                                      unlock_offset_min: unlockOffsetMin,
-                                    },
-                                  }));
-                                }}
-                              >
-                                ⚙️ Customize
-                              </button>
-                            )}
-                          </div>
+                          <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                            🚪 {doorLabel}
+                          </span>
+                          <span style={{ fontSize: '0.75rem', color: isCustom ? 'var(--color-accent)' : 'var(--color-text-muted)', fontWeight: isCustom ? 600 : 400 }}>
+                            {dMode === 'after_start'
+                              ? dLock === 0
+                                ? `🔒 Locks at start (-${dUnlock}m)`
+                                : `🛡️ Locks +${dLock}m after start (-${dUnlock}m)`
+                              : dLock === 0
+                              ? `🚪 Open entire service (-${dUnlock}m)`
+                              : `🕒 Locks +${dLock}m after end (-${dUnlock}m)`}
+                          </span>
                         </div>
-
-                        {isCustom && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                            {/* Mode Selection */}
-                            <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                className={`btn btn-sm ${dMode === 'after_start' ? 'btn-primary' : 'btn-secondary'}`}
-                                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem' }}
-                                onClick={() => {
-                                  setDoorTimings((prev) => ({
-                                    ...prev,
-                                    [dId]: { ...prev[dId], lock_timing_mode: 'after_start' },
-                                  }));
-                                }}
-                              >
-                                🛡️ Security (after start)
-                              </button>
-                              <button
-                                type="button"
-                                className={`btn btn-sm ${dMode === 'after_end' ? 'btn-primary' : 'btn-secondary'}`}
-                                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem' }}
-                                onClick={() => {
-                                  setDoorTimings((prev) => ({
-                                    ...prev,
-                                    [dId]: { ...prev[dId], lock_timing_mode: 'after_end' },
-                                  }));
-                                }}
-                              >
-                                🕒 Standard (after end)
-                              </button>
-                            </div>
-
-                            {/* Presets */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
-                              <span style={{ fontSize: '0.625rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Presets:</span>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)', background: 'rgba(36, 101, 245, 0.08)', color: 'var(--color-accent)' }}
-                                onClick={() => {
-                                  setDoorTimings((prev) => ({
-                                    ...prev,
-                                    [dId]: { lock_timing_mode: 'after_end', lock_offset_min: 0, unlock_offset_min: unlockOffsetMin },
-                                  }));
-                                }}
-                              >
-                                🚪 Open entire service
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
-                                onClick={() => {
-                                  setDoorTimings((prev) => ({
-                                    ...prev,
-                                    [dId]: { lock_timing_mode: 'after_start', lock_offset_min: 0, unlock_offset_min: 15 },
-                                  }));
-                                }}
-                              >
-                                🔒 Lock at start (0m)
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
-                                onClick={() => {
-                                  setDoorTimings((prev) => ({
-                                    ...prev,
-                                    [dId]: { lock_timing_mode: 'after_start', lock_offset_min: 15, unlock_offset_min: 15 },
-                                  }));
-                                }}
-                              >
-                                🔒 Lock 15m after start
-                              </button>
-                            </div>
-
-                            {/* Sliders */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.2rem' }}>
-                              <div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem' }}>
-                                  <span>Unlock before:</span>
-                                  <strong style={{ color: 'var(--color-accent)' }}>{dUnlock}m</strong>
-                                </div>
-                                <input
-                                  type="range"
-                                  className="form-range"
-                                  min="0"
-                                  max="60"
-                                  step="5"
-                                  value={dUnlock}
-                                  onChange={(e) => {
-                                    const val = Number(e.target.value);
-                                    setDoorTimings((prev) => ({
-                                      ...prev,
-                                      [dId]: { ...prev[dId], unlock_offset_min: val },
-                                    }));
-                                  }}
-                                />
-                              </div>
-                              <div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem' }}>
-                                  <span>{dMode === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
-                                  <strong style={{ color: 'var(--color-accent)' }}>{dLock}m</strong>
-                                </div>
-                                <input
-                                  type="range"
-                                  className="form-range"
-                                  min="0"
-                                  max={dMode === 'after_start' ? '120' : '60'}
-                                  step="5"
-                                  value={dLock}
-                                  onChange={(e) => {
-                                    const val = Number(e.target.value);
-                                    setDoorTimings((prev) => ({
-                                      ...prev,
-                                      [dId]: { ...prev[dId], lock_offset_min: val },
-                                    }));
-                                  }}
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             )}
-          </div>
-        </Modal>
-      )}
+          </Modal>
+        );
+      })()}
 
       {/* Modal: Dismiss Event */}
       {dismissModalWindow && (

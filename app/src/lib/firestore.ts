@@ -709,7 +709,7 @@ export function subscribeToVisitors(
   const q = collection(db, 'organizations', orgId, 'visitors');
   return onSnapshot(q, (snap) => {
     const now = Date.now();
-    callback(snap.docs.map((d) => {
+    const list = snap.docs.map((d) => {
       const data = d.data();
       const startTimeIso = normalizeTimestamp(data.start_time);
       const endTimeIso = normalizeTimestamp(data.end_time);
@@ -734,7 +734,34 @@ export function subscribeToVisitors(
         last_synced: data.last_synced ? normalizeTimestamp(data.last_synced) : undefined,
         updated_at: data.updated_at ? normalizeTimestamp(data.updated_at) : undefined,
       } as unknown as UnifiVisitor;
-    }));
+    });
+
+    // Deduplicate: If both an optimistic document and synced document exist for the same UniFi visitor or person, keep the synced/most complete one
+    const deduplicated: UnifiVisitor[] = [];
+    const seenUnifiIds = new Set<string>();
+
+    // Sort so 'synced' comes before 'pending', and newer updated_at first
+    const sorted = [...list].sort((a, b) => {
+      if (a.sync_status === 'synced' && b.sync_status !== 'synced') return -1;
+      if (b.sync_status === 'synced' && a.sync_status !== 'synced') return 1;
+      return (b.updated_at || '').localeCompare(a.updated_at || '');
+    });
+
+    for (const v of sorted) {
+      const uId = v.unifi_visitor_id || (v.id && !v.id.startsWith('vis_') ? v.id : '');
+      const nameKey = `${(v.first_name || '').toLowerCase()}_${(v.last_name || '').toLowerCase()}_${v.start_time}`;
+      if (uId && seenUnifiIds.has(uId)) {
+        continue;
+      }
+      if (seenUnifiIds.has(nameKey)) {
+        continue;
+      }
+      if (uId) seenUnifiIds.add(uId);
+      seenUnifiIds.add(nameKey);
+      deduplicated.push(v);
+    }
+
+    callback(deduplicated);
   });
 }
 

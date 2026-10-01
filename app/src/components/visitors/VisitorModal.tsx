@@ -183,6 +183,8 @@ export default function VisitorModal({
   };
 
   const handleSave = async () => {
+    if (saving || deleting) return;
+
     if (!firstName.trim()) {
       setError('First name is required.');
       return;

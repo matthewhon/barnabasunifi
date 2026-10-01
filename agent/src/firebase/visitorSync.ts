@@ -45,21 +45,34 @@ export async function syncVisitors(
     const unifiId = visitor.unifi_visitor_id || visitor.id;
     if (!unifiId && !visitor.first_name) continue;
 
-    // Check if there is already a Firestore document with this unifi_visitor_id or matching pending record
+    // Check if there is already a Firestore document with this unifi_visitor_id or matching record
     let targetDocId = unifiId;
     const existingMatch = existingDocs.find((d) => {
       const data = d.data();
-      return (
-        data.unifi_visitor_id === unifiId ||
-        d.id === unifiId ||
-        (data.sync_status === 'pending' &&
-          data.first_name?.toLowerCase() === visitor.first_name?.toLowerCase() &&
-          (data.last_name || '').toLowerCase() === (visitor.last_name || '').toLowerCase())
-      );
+      if (data.unifi_visitor_id === unifiId || d.id === unifiId) return true;
+      if (
+        data.first_name?.toLowerCase() === visitor.first_name?.toLowerCase() &&
+        (data.last_name || '').toLowerCase() === (visitor.last_name || '').toLowerCase()
+      ) {
+        // If pending, it's definitely our optimistic document
+        if (data.sync_status === 'pending') return true;
+        // Or if both share the exact start_time
+        if (data.start_time && visitor.start_time && data.start_time === visitor.start_time) return true;
+      }
+      return false;
     });
 
     if (existingMatch) {
       targetDocId = existingMatch.id;
+      // If we matched an existing doc whose Firestore document ID differs from UniFi's raw ID,
+      // make sure we don't also leave an orphaned document with the raw UniFi ID
+      if (existingMatch.id !== unifiId) {
+        const orphanRef = db.doc(`organizations/${orgId}/visitors/${unifiId}`);
+        const orphanDoc = existingDocs.find((d) => d.id === unifiId);
+        if (orphanDoc) {
+          batch.delete(orphanRef);
+        }
+      }
     }
 
     if (!targetDocId) continue;
