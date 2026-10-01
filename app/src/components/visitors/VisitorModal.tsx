@@ -264,7 +264,7 @@ export default function VisitorModal({
       await fn({
         orgId,
         visitorId: visitor.id,
-        unifiVisitorId: visitor.unifi_visitor_id || visitor.id,
+        unifiVisitorId: visitor.unifi_visitor_id,
       });
       onSaved?.();
       onClose();

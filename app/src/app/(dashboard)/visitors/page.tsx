@@ -11,6 +11,7 @@ import {
 } from '@/lib/firestore';
 import type { UnifiVisitor, Door, VisitorStatus } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
+import Modal from '@/components/ui/Modal';
 import VisitorModal from '@/components/visitors/VisitorModal';
 import { format, isFuture } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
@@ -259,24 +260,39 @@ export default function VisitorsPage() {
     }
   };
 
-  // Revoke / Delete visitor directly
-  const handleRevoke = async (visitor: UnifiVisitor) => {
-    if (!orgId) return;
-    const isRevoked = visitor.status === 'revoked';
-    const actionText = isRevoked ? 'permanently delete' : 'revoke access for';
-    if (!confirm(`Are you sure you want to ${actionText} ${visitor.first_name} ${visitor.last_name || ''}?`)) {
-      return;
-    }
+  const [revokeModalOpen, setRevokeModalOpen] = useState(false);
+  const [revokingVisitor, setRevokingVisitor] = useState<UnifiVisitor | null>(null);
+  const [revoking, setRevoking] = useState(false);
+
+  // Trigger Revoke / Delete Confirmation Modal
+  const handleRevoke = (visitor: UnifiVisitor) => {
+    setRevokingVisitor(visitor);
+    setRevokeModalOpen(true);
+  };
+
+  const confirmRevoke = async () => {
+    if (!orgId || !revokingVisitor) return;
+    setRevoking(true);
+    const isRevoked = revokingVisitor.status === 'revoked';
     try {
       const fn = httpsCallable(functions, 'deleteUnifiVisitor');
       await fn({
         orgId,
-        visitorId: visitor.id,
-        unifiVisitorId: visitor.unifi_visitor_id,
+        visitorId: revokingVisitor.id,
+        unifiVisitorId: revokingVisitor.unifi_visitor_id,
       });
-      showFeedback(isRevoked ? `Deleted record for ${visitor.first_name}.` : `Revoked access for ${visitor.first_name}.`, true);
+      showFeedback(
+        isRevoked
+          ? `Deleted record for ${revokingVisitor.first_name}.`
+          : `Revoked access for ${revokingVisitor.first_name}.`,
+        true
+      );
+      setRevokeModalOpen(false);
+      setRevokingVisitor(null);
     } catch (err: any) {
       showFeedback(err.message || 'Failed to revoke/delete visitor.', false);
+    } finally {
+      setRevoking(false);
     }
   };
 
@@ -831,6 +847,57 @@ export default function VisitorsPage() {
           }}
         />
       )}
+
+      {/* Revoke / Delete Confirmation Modal */}
+      <Modal
+        isOpen={revokeModalOpen}
+        onClose={() => !revoking && setRevokeModalOpen(false)}
+        title={revokingVisitor?.status === 'revoked' ? 'Permanently Delete Visitor' : 'Revoke Visitor Access'}
+        footer={
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => setRevokeModalOpen(false)}
+              disabled={revoking}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={confirmRevoke}
+              disabled={revoking}
+            >
+              {revoking
+                ? 'Processing…'
+                : revokingVisitor?.status === 'revoked'
+                ? 'Delete Record'
+                : 'Revoke Access'}
+            </button>
+          </div>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.9375rem', lineHeight: 1.5, margin: 0 }}>
+            {revokingVisitor?.status === 'revoked' ? (
+              <>
+                Are you sure you want to permanently delete the visitor record for{' '}
+                <strong style={{ color: 'var(--color-text-primary)' }}>
+                  {revokingVisitor?.first_name} {revokingVisitor?.last_name || ''}
+                </strong>
+                ? This will remove all remaining references in the portal and UniFi Access.
+              </>
+            ) : (
+              <>
+                Are you sure you want to revoke access for{' '}
+                <strong style={{ color: 'var(--color-text-primary)' }}>
+                  {revokingVisitor?.first_name} {revokingVisitor?.last_name || ''}
+                </strong>
+                ? This will immediately disable their PIN code and remove them from all assigned doors in UniFi Access.
+              </>
+            )}
+          </p>
+        </div>
+      </Modal>
     </div>
   );
 }
