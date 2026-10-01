@@ -27,6 +27,7 @@ import type {
   SyncedUser,
   UnifiAccessPolicy,
   Door,
+  DoorTimingConfig,
   ScheduleWindow,
   DoorCommand,
   AuditLogEntry,

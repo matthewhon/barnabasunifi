@@ -155,6 +155,24 @@ function DoorCard({
     return s.door_ids?.includes(doorId) || (unifiDoorId && s.door_ids?.includes(unifiDoorId));
   });
 
+  // Next upcoming PCO schedule window for this specific door
+  const nowMs = Date.now();
+  const nextUpcomingWindow = scheduleWindows
+    .filter((w) => {
+      const isDoorInWindow =
+        w.door_ids?.includes(door.id) ||
+        (door.unifi_door_id && w.door_ids?.includes(door.unifi_door_id));
+      if (!isDoorInWindow || w.status === 'cancelled') return false;
+      const unlockTime = w.door_timings?.[door.id]?.unlock_at || w.door_timings?.[door.unifi_door_id]?.unlock_at || w.unlock_at;
+      const lockTime = w.door_timings?.[door.id]?.lock_at || w.door_timings?.[door.unifi_door_id]?.lock_at || w.lock_at;
+      return new Date(lockTime).getTime() > nowMs;
+    })
+    .sort((a, b) => {
+      const aUnlock = a.door_timings?.[door.id]?.unlock_at || a.door_timings?.[door.unifi_door_id]?.unlock_at || a.unlock_at;
+      const bUnlock = b.door_timings?.[door.id]?.unlock_at || b.door_timings?.[door.unifi_door_id]?.unlock_at || b.unlock_at;
+      return new Date(aUnlock).getTime() - new Date(bUnlock).getTime();
+    })[0] || null;
+
   const rawScheduleLabel = door.schedule_name || door.unlock_schedule_name;
   const friendlyScheduleLabel = rawScheduleLabel ? getFriendlyScheduleName(rawScheduleLabel, door.label) : null;
 
@@ -577,6 +595,57 @@ function DoorCard({
           )}
         </div>
       )}
+
+      {/* Next Upcoming PCO Service Window for this Door */}
+      {nextUpcomingWindow && (() => {
+        const dTiming = nextUpcomingWindow.door_timings?.[door.id] || (door.unifi_door_id ? nextUpcomingWindow.door_timings?.[door.unifi_door_id] : undefined);
+        const unlockTime = dTiming?.unlock_at || nextUpcomingWindow.unlock_at;
+        const lockTime = dTiming?.lock_at || nextUpcomingWindow.lock_at;
+        const mode = dTiming?.lock_timing_mode || nextUpcomingWindow.lock_timing_mode;
+        const lockOffset = dTiming?.lock_offset_min;
+        const hasCustomTiming = Boolean(dTiming);
+
+        let timingBadge = 'Mapping Default';
+        if (hasCustomTiming) {
+          if (mode === 'after_start') {
+            timingBadge = lockOffset === 0 ? '🔒 Locks at start' : `🛡️ Locks +${lockOffset ?? 15}m after start`;
+          } else {
+            timingBadge = lockOffset === 0 ? '🚪 Entire service' : `🕒 Locks +${lockOffset ?? 15}m after end`;
+          }
+        }
+
+        return (
+          <div
+            style={{
+              padding: '0.45rem 0.6rem',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(36, 101, 245, 0.06)',
+              border: '1px solid rgba(36, 101, 245, 0.2)',
+              fontSize: '0.75rem',
+              lineHeight: 1.35,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.2rem',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.25rem' }}>
+              <span style={{ fontWeight: 600, color: 'var(--color-accent)' }}>
+                📋 Next Service: {nextUpcomingWindow.source_label}
+              </span>
+              <span
+                className={`badge ${hasCustomTiming ? 'badge-info' : 'badge-neutral'}`}
+                style={{ fontSize: '0.625rem', padding: '0.05rem 0.3rem' }}
+              >
+                {timingBadge}
+              </span>
+            </div>
+            <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-secondary)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <span>🔓 {safeFormat(unlockTime, 'EEE h:mm a')}</span>
+              <span>🔒 {safeFormat(lockTime, 'h:mm a')}</span>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Actions */}
       <div style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto' }}>
