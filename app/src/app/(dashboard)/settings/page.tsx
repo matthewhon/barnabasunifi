@@ -52,6 +52,16 @@ function CopyIcon() {
   );
 }
 
+function DownloadIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
 // ─── Section Card ─────────────────────────────────────────────────────────────
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
@@ -934,6 +944,59 @@ export default function SettingsPage() {
                 </button>
               </div>
 
+              {/* Docker Agent Download Box */}
+              <div
+                style={{
+                  background: 'linear-gradient(135deg, rgba(36, 101, 245, 0.08) 0%, rgba(16, 185, 129, 0.05) 100%)',
+                  padding: '1.25rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid rgba(36, 101, 245, 0.3)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.875rem',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: '16rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                      <h4 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>
+                        📦 Download Local Docker Agent (.zip)
+                      </h4>
+                      <span className="badge badge-primary" style={{ fontSize: '0.6875rem' }}>
+                        Ready to Install
+                      </span>
+                    </div>
+                    <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.5 }}>
+                      Everything required to run the on-premises agent for Windows, macOS, Linux, or Raspberry Pi. Includes <code>docker-compose.yml</code>, <code>START_AGENT.bat</code>, <code>start_agent.sh</code>, and automatic LAN console discovery.
+                    </p>
+                  </div>
+                  <a
+                    href="/api/agent/download"
+                    download="unifi-pco-agent.zip"
+                    className="btn btn-primary"
+                    style={{
+                      textDecoration: 'none',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                      padding: '0.6rem 1.1rem',
+                      boxShadow: '0 2px 8px rgba(36, 101, 245, 0.3)',
+                    }}
+                  >
+                    <DownloadIcon />
+                    <span>Download Docker Agent (.zip)</span>
+                  </a>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(13rem, 1fr))', gap: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(36, 101, 245, 0.15)', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                  <div><strong>🪟 Windows:</strong> Unzip &amp; double-click <code>START_AGENT.bat</code></div>
+                  <div><strong>🍎 macOS / 🐧 Linux:</strong> Unzip &amp; run <code>./start_agent.sh</code> or <code>docker compose up -d</code></div>
+                  <div><strong>🌐 Local UI:</strong> Browser configuration portal opens at <code>http://localhost:8080</code></div>
+                </div>
+              </div>
+
               {/* Setup Instructions */}
               <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
                 <h4 style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--color-text-primary)' }}>
@@ -941,19 +1004,19 @@ export default function SettingsPage() {
                 </h4>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
                   <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
-                    <strong style={{ color: 'var(--color-text-primary)' }}>Option 1: Zero-Touch CLI (Recommended)</strong>
+                    <strong style={{ color: 'var(--color-text-primary)' }}>Option 1: Quick Launch from Downloaded Zip (Recommended)</strong>
                     <p style={{ margin: '0.25rem 0 0.5rem 0' }}>
-                      Run this single command on your on-premises machine. The container pairs automatically, pulls your UniFi token, auto-scans the LAN for the console if needed, and starts syncing:
+                      Download the zip above, extract it to a permanent folder on your church machine, and double-click <code>START_AGENT.bat</code> (Windows) or run <code>./start_agent.sh</code> (Mac/Linux). Open <code>http://localhost:8080</code> to paste your connection token.
+                    </p>
+                  </div>
+                  <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
+                    <strong style={{ color: 'var(--color-text-primary)' }}>Option 2: Zero-Touch CLI Command</strong>
+                    <p style={{ margin: '0.25rem 0 0.5rem 0' }}>
+                      If running from the extracted folder via command line, you can pass your token directly:
                     </p>
                     <code style={{ display: 'block', background: 'var(--color-bg-base)', padding: '0.5rem', borderRadius: '4px', wordBreak: 'break-all' }}>
                       docker run -d --name unifi-pco-agent --restart unless-stopped --network host -e CONNECTION_TOKEN={connectionToken || '&lt;YOUR_TOKEN&gt;'} unifi-pco-agent
                     </code>
-                  </div>
-                  <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
-                    <strong style={{ color: 'var(--color-text-primary)' }}>Option 2: Interactive Web Portal</strong>
-                    <p style={{ margin: '0.25rem 0 0' }}>
-                      Start the container with <code>START_AGENT.bat</code> or <code>docker compose up -d</code>, then open <a href="http://localhost:8080" target="_blank" rel="noreferrer" style={{ color: 'var(--color-accent)' }}><code>http://localhost:8080</code></a> in your browser to paste your token or scan subnets interactively.
-                    </p>
                   </div>
                 </div>
               </div>
@@ -1282,8 +1345,19 @@ SKIP_TLS_VERIFY=true`}</pre>
               </div>
 
               {agents.length === 0 ? (
-                <div style={{ padding: '1rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--color-border)', color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-                  No local agents connected yet. Connect your agent container using the registration token above.
+                <div style={{ padding: '1.25rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--color-border)', color: 'var(--color-text-secondary)', fontSize: '0.875rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  <div>No local agents connected yet. Download the agent package below, run it on your church network machine, and pair with your registration token.</div>
+                  <div>
+                    <a
+                      href="/api/agent/download"
+                      download="unifi-pco-agent.zip"
+                      className="btn btn-primary btn-sm"
+                      style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                    >
+                      <DownloadIcon />
+                      <span>Download Docker Agent (.zip)</span>
+                    </a>
+                  </div>
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>

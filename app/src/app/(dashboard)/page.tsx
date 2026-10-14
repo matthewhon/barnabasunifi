@@ -7,12 +7,13 @@ import { useAuth } from '@/lib/auth-context';
 import Link from 'next/link';
 import {
   subscribeToDoors,
+  subscribeToAgents,
   subscribeToScheduleWindows,
   subscribeToUnifiSchedules,
   subscribeToAuditLog,
   subscribeToAccessLogs,
 } from '@/lib/firestore';
-import type { Door, ScheduleWindow, UnifiSchedule, AuditLogEntry, AccessLogEntry } from '@/lib/types';
+import type { Door, Agent, ScheduleWindow, UnifiSchedule, AuditLogEntry, AccessLogEntry } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
 import { safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
 import { getDoorUnlockStatus } from '@/lib/door-status-utils';
@@ -299,6 +300,9 @@ export default function DashboardPage() {
   const [doors, setDoors] = useState<Door[]>([]);
   const [doorsLoading, setDoorsLoading] = useState(true);
 
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(true);
+
   const [scheduleWindows, setScheduleWindows] = useState<ScheduleWindow[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(true);
 
@@ -330,6 +334,11 @@ export default function DashboardPage() {
       setDoorsLoading(false);
     });
 
+    const unsubAgents = subscribeToAgents(orgId, (a) => {
+      setAgents(a);
+      setAgentsLoading(false);
+    });
+
     const unsubWindows = subscribeToScheduleWindows(orgId, (w) => {
       setScheduleWindows(w);
       setScheduleLoading(false);
@@ -350,6 +359,7 @@ export default function DashboardPage() {
 
     return () => {
       unsubDoors();
+      unsubAgents();
       unsubWindows();
       unsubSchedules();
       unsubAudit();
@@ -454,6 +464,80 @@ export default function DashboardPage() {
         >
           {syncMessage}
         </div>
+      )}
+
+      {/* Onboarding Banner for New Users / No Connected Agents */}
+      {!doorsLoading && !agentsLoading && agents.length === 0 && (
+        <section
+          className="card"
+          style={{
+            marginBottom: '1.5rem',
+            padding: '1.5rem',
+            background: 'linear-gradient(135deg, rgba(36, 101, 245, 0.08) 0%, rgba(16, 185, 129, 0.05) 100%)',
+            border: '1px solid rgba(36, 101, 245, 0.3)',
+            borderRadius: 'var(--radius-lg)',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                <span style={{ fontSize: '1.25rem' }}>🚀</span>
+                <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--color-text-primary)', margin: 0 }}>
+                  Welcome! Connect Your Church's UniFi Access Doors
+                </h2>
+                <span className="badge badge-primary" style={{ fontSize: '0.6875rem' }}>Setup Required</span>
+              </div>
+              <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', margin: '0.25rem 0', lineHeight: 1.5 }}>
+                To sync your Planning Center schedule with physical doors, run our lightweight Docker agent on any computer or server connected to your church's local network.
+              </p>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(13rem, 1fr))', gap: '0.75rem' }}>
+              <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', fontSize: '0.8125rem' }}>
+                <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: '0.2rem' }}>1. Download Package</div>
+                <div style={{ color: 'var(--color-text-muted)' }}>Get the ready-to-run zip containing <code>docker-compose.yml</code> and startup scripts.</div>
+              </div>
+              <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', fontSize: '0.8125rem' }}>
+                <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: '0.2rem' }}>2. Start Container</div>
+                <div style={{ color: 'var(--color-text-muted)' }}>Unzip &amp; run <code>START_AGENT.bat</code> (Windows) or <code>./start_agent.sh</code> (Mac/Linux).</div>
+              </div>
+              <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', fontSize: '0.8125rem' }}>
+                <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: '0.2rem' }}>3. Pair Organization</div>
+                <div style={{ color: 'var(--color-text-muted)' }}>Open <code>http://localhost:8080</code> or copy your Connection Token in Settings.</div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <a
+                href="/api/agent/download"
+                download="unifi-pco-agent.zip"
+                className="btn btn-primary"
+                style={{
+                  textDecoration: 'none',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  fontWeight: 600,
+                  boxShadow: '0 2px 8px rgba(36, 101, 245, 0.3)',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                <span>Download Docker Agent (.zip)</span>
+              </a>
+              <Link
+                href="/settings"
+                className="btn btn-secondary"
+                style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                <span>Configure UniFi &amp; Copy Token →</span>
+              </Link>
+            </div>
+          </div>
+        </section>
       )}
 
       {/* Unmapped Events Alert Banner */}
@@ -596,11 +680,24 @@ export default function DashboardPage() {
             {[1, 2, 3].map((i) => <SkeletonCard key={i} />)}
           </div>
         ) : validDoors.length === 0 ? (
-          <div className="card empty-state">
+          <div className="card empty-state" style={{ padding: '2.5rem 1.5rem' }}>
             <p className="empty-state-title">No doors configured</p>
-            <p style={{ fontSize: '0.875rem' }}>
-              Set up your local UniFi agent to start seeing door status here.
+            <p style={{ fontSize: '0.875rem', maxWidth: '28rem', margin: '0 auto 1.25rem auto' }}>
+              Run the local Docker agent on your church network to automatically scan and import your UniFi Access doors.
             </p>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <a
+                href="/api/agent/download"
+                download="unifi-pco-agent.zip"
+                className="btn btn-primary btn-sm"
+                style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                📥 Download Docker Agent (.zip)
+              </a>
+              <Link href="/settings" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
+                Configure in Settings →
+              </Link>
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-3">

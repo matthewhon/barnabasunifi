@@ -29,6 +29,14 @@ async function main() {
   const zipBuffer = fs.readFileSync(zipPath);
   console.log(`   Zip created: ${(zipBuffer.length / 1024).toFixed(1)} KB`);
 
+  // 2b. Package complete Docker Agent bundle for website download
+  try {
+    console.log('2b. Packaging complete Docker Agent installer for website download…');
+    execSync(`node "${path.join(rootDir, 'scripts', 'packageDockerAgent.js')}"`, { stdio: 'inherit' });
+  } catch (err) {
+    console.warn('   ⚠️ Note: Failed to bundle website Docker package:', err.message);
+  }
+
   // 3. Upload to Cloud Function
   const changelog = process.argv[2] || `UniFi credential auto-population, token visibility toggle, and stability improvements`;
   const endpoint = `https://us-central1-barnabasunfi.cloudfunctions.net/uploadAgentRelease`;

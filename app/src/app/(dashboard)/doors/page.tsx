@@ -1845,11 +1845,24 @@ export default function DoorsPage() {
         </h2>
         <div className="card" style={{ padding: '0 1.5rem' }}>
           {agents.length === 0 ? (
-            <div className="empty-state" style={{ padding: '2rem 0' }}>
+            <div className="empty-state" style={{ padding: '2rem 1rem' }}>
               <p className="empty-state-title">No agents registered</p>
-              <p style={{ fontSize: '0.875rem' }}>
-                Deploy the local agent and configure it with your org credentials.
+              <p style={{ fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+                Deploy the local agent on your church network to link your UniFi Access doors with Planning Center.
               </p>
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                <a
+                  href="/api/agent/download"
+                  download="unifi-pco-agent.zip"
+                  className="btn btn-primary btn-sm"
+                  style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  📥 Download Docker Agent (.zip)
+                </a>
+                <Link href="/settings" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
+                  Agent Setup in Settings →
+                </Link>
+              </div>
             </div>
           ) : (
             agents.map((agent) => <AgentStatusRow key={agent.id} agent={agent} latestVersion={latestRelease?.version ?? null} />)

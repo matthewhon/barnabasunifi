@@ -15,6 +15,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "agent:dev": "npm run dev --workspace=agent",
+    "agent:package": "node scripts/packageDockerAgent.js",
     "functions:dev": "npm run dev --workspace=functions"
   },
   "engines": {

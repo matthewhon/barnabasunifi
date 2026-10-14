@@ -331,6 +331,26 @@ export default function RegisterPage() {
         </form>
       </div>
 
+      <div
+        style={{
+          marginTop: '1.25rem',
+          padding: '0.875rem 1rem',
+          background: 'var(--color-bg-surface)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--color-border)',
+          fontSize: '0.8125rem',
+          color: 'var(--color-text-secondary)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+        }}
+      >
+        <span style={{ fontSize: '1.25rem' }}>🐳</span>
+        <span>
+          Includes a downloadable, ready-to-run <strong>Docker Agent</strong> to connect your local church doors with Planning Center.
+        </span>
+      </div>
+
       <p
         style={{
           textAlign: 'center',
