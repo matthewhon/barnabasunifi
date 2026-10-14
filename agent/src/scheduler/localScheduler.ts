@@ -163,7 +163,7 @@ export class LocalScheduler {
     }
 
     if (online) {
-      await this.reportActionOnline(window.id, doorId, doorLabel, 'unlock', status, resultMessage, durationMin);
+      await this.reportActionOnline(window, doorId, doorLabel, 'unlock', status, resultMessage, durationMin);
     } else {
       const record: OfflineActionRecord = {
         id: crypto.randomUUID(),
@@ -171,6 +171,11 @@ export class LocalScheduler {
         door_id: doorId,
         door_label: doorLabel,
         schedule_window_id: window.id,
+        mapping_id: window.mapping_id,
+        mapping_name: window.mapping_name,
+        source_label: window.source_label,
+        source_type: window.source_type,
+        time_type: window.time_type,
         duration_min: durationMin,
         executed_at: new Date().toISOString(),
         status,
@@ -232,7 +237,7 @@ export class LocalScheduler {
     }
 
     if (online) {
-      await this.reportActionOnline(window.id, doorId, doorLabel, 'lock', status, resultMessage);
+      await this.reportActionOnline(window, doorId, doorLabel, 'lock', status, resultMessage);
     } else {
       const record: OfflineActionRecord = {
         id: crypto.randomUUID(),
@@ -240,6 +245,11 @@ export class LocalScheduler {
         door_id: doorId,
         door_label: doorLabel,
         schedule_window_id: window.id,
+        mapping_id: window.mapping_id,
+        mapping_name: window.mapping_name,
+        source_label: window.source_label,
+        source_type: window.source_type,
+        time_type: window.time_type,
         executed_at: new Date().toISOString(),
         status,
         result_message: resultMessage,
@@ -252,7 +262,7 @@ export class LocalScheduler {
    * Directly report action to Firestore when online.
    */
   private async reportActionOnline(
-    windowId: string,
+    window: CachedScheduleWindow,
     doorId: string,
     doorLabel: string,
     action: 'unlock' | 'lock',
@@ -269,7 +279,10 @@ export class LocalScheduler {
         action,
         door_id: doorId,
         door_label: doorLabel,
-        schedule_window_id: windowId,
+        schedule_window_id: window.id,
+        mapping_id: window.mapping_id ?? null,
+        mapping_name: window.mapping_name ?? null,
+        source_label: window.source_label ?? null,
         status,
         result: status === 'done' ? 'success' : 'error',
         result_message: resultMessage,
@@ -280,7 +293,39 @@ export class LocalScheduler {
         timestamp: now,
       });
 
-      // 2. Update Door Document
+      // 2. Activity Stream Log (access_logs)
+      try {
+        const logId = `sched-${window.id}-${doorId}-${action}-${Date.now()}`;
+        const mappingName = window.mapping_name || window.source_label;
+        const displayMessage = `Scheduled ${action === 'unlock' ? 'unlock' : 'lock'} for "${doorLabel}" via ${mappingName}`;
+
+        await db.collection(`organizations/${this.orgId}/access_logs`).doc(logId).set({
+          id: logId,
+          org_id: this.orgId,
+          timestamp: now.toDate().toISOString(),
+          event_type: action === 'unlock' ? 'door_unlock' : 'door_lock',
+          event_result: status === 'done' ? 'success' : 'failed',
+          door_id: doorId,
+          door_label: doorLabel,
+          user_id: 'scheduler',
+          user_name: 'Scheduled Automation',
+          user_type: 'scheduler',
+          access_method: 'schedule',
+          access_method_label: action === 'unlock' ? 'Scheduled Unlock' : 'Scheduled Lock',
+          display_message: displayMessage,
+          schedule_window_id: window.id,
+          mapping_id: window.mapping_id || null,
+          mapping_name: window.mapping_name || null,
+          source_label: window.source_label || null,
+          source_type: window.source_type || null,
+          time_type: window.time_type || null,
+          synced_at: now,
+        });
+      } catch (logErr) {
+        logger.warn(`[LocalScheduler] Activity stream write notice: ${String(logErr)}`);
+      }
+
+      // 3. Update Door Document
       const doorUpdate: Record<string, any> = {
         current_state: action === 'unlock' ? 'unlocked' : 'locked',
         last_synced: now,
@@ -301,11 +346,11 @@ export class LocalScheduler {
       }
       await db.doc(`organizations/${this.orgId}/doors/${doorId}`).set(doorUpdate, { merge: true });
 
-      // 3. Update Window status
+      // 4. Update Window status
       const windowStatus = action === 'unlock'
         ? (status === 'done' ? 'unlocked' : 'unlock_failed')
         : (status === 'done' ? 'locked' : 'lock_failed');
-      await db.doc(`organizations/${this.orgId}/schedule_windows/${windowId}`).update({
+      await db.doc(`organizations/${this.orgId}/schedule_windows/${window.id}`).update({
         status: windowStatus,
         last_updated: now,
       });

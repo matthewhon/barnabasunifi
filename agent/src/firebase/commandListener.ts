@@ -773,6 +773,52 @@ export function startCommandListener(
     // Step 4: Write audit log entry
     await writeAuditLog(db, orgId, command, finalStatus, resultMessage, agentId);
 
+    // Step 4b: Write to Activity Stream (access_logs)
+    if (command.action === 'unlock' || command.action === 'lock') {
+      try {
+        const isScheduled = command.triggered_by === 'scheduler' || Boolean(command.schedule_window_id);
+        const logId = `cmd-${command.id}-${Date.now()}`;
+        const targetDoorId = command.door_id || command.unifi_door_id || 'door';
+        const targetDoorLabel = command.door_label || 'Door';
+        const mappingName = (command as any).mapping_name || (command as any).source_label || (isScheduled ? 'Schedule' : 'Remote');
+        const actionLabel = command.action === 'unlock' ? 'unlock' : 'lock';
+
+        let displayMessage: string;
+        if (isScheduled) {
+          displayMessage = `Scheduled ${actionLabel} for "${targetDoorLabel}" via ${mappingName}`;
+        } else {
+          displayMessage = `Remote ${actionLabel} for "${targetDoorLabel}"`;
+        }
+
+        await db.collection(`organizations/${orgId}/access_logs`).doc(logId).set({
+          id: logId,
+          org_id: orgId,
+          timestamp: nowTimestamp().toDate().toISOString(),
+          event_type: command.action === 'unlock' ? 'door_unlock' : 'door_lock',
+          event_result: finalStatus === 'done' ? 'success' : 'failed',
+          door_id: targetDoorId,
+          door_label: targetDoorLabel,
+          user_id: isScheduled ? 'scheduler' : (command.actor_uid || 'remote_admin'),
+          user_name: isScheduled ? 'Scheduled Automation' : 'Remote Admin',
+          user_type: isScheduled ? 'scheduler' : 'admin',
+          access_method: isScheduled ? 'schedule' : 'remote',
+          access_method_label: isScheduled
+            ? (command.action === 'unlock' ? 'Scheduled Unlock' : 'Scheduled Lock')
+            : (command.action === 'unlock' ? 'Remote Unlock' : 'Remote Lock'),
+          display_message: displayMessage,
+          schedule_window_id: command.schedule_window_id || null,
+          mapping_id: (command as any).mapping_id || null,
+          mapping_name: (command as any).mapping_name || null,
+          source_label: (command as any).source_label || null,
+          source_type: (command as any).source_type || null,
+          time_type: (command as any).time_type || null,
+          synced_at: nowTimestamp(),
+        }, { merge: true });
+      } catch (logErr) {
+        logger.debug(`[CommandListener] Access log notice: ${logErr}`);
+      }
+    }
+
     // Step 5: Update the associated schedule window if applicable
     if (command.schedule_window_id) {
       await updateScheduleWindow(

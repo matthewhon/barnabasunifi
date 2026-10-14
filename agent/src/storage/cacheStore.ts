@@ -42,6 +42,10 @@ export interface CachedScheduleWindow {
   id: string;
   org_id: string;
   source_label: string;
+  source_type?: 'service' | 'group' | string;
+  mapping_id?: string;
+  mapping_name?: string;
+  time_type?: string;
   starts_at: string;
   ends_at: string;
   unlock_at: string;
@@ -59,6 +63,11 @@ export interface OfflineActionRecord {
   door_id: string;
   door_label: string;
   schedule_window_id: string;
+  mapping_id?: string;
+  mapping_name?: string;
+  source_label?: string;
+  source_type?: string;
+  time_type?: string;
   duration_min?: number;
   executed_at: string;
   status: 'done' | 'failed';

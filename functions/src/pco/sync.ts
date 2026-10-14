@@ -283,6 +283,14 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
     // Create door_commands for windows within the next 24 hours ONLY if doors are mapped
     if (doorIds.length > 0) {
+      const commandMeta = {
+        mapping_id: (metadata.mapping_id as string) || (metadata.service_mapping_id as string) || (metadata.group_mapping_id as string) || null,
+        mapping_name: (metadata.mapping_name as string) || null,
+        source_label: (metadata.source_label as string) || null,
+        source_type: (metadata.source_type as string) || null,
+        time_type: (metadata.time_type as string) || null,
+      };
+
       for (let i = 0; i < doorIds.length; i++) {
         const doorId = doorIds[i];
         const doorLabel = doorLabels[i] || doorId;
@@ -292,8 +300,8 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
         if (dUnlockAt.getTime() - now < twentyFourHoursMs) {
           const durationMin = Math.max(1, Math.round((dLockAt.getTime() - dUnlockAt.getTime()) / (60 * 1000)));
-          await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'unlock', dUnlockAt, durationMin);
-          await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'lock', dLockAt);
+          await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'unlock', dUnlockAt, durationMin, commandMeta);
+          await createDoorCommandIfAbsent(commandsRef, windowId, doorId, doorLabel, 'lock', dLockAt, undefined, commandMeta);
         }
       }
     }
@@ -307,7 +315,14 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
     doorLabel: string,
     action: 'unlock' | 'lock',
     executeAt: Date,
-    durationMin?: number
+    durationMin?: number,
+    meta?: {
+      mapping_id?: string | null;
+      mapping_name?: string | null;
+      source_label?: string | null;
+      source_type?: string | null;
+      time_type?: string | null;
+    }
   ): Promise<void> {
     const existingSnap = await ref
       .where('schedule_window_id', '==', windowId)
@@ -326,6 +341,11 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
         if (durationMin !== undefined) {
           updatePayload.duration_min = durationMin;
         }
+        if (meta?.mapping_id) updatePayload.mapping_id = meta.mapping_id;
+        if (meta?.mapping_name) updatePayload.mapping_name = meta.mapping_name;
+        if (meta?.source_label) updatePayload.source_label = meta.source_label;
+        if (meta?.source_type) updatePayload.source_type = meta.source_type;
+        if (meta?.time_type) updatePayload.time_type = meta.time_type;
         await doc.ref.update(updatePayload);
       }
       return;
@@ -349,6 +369,11 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
         if (durationMin !== undefined) {
           updatePayload.duration_min = durationMin;
         }
+        if (meta?.mapping_id) updatePayload.mapping_id = meta.mapping_id;
+        if (meta?.mapping_name) updatePayload.mapping_name = meta.mapping_name;
+        if (meta?.source_label) updatePayload.source_label = meta.source_label;
+        if (meta?.source_type) updatePayload.source_type = meta.source_type;
+        if (meta?.time_type) updatePayload.time_type = meta.time_type;
         await doc.ref.update(updatePayload);
       }
       return;
@@ -364,6 +389,11 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       execute_at: Timestamp.fromDate(executeAt),
       status: 'pending',
       triggered_by: 'scheduler',
+      mapping_id: meta?.mapping_id ?? null,
+      mapping_name: meta?.mapping_name ?? null,
+      source_label: meta?.source_label ?? null,
+      source_type: meta?.source_type ?? null,
+      time_type: meta?.time_type ?? null,
       created_at: FieldValue.serverTimestamp(),
     };
 
@@ -486,6 +516,8 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
                   pco_plan_time_id: planTime.id,
                   pco_service_type_id: serviceTypeId,
                   service_mapping_id: mapping.id ?? null,
+                  mapping_id: mapping.id ?? null,
+                  mapping_name: mapping.pco_resource_label || serviceTypeName,
                   door_ids: mapping.door_ids ?? [],
                   door_labels: mapping.door_labels ?? [],
                   status: 'pending',
@@ -560,6 +592,8 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
             pco_event_id: event.id,
             pco_group_id: groupId,
             group_mapping_id: mapping?.id ?? null,
+            mapping_id: mapping?.id ?? null,
+            mapping_name: mapping?.pco_resource_label || groupName,
             door_ids: doorIds,
             door_labels: doorLabels,
             status: 'pending',

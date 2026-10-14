@@ -2,8 +2,14 @@
 
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { subscribeToAccessLogs, subscribeToDoors } from '@/lib/firestore';
-import type { AccessLogEntry, AccessMethod, Door } from '@/lib/types';
+import {
+  subscribeToAccessLogs,
+  subscribeToDoors,
+  subscribeToMappings,
+  subscribeToScheduleWindows,
+  subscribeToAuditLog,
+} from '@/lib/firestore';
+import type { AccessLogEntry, AccessMethod, Door, Mapping, ScheduleWindow, AuditLogEntry } from '@/lib/types';
 import { format, parseISO, isAfter, isBefore, startOfDay, endOfDay } from 'date-fns';
 import { safeFormat } from '@/lib/date-utils';
 import { httpsCallable } from 'firebase/functions';
@@ -140,10 +146,33 @@ function DoorSensorIcon() {
   );
 }
 
+function ScheduleIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+      <polyline points="12 14 12 17 14 17" />
+    </svg>
+  );
+}
+
+function LinkIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  );
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function renderMethodIcon(method: AccessMethod) {
   switch (method) {
+    case 'schedule':
+      return <ScheduleIcon />;
     case 'nfc_card':
       return <CardIcon />;
     case 'pin_code':
@@ -164,19 +193,38 @@ function renderMethodIcon(method: AccessMethod) {
 
 function renderResultBadge(result: string, eventType: string) {
   const norm = (result || eventType || '').toLowerCase();
+  if (norm.includes('denied') || norm.includes('reject') || norm.includes('fail') || norm.includes('error')) {
+    return (
+      <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor' }} />
+        {eventType.includes('lock') && !eventType.includes('unlock') ? 'Lock Failed' : 'Access Denied'}
+      </span>
+    );
+  }
+  if (eventType === 'door_lock' || norm === 'locked' || (norm.includes('lock') && !norm.includes('unlock'))) {
+    return (
+      <span
+        className="badge"
+        style={{
+          background: 'rgba(99, 102, 241, 0.12)',
+          color: '#6366f1',
+          border: '1px solid rgba(99, 102, 241, 0.25)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.25rem',
+          fontWeight: 600,
+        }}
+      >
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#6366f1' }} />
+        Locked
+      </span>
+    );
+  }
   if (norm.includes('success') || norm.includes('access') || norm.includes('granted') || norm.includes('unlock')) {
     return (
       <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor' }} />
         {norm.includes('unlock') ? 'Unlocked' : 'Access Granted'}
-      </span>
-    );
-  }
-  if (norm.includes('denied') || norm.includes('reject') || norm.includes('fail')) {
-    return (
-      <span className="badge badge-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor' }} />
-        Access Denied
       </span>
     );
   }
@@ -200,7 +248,7 @@ function renderResultBadge(result: string, eventType: string) {
 }
 
 function exportCsv(entries: AccessLogEntry[]) {
-  const headers = ['Timestamp', 'Door', 'User / Actor', 'User Type', 'Access Method', 'Event', 'Result', 'Message'];
+  const headers = ['Timestamp', 'Door', 'User / Actor', 'User Type', 'Access Method', 'Event', 'Result', 'Associated Mapping', 'PCO Source', 'Message'];
   const rows = entries.map((e) => [
     e.timestamp,
     e.door_label ?? '',
@@ -209,6 +257,8 @@ function exportCsv(entries: AccessLogEntry[]) {
     e.access_method_label ?? e.access_method,
     e.event_type,
     e.event_result,
+    e.mapping_name ?? '',
+    e.source_label ?? '',
     e.display_message ?? '',
   ]);
 
@@ -232,14 +282,18 @@ const PAGE_SIZE = 30;
 export default function AccessActivityPage() {
   const { orgId } = useAuth();
 
-  const [allEntries, setAllEntries] = useState<AccessLogEntry[]>([]);
+  const [rawLogs, setRawLogs] = useState<AccessLogEntry[]>([]);
+  const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
   const [doors, setDoors] = useState<Door[]>([]);
+  const [mappings, setMappings] = useState<Mapping[]>([]);
+  const [scheduleWindows, setScheduleWindows] = useState<ScheduleWindow[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [feedback, setFeedback] = useState<{ text: string; ok: boolean } | null>(null);
   const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
 
   // Filters
+  const [streamTab, setStreamTab] = useState<'all' | 'schedule' | 'users'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDoor, setSelectedDoor] = useState<string>('all');
   const [methodFilter, setMethodFilter] = useState<AccessMethod | 'all'>('all');
@@ -262,15 +316,27 @@ export default function AccessActivityPage() {
     const unsubLogs = subscribeToAccessLogs(
       orgId,
       (entries) => {
-        setAllEntries(entries);
+        setRawLogs(entries);
         setLoading(false);
       },
       subscribeLimit.current
     );
+    const unsubAudit = subscribeToAuditLog(
+      orgId,
+      (entries) => {
+        setAuditEntries(entries);
+      },
+      250
+    );
+    const unsubMappings = subscribeToMappings(orgId, (m) => setMappings(m));
+    const unsubWindows = subscribeToScheduleWindows(orgId, (w) => setScheduleWindows(w));
 
     return () => {
       unsubDoors();
       unsubLogs();
+      unsubAudit();
+      unsubMappings();
+      unsubWindows();
     };
   }, [orgId]);
 
@@ -301,18 +367,158 @@ export default function AccessActivityPage() {
     }
   };
 
+  // Mappings & Windows Lookup Maps
+  const mappingsMap = useMemo(() => {
+    const map = new Map<string, Mapping>();
+    for (const m of mappings) {
+      map.set(m.id, m);
+      if (m.pco_resource_id) {
+        map.set(m.pco_resource_id, m);
+      }
+    }
+    return map;
+  }, [mappings]);
+
+  const windowsMap = useMemo(() => {
+    const map = new Map<string, ScheduleWindow>();
+    for (const w of scheduleWindows) {
+      map.set(w.id, w);
+    }
+    return map;
+  }, [scheduleWindows]);
+
+  // Merged Activity Stream (Access Logs + Scheduled Events)
+  const allEntries = useMemo(() => {
+    // 1. Process access_logs entries and enrich scheduled entries with mapping info
+    const enrichedLogs: AccessLogEntry[] = rawLogs.map((entry) => {
+      if (entry.access_method === 'schedule' || entry.schedule_window_id || entry.user_type === 'scheduler') {
+        const window = entry.schedule_window_id ? windowsMap.get(entry.schedule_window_id) : undefined;
+        const mappingId = entry.mapping_id || window?.mapping_id || window?.service_mapping_id || window?.group_mapping_id;
+        const mapping = mappingId ? mappingsMap.get(mappingId) : undefined;
+
+        const mappingName =
+          entry.mapping_name ||
+          mapping?.pco_resource_label ||
+          window?.mapping_name ||
+          (window ? window.source_label : undefined);
+        const sourceLabel = entry.source_label || window?.source_label;
+        const sourceType = entry.source_type || window?.source_type || mapping?.source_type;
+        const timeType = entry.time_type || window?.time_type;
+
+        const isLock = entry.event_type === 'door_lock' || (entry.event_type.includes('lock') && !entry.event_type.includes('unlock'));
+
+        return {
+          ...entry,
+          event_type: isLock ? 'door_lock' : 'door_unlock',
+          user_name: entry.user_name || 'Scheduled Automation',
+          user_type: 'scheduler' as const,
+          access_method: 'schedule' as const,
+          access_method_label: entry.access_method_label || (isLock ? 'Scheduled Lock' : 'Scheduled Unlock'),
+          mapping_id: mappingId,
+          mapping_name: mappingName,
+          source_label: sourceLabel,
+          source_type: sourceType,
+          time_type: timeType,
+        };
+      }
+      return entry;
+    });
+
+    // 2. Incorporate scheduled lock/unlock entries recorded in audit_log
+    const scheduledAuditEntries: AccessLogEntry[] = [];
+    for (const a of auditEntries) {
+      if ((a.action === 'unlock' || a.action === 'lock') && a.triggered_by !== 'manual') {
+        const isUnlock = a.action === 'unlock';
+        const eventType = isUnlock ? 'door_unlock' : 'door_lock';
+        const window = (a as any).schedule_window_id ? windowsMap.get((a as any).schedule_window_id) : undefined;
+        const mappingId = (a as any).mapping_id || window?.mapping_id || window?.service_mapping_id || window?.group_mapping_id;
+        const mapping = mappingId ? mappingsMap.get(mappingId) : undefined;
+
+        const mappingName =
+          (a as any).mapping_name ||
+          mapping?.pco_resource_label ||
+          window?.mapping_name ||
+          window?.source_label;
+        const sourceLabel = (a as any).source_label || window?.source_label;
+        const sourceType = window?.source_type || mapping?.source_type;
+        const timeType = window?.time_type;
+
+        // Dedup: check if an entry with this window_id/door_id/action and close timestamp already exists in enrichedLogs
+        const aTimeMs = new Date(a.timestamp).getTime();
+        const exists = enrichedLogs.some((e) => {
+          if (e.id === a.id || e.id === `audit-${a.id}`) return true;
+          if (e.door_id === a.door_id && e.event_type === eventType) {
+            const eTimeMs = new Date(e.timestamp).getTime();
+            if (Math.abs(eTimeMs - aTimeMs) < 60000) return true;
+          }
+          return false;
+        });
+
+        if (!exists) {
+          const doorLabel =
+            a.door_label ||
+            (a.door_id ? doors.find((d) => d.id === a.door_id || d.unifi_door_id === a.door_id)?.label : undefined) ||
+            'Door';
+          const actionLabel = isUnlock ? 'unlock' : 'lock';
+          const displayMsg =
+            a.message ||
+            `Scheduled ${actionLabel} for "${doorLabel}" via ${mappingName || 'Schedule'}`;
+
+          scheduledAuditEntries.push({
+            id: `audit-${a.id}`,
+            org_id: a.org_id || orgId || '',
+            timestamp: a.timestamp,
+            event_type: eventType,
+            event_result: a.result === 'error' ? 'failed' : 'success',
+            door_id: a.door_id || '',
+            door_label: doorLabel,
+            user_id: 'scheduler',
+            user_name: 'Scheduled Automation',
+            user_type: 'scheduler',
+            access_method: 'schedule',
+            access_method_label: isUnlock ? 'Scheduled Unlock' : 'Scheduled Lock',
+            display_message: displayMsg,
+            schedule_window_id: (a as any).schedule_window_id,
+            mapping_id: mappingId,
+            mapping_name: mappingName,
+            source_label: sourceLabel,
+            source_type: sourceType,
+            time_type: timeType,
+          });
+        }
+      }
+    }
+
+    const combined = [...enrichedLogs, ...scheduledAuditEntries];
+    combined.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return combined;
+  }, [rawLogs, auditEntries, mappingsMap, windowsMap, doors, orgId]);
+
   // KPI Calculations
   const kpis = useMemo(() => {
     const todayStr = format(new Date(), 'yyyy-MM-dd');
     let todayEvents = 0;
+    let scheduledEventsCount = 0;
+    let scheduledTodayCount = 0;
+    let userEventsCount = 0;
     const uniqueUsersToday = new Set<string>();
     const doorCounts: Record<string, number> = {};
     const methodCounts: Record<string, number> = {};
 
     for (const entry of allEntries) {
+      const isSched = entry.access_method === 'schedule' || Boolean(entry.schedule_window_id) || entry.user_type === 'scheduler';
+      if (isSched) {
+        scheduledEventsCount++;
+      } else {
+        userEventsCount++;
+      }
+
       if (entry.timestamp && entry.timestamp.startsWith(todayStr)) {
         todayEvents++;
-        if (entry.user_name && entry.user_name !== 'Anonymous / Guest' && entry.user_name !== 'Unknown User') {
+        if (isSched) {
+          scheduledTodayCount++;
+        }
+        if (entry.user_name && !isSched && entry.user_name !== 'Anonymous / Guest' && entry.user_name !== 'Unknown User') {
           uniqueUsersToday.add(entry.user_name);
         }
       }
@@ -333,12 +539,24 @@ export default function AccessActivityPage() {
       uniqueUsersToday: uniqueUsersToday.size,
       topDoor,
       topMethod,
+      scheduledEventsCount,
+      scheduledTodayCount,
+      userEventsCount,
     };
   }, [allEntries]);
 
   // Filtered Entries
   const filtered = useMemo(() => {
     return allEntries.filter((e) => {
+      // Stream Tab Quick Filter
+      const isSched = e.access_method === 'schedule' || Boolean(e.schedule_window_id) || Boolean(e.mapping_id) || e.user_type === 'scheduler';
+      if (streamTab === 'schedule' && !isSched) {
+        return false;
+      }
+      if (streamTab === 'users' && isSched) {
+        return false;
+      }
+
       // Search
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -346,7 +564,11 @@ export default function AccessActivityPage() {
         const matchesDoor = e.door_label?.toLowerCase().includes(q);
         const matchesMethod = e.access_method_label?.toLowerCase().includes(q);
         const matchesMsg = e.display_message?.toLowerCase().includes(q);
-        if (!matchesUser && !matchesDoor && !matchesMethod && !matchesMsg) return false;
+        const matchesMapping = e.mapping_name?.toLowerCase().includes(q);
+        const matchesSource = e.source_label?.toLowerCase().includes(q);
+        if (!matchesUser && !matchesDoor && !matchesMethod && !matchesMsg && !matchesMapping && !matchesSource) {
+          return false;
+        }
       }
 
       // Door Filter
@@ -363,8 +585,15 @@ export default function AccessActivityPage() {
       if (eventTypeFilter !== 'all') {
         if (eventTypeFilter === 'opened' && !e.event_type.includes('open')) return false;
         if (eventTypeFilter === 'closed' && !e.event_type.includes('close')) return false;
-        if (eventTypeFilter === 'granted' && e.event_result !== 'success') return false;
-        if (eventTypeFilter === 'denied' && e.event_result !== 'denied') return false;
+        if (eventTypeFilter === 'locked') {
+          if (!e.event_type.includes('lock') || e.event_type.includes('unlock')) return false;
+        }
+        if (eventTypeFilter === 'granted') {
+          if (e.event_result !== 'success' || (e.event_type.includes('lock') && !e.event_type.includes('unlock'))) return false;
+        }
+        if (eventTypeFilter === 'denied') {
+          if (e.event_result !== 'denied' && e.event_result !== 'failed') return false;
+        }
       }
 
       // Date Range
@@ -381,7 +610,7 @@ export default function AccessActivityPage() {
 
       return true;
     });
-  }, [allEntries, searchQuery, selectedDoor, methodFilter, eventTypeFilter, dateFrom, dateTo]);
+  }, [allEntries, streamTab, searchQuery, selectedDoor, methodFilter, eventTypeFilter, dateFrom, dateTo]);
 
   const displayed = filtered.slice(0, displayCount);
   const hasMore = filtered.length > displayCount;
@@ -394,6 +623,7 @@ export default function AccessActivityPage() {
   }
 
   function clearFilters() {
+    setStreamTab('all');
     setSearchQuery('');
     setSelectedDoor('all');
     setMethodFilter('all');
@@ -403,13 +633,15 @@ export default function AccessActivityPage() {
     setDisplayCount(PAGE_SIZE);
   }
 
-  const hasActiveFilters =
+  const hasSearchOrFilterCriteria =
     Boolean(searchQuery) ||
     selectedDoor !== 'all' ||
     methodFilter !== 'all' ||
     eventTypeFilter !== 'all' ||
     Boolean(dateFrom) ||
     Boolean(dateTo);
+
+  const hasActiveFilters = hasSearchOrFilterCriteria || streamTab !== 'all';
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
@@ -442,7 +674,7 @@ export default function AccessActivityPage() {
       <div className="page-header" style={{ marginBottom: '1.25rem' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <h1 className="page-title" style={{ margin: 0 }}>Activity & Access Logs</h1>
+            <h1 className="page-title" style={{ margin: 0 }}>Activity & Access Stream</h1>
             <span
               style={{
                 display: 'inline-flex',
@@ -472,7 +704,7 @@ export default function AccessActivityPage() {
             </span>
           </div>
           <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-            Real-time door access events, credential methods, and physical door opens/closes by user.
+            Live stream of physical door accesses, credential swipes, and scheduled automated locks & unlocks with Planning Center mappings.
           </p>
         </div>
 
@@ -511,7 +743,7 @@ export default function AccessActivityPage() {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
           gap: '1rem',
           marginBottom: '1.5rem',
         }}
@@ -525,6 +757,18 @@ export default function AccessActivityPage() {
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
             {kpis.total} total recorded
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '1rem', borderLeft: '3px solid #6366f1' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Scheduled Automations
+          </div>
+          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#6366f1', marginTop: '0.25rem' }}>
+            {kpis.scheduledEventsCount}
+          </div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
+            {kpis.scheduledTodayCount} scheduled today
           </div>
         </div>
 
@@ -575,18 +819,92 @@ export default function AccessActivityPage() {
           marginBottom: '1.5rem',
           display: 'flex',
           flexDirection: 'column',
-          gap: '0.75rem',
+          gap: '1rem',
         }}
       >
+        {/* Stream View Mode Tabs */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--color-border)', paddingBottom: '0.75rem' }}>
+          <button
+            type="button"
+            className={`btn btn-sm ${streamTab === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setStreamTab('all')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: streamTab === 'all' ? 600 : 500 }}
+          >
+            <span>All Activity</span>
+            <span
+              style={{
+                fontSize: '0.6875rem',
+                padding: '0.1rem 0.4rem',
+                borderRadius: '999px',
+                background: streamTab === 'all' ? 'rgba(255,255,255,0.2)' : 'var(--color-bg-base)',
+                border: '1px solid var(--color-border)',
+              }}
+            >
+              {allEntries.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`btn btn-sm ${streamTab === 'schedule' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setStreamTab('schedule')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              fontWeight: streamTab === 'schedule' ? 600 : 500,
+              background: streamTab === 'schedule' ? '#6366f1' : undefined,
+              borderColor: streamTab === 'schedule' ? '#6366f1' : undefined,
+              color: streamTab === 'schedule' ? '#ffffff' : undefined,
+            }}
+          >
+            <ScheduleIcon />
+            <span>Scheduled Lock & Unlock</span>
+            <span
+              style={{
+                fontSize: '0.6875rem',
+                padding: '0.1rem 0.4rem',
+                borderRadius: '999px',
+                background: streamTab === 'schedule' ? 'rgba(255,255,255,0.2)' : 'rgba(99, 102, 241, 0.1)',
+                color: streamTab === 'schedule' ? '#ffffff' : '#6366f1',
+                border: streamTab === 'schedule' ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(99, 102, 241, 0.25)',
+                fontWeight: 700,
+              }}
+            >
+              {kpis.scheduledEventsCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`btn btn-sm ${streamTab === 'users' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setStreamTab('users')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: streamTab === 'users' ? 600 : 500 }}
+          >
+            <span>👤 User & Badge Activity</span>
+            <span
+              style={{
+                fontSize: '0.6875rem',
+                padding: '0.1rem 0.4rem',
+                borderRadius: '999px',
+                background: streamTab === 'users' ? 'rgba(255,255,255,0.2)' : 'var(--color-bg-base)',
+                border: '1px solid var(--color-border)',
+              }}
+            >
+              {kpis.userEventsCount}
+            </span>
+          </button>
+        </div>
+
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end' }}>
           {/* Search Box */}
           <div className="form-group" style={{ flex: '3 1 14rem' }}>
-            <label className="form-label">Search User or Door</label>
+            <label className="form-label">Search Mapping, Event, User, or Door</label>
             <div style={{ position: 'relative' }}>
               <input
                 type="text"
                 className="form-input"
-                placeholder="Filter by name, door, or message..."
+                placeholder="Search by mapping name, PCO series, door, or actor…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 style={{ paddingLeft: '2.25rem' }}
@@ -625,7 +943,7 @@ export default function AccessActivityPage() {
               <option value="all">All Methods</option>
               {ALL_METHODS.map((m) => (
                 <option key={m} value={m}>
-                  {METHOD_LABELS[m]}
+                  {m === 'schedule' ? '📅 Schedule (Automated)' : METHOD_LABELS[m]}
                 </option>
               ))}
             </select>
@@ -640,8 +958,9 @@ export default function AccessActivityPage() {
               onChange={(e) => setEventTypeFilter(e.target.value)}
             >
               <option value="all">All Results</option>
-              <option value="granted">Access Granted</option>
-              <option value="denied">Access Denied</option>
+              <option value="granted">Access Granted / Unlocked</option>
+              <option value="locked">Door Locked</option>
+              <option value="denied">Access Denied / Failed</option>
               <option value="opened">Door Opened</option>
               <option value="closed">Door Closed</option>
             </select>
@@ -704,14 +1023,22 @@ export default function AccessActivityPage() {
           </div>
         ) : filtered.length === 0 ? (
           <div style={{ padding: '3.5rem 1rem', textAlign: 'center' }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🚪</div>
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>
+              {streamTab === 'schedule' ? '📅' : '🚪'}
+            </div>
             <h3 style={{ margin: '0 0 0.5rem', color: 'var(--color-text-primary)' }}>
-              {hasActiveFilters ? 'No matching activity' : 'No door activity recorded yet'}
+              {hasSearchOrFilterCriteria
+                ? 'No matching activity'
+                : streamTab === 'schedule'
+                ? 'No scheduled door locks or unlocks recorded yet'
+                : 'No door activity recorded yet'}
             </h3>
-            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', maxWidth: '400px', margin: '0 auto 1.5rem' }}>
-              {hasActiveFilters
+            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', maxWidth: '440px', margin: '0 auto 1.5rem' }}>
+              {hasSearchOrFilterCriteria
                 ? 'Try adjusting your search criteria or date filters.'
-                : 'As users tap cards, enter PINs, use mobile keys, or sensors trigger, their events will stream here live.'}
+                : streamTab === 'schedule'
+                ? 'As Planning Center events reach their configured unlock and lock buffer times, automated executions and their associated door mappings will stream here live.'
+                : 'As users tap cards, enter PINs, use mobile keys, or scheduled mappings trigger, their events will stream here live.'}
             </p>
             {hasActiveFilters ? (
               <button className="btn btn-secondary btn-sm" onClick={clearFilters}>
@@ -730,105 +1057,238 @@ export default function AccessActivityPage() {
               <thead>
                 <tr>
                   <th style={{ width: '160px' }}>Timestamp</th>
-                  <th>User / Actor</th>
+                  <th style={{ width: '200px' }}>Actor / Trigger</th>
                   <th>Door</th>
                   <th>Access Method</th>
                   <th>Event / Result</th>
-                  <th>Activity Details</th>
+                  <th>Activity & Mapping Details</th>
                 </tr>
               </thead>
               <tbody>
-                {displayed.map((entry) => (
-                  <tr key={entry.id}>
-                    {/* Timestamp */}
-                    <td style={{ whiteSpace: 'nowrap', fontSize: '0.8125rem' }}>
-                      <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>
-                        {safeFormat(entry.timestamp, 'h:mm:ss a')}
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                        {safeFormat(entry.timestamp, 'MMM d, yyyy')}
-                      </div>
-                    </td>
+                {displayed.map((entry) => {
+                  const isScheduled = entry.access_method === 'schedule' || Boolean(entry.schedule_window_id) || entry.user_type === 'scheduler';
+                  const isLock = entry.event_type === 'door_lock' || (entry.event_type.includes('lock') && !entry.event_type.includes('unlock'));
 
-                    {/* User / Actor */}
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <div
-                          style={{
-                            width: '1.75rem',
-                            height: '1.75rem',
-                            borderRadius: '50%',
-                            background: entry.user_type === 'visitor' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(36, 101, 245, 0.15)',
-                            color: entry.user_type === 'visitor' ? '#d97706' : '#2465f5',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '0.75rem',
-                            fontWeight: 700,
-                            flexShrink: 0,
-                          }}
-                        >
-                          {(entry.user_name || 'U')[0].toUpperCase()}
+                  return (
+                    <tr
+                      key={entry.id}
+                      style={{
+                        background: isScheduled ? 'rgba(99, 102, 241, 0.02)' : undefined,
+                      }}
+                    >
+                      {/* Timestamp */}
+                      <td style={{ whiteSpace: 'nowrap', fontSize: '0.8125rem' }}>
+                        <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                          {safeFormat(entry.timestamp, 'h:mm:ss a')}
                         </div>
-                        <div>
-                          <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                            {entry.user_name || 'Anonymous / Sensor'}
-                          </div>
-                          {entry.user_type && entry.user_type !== 'unknown' && (
-                            <span
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                          {safeFormat(entry.timestamp, 'MMM d, yyyy')}
+                        </div>
+                      </td>
+
+                      {/* User / Actor */}
+                      <td>
+                        {isScheduled ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div
                               style={{
-                                fontSize: '0.6875rem',
-                                color: entry.user_type === 'visitor' ? '#d97706' : 'var(--color-text-muted)',
-                                textTransform: 'capitalize',
+                                width: '1.875rem',
+                                height: '1.875rem',
+                                borderRadius: 'var(--radius-sm, 6px)',
+                                background: 'rgba(99, 102, 241, 0.12)',
+                                color: '#6366f1',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '0.875rem',
+                                flexShrink: 0,
+                                border: '1px solid rgba(99, 102, 241, 0.25)',
                               }}
                             >
-                              {entry.user_type}
-                            </span>
-                          )}
+                              <ScheduleIcon />
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                                Scheduled Automation
+                              </div>
+                              <span
+                                style={{
+                                  fontSize: '0.6875rem',
+                                  color: '#6366f1',
+                                  fontWeight: 600,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.04em',
+                                }}
+                              >
+                                PCO Scheduler
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div
+                              style={{
+                                width: '1.75rem',
+                                height: '1.75rem',
+                                borderRadius: '50%',
+                                background: entry.user_type === 'visitor' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(36, 101, 245, 0.15)',
+                                color: entry.user_type === 'visitor' ? '#d97706' : '#2465f5',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                flexShrink: 0,
+                              }}
+                            >
+                              {(entry.user_name || 'U')[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                                {entry.user_name || 'Anonymous / Sensor'}
+                              </div>
+                              {entry.user_type && entry.user_type !== 'unknown' && (
+                                <span
+                                  style={{
+                                    fontSize: '0.6875rem',
+                                    color: entry.user_type === 'visitor' ? '#d97706' : 'var(--color-text-muted)',
+                                    textTransform: 'capitalize',
+                                  }}
+                                >
+                                  {entry.user_type}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Door */}
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 500, color: 'var(--color-text-primary)' }}>
+                          <DoorSensorIcon />
+                          {entry.door_label || 'Unspecified Door'}
                         </div>
-                      </div>
-                    </td>
+                      </td>
 
-                    {/* Door */}
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 500, color: 'var(--color-text-primary)' }}>
-                        <DoorSensorIcon />
-                        {entry.door_label || 'Unspecified Door'}
-                      </div>
-                    </td>
+                      {/* Access Method */}
+                      <td>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.375rem',
+                            padding: '0.25rem 0.625rem',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: '0.8125rem',
+                            background: isScheduled ? 'rgba(99, 102, 241, 0.08)' : 'var(--color-bg-base)',
+                            border: isScheduled ? '1px solid rgba(99, 102, 241, 0.25)' : '1px solid var(--color-border)',
+                            color: isScheduled ? '#6366f1' : 'var(--color-text-primary)',
+                            fontWeight: isScheduled ? 600 : 500,
+                          }}
+                        >
+                          {renderMethodIcon(entry.access_method)}
+                          {isScheduled
+                            ? isLock
+                              ? 'Scheduled Lock'
+                              : 'Scheduled Unlock'
+                            : entry.access_method_label || METHOD_LABELS[entry.access_method] || 'Unknown'}
+                        </span>
+                      </td>
 
-                    {/* Access Method */}
-                    <td>
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.375rem',
-                          padding: '0.25rem 0.625rem',
-                          borderRadius: 'var(--radius-sm)',
-                          fontSize: '0.8125rem',
-                          background: 'var(--color-bg-base)',
-                          border: '1px solid var(--color-border)',
-                          color: 'var(--color-text-primary)',
-                          fontWeight: 500,
-                        }}
-                      >
-                        {renderMethodIcon(entry.access_method)}
-                        {entry.access_method_label || METHOD_LABELS[entry.access_method] || 'Unknown'}
-                      </span>
-                    </td>
+                      {/* Event & Result */}
+                      <td>
+                        {renderResultBadge(entry.event_result, entry.event_type)}
+                      </td>
 
-                    {/* Event & Result */}
-                    <td>
-                      {renderResultBadge(entry.event_result, entry.event_type)}
-                    </td>
+                      {/* Activity Details / Message & Mappings */}
+                      <td style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', maxWidth: '360px' }}>
+                        {isScheduled ? (
+                          <div>
+                            {/* Associated Mapping Pill */}
+                            {entry.mapping_name ? (
+                              <div style={{ marginBottom: '0.35rem' }}>
+                                <a
+                                  href="/mappings"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.3rem',
+                                    padding: '0.2rem 0.5rem',
+                                    borderRadius: '4px',
+                                    background: 'rgba(36, 101, 245, 0.08)',
+                                    border: '1px solid rgba(36, 101, 245, 0.25)',
+                                    color: '#2465f5',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                    textDecoration: 'none',
+                                  }}
+                                  title="View Mapping in Mappings & Sync"
+                                >
+                                  <LinkIcon />
+                                  <span>Mapping: {entry.mapping_name}</span>
+                                </a>
+                              </div>
+                            ) : (
+                              <div style={{ marginBottom: '0.35rem' }}>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.3rem',
+                                    padding: '0.2rem 0.5rem',
+                                    borderRadius: '4px',
+                                    background: 'var(--color-bg-base)',
+                                    border: '1px solid var(--color-border)',
+                                    color: 'var(--color-text-secondary)',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 500,
+                                  }}
+                                >
+                                  <LinkIcon />
+                                  <span>PCO Scheduled Event</span>
+                                </span>
+                              </div>
+                            )}
 
-                    {/* Activity Details / Message */}
-                    <td style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', maxWidth: '280px' }}>
-                      {entry.display_message || `${entry.event_type} (${entry.event_result})`}
-                    </td>
-                  </tr>
-                ))}
+                            {/* PCO Source & Time Type */}
+                            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.2rem' }}>
+                              {entry.source_label && (
+                                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                                  {entry.source_label}
+                                </span>
+                              )}
+                              {entry.time_type && (
+                                <span
+                                  className="badge"
+                                  style={{
+                                    fontSize: '0.6875rem',
+                                    padding: '0.1rem 0.35rem',
+                                    background: entry.time_type === 'rehearsal' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(36, 101, 245, 0.12)',
+                                    color: entry.time_type === 'rehearsal' ? '#d97706' : '#2465f5',
+                                    textTransform: 'capitalize',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {entry.time_type}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Detailed description */}
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
+                              {entry.display_message}
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <div>{entry.display_message || `${entry.event_type} (${entry.event_result})`}</div>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

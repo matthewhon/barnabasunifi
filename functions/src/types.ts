@@ -523,19 +523,25 @@ export type AccessMethod =
   | 'unknown';
 
 export interface AccessLogEntry {
-  id: string;                      // UniFi system log event ID
+  id: string;                      // UniFi system log event ID or generated schedule event ID
   org_id?: string;
   timestamp: string;               // ISO 8601 string
-  event_type: 'door_unlock' | 'door_open' | 'door_close' | 'access_denied' | string;
+  event_type: 'door_unlock' | 'door_lock' | 'door_open' | 'door_close' | 'access_denied' | string;
   event_result: 'success' | 'denied' | 'failed';
   door_id: string;
   door_label: string;
   user_id?: string;
   user_name?: string;
-  user_type?: 'user' | 'visitor' | 'admin' | 'unknown';
+  user_type?: 'user' | 'visitor' | 'admin' | 'scheduler' | 'unknown';
   access_method: AccessMethod;
-  access_method_label: string;     // e.g. "Key Card / Fob", "Keypad PIN", "Mobile Tap"
+  access_method_label: string;     // e.g. "Key Card / Fob", "Keypad PIN", "Mobile Tap", "Schedule"
   display_message?: string;
+  schedule_window_id?: string;
+  mapping_id?: string;
+  mapping_name?: string;
+  source_label?: string;
+  source_type?: string;
+  time_type?: string;
   raw_data?: Record<string, unknown>;
 }
 

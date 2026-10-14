@@ -49,6 +49,38 @@ export async function reconcileOfflineActions(orgId: string, agentId: string): P
         reconciled_at: now,
       });
 
+      // 1b. Write to Activity Stream (access_logs)
+      try {
+        const logId = `offline-${record.id}`;
+        const mappingName = record.mapping_name || record.source_label || 'Schedule';
+        const displayMessage = `Scheduled ${record.action === 'unlock' ? 'unlock' : 'lock'} for "${record.door_label}" via ${mappingName} [offline]`;
+
+        await db.collection(`organizations/${orgId}/access_logs`).doc(logId).set({
+          id: logId,
+          org_id: orgId,
+          timestamp: new Date(record.executed_at).toISOString(),
+          event_type: record.action === 'unlock' ? 'door_unlock' : 'door_lock',
+          event_result: record.status === 'done' ? 'success' : 'failed',
+          door_id: record.door_id,
+          door_label: record.door_label,
+          user_id: 'scheduler',
+          user_name: 'Scheduled Automation',
+          user_type: 'scheduler',
+          access_method: 'schedule',
+          access_method_label: record.action === 'unlock' ? 'Scheduled Unlock' : 'Scheduled Lock',
+          display_message: displayMessage,
+          schedule_window_id: record.schedule_window_id || null,
+          mapping_id: record.mapping_id || null,
+          mapping_name: record.mapping_name || null,
+          source_label: record.source_label || null,
+          source_type: record.source_type || null,
+          time_type: record.time_type || null,
+          synced_at: now,
+        }, { merge: true });
+      } catch (logErr) {
+        logger.debug(`[Reconciliation] Access log notice: ${logErr}`);
+      }
+
       // 2. Update Door state in Firestore
       const doorUpdate: Record<string, any> = {
         current_state: record.action === 'unlock' ? 'unlocked' : 'locked',

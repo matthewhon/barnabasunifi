@@ -108,6 +108,15 @@ export async function getMappings(orgId: string): Promise<Mapping[]> {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Mapping));
 }
 
+export function subscribeToMappings(
+  orgId: string,
+  callback: (mappings: Mapping[]) => void,
+): Unsubscribe {
+  return onSnapshot(collection(db, 'organizations', orgId, 'mappings'), (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Mapping)));
+  });
+}
+
 export async function createMapping(
   orgId: string,
   mapping: Omit<Mapping, 'id' | 'org_id' | 'created_at' | 'updated_at'>,
