@@ -9,6 +9,7 @@ import type { OrgSettings, AgentRelease, Agent } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
 import { safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
 import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
+import UniFiCredentialsGuide from '@/components/agent/UniFiCredentialsGuide';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -813,6 +814,8 @@ export default function SettingsPage() {
                 <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginBottom: '1rem' }}>
                   Store your UniFi Access credentials securely in the cloud. The Docker agent will pull them automatically upon pairing.
                 </p>
+
+                <UniFiCredentialsGuide defaultExpanded={!agentToken} />
 
                 <div className="form-group" style={{ marginBottom: '1rem' }}>
                   <label className="form-label">UniFi Access API Token <span style={{ color: 'var(--color-danger)' }}>*</span></label>

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import UniFiCredentialsGuide from './UniFiCredentialsGuide';
 
 interface AgentInstallGuideProps {
   connectionToken?: string;
@@ -11,7 +12,7 @@ export default function AgentInstallGuide({
   connectionToken = '',
   showDownloadButton = true,
 }: AgentInstallGuideProps) {
-  const [activeTab, setActiveTab] = useState<'windows' | 'mac' | 'cli'>('windows');
+  const [activeTab, setActiveTab] = useState<'windows' | 'mac' | 'cli' | 'unifi'>('windows');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   function copyToClipboard(text: string, id: string) {
@@ -135,6 +136,14 @@ export default function AgentInstallGuide({
             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
           >
             <span>⚡ Zero-Touch CLI</span>
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${activeTab === 'unifi' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setActiveTab('unifi')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
+          >
+            <span>🔑 UniFi Credentials Guide</span>
           </button>
         </div>
 
@@ -279,6 +288,11 @@ export default function AgentInstallGuide({
               </button>
             </div>
           </div>
+        )}
+
+        {/* Tab 4: UniFi Credentials Guide */}
+        {activeTab === 'unifi' && (
+          <UniFiCredentialsGuide defaultExpanded={true} />
         )}
       </div>
 
