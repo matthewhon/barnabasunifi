@@ -8,6 +8,7 @@ import { getOrgSettings, updateOrgSettings, disconnectPco, getLatestAgentRelease
 import type { OrgSettings, AgentRelease, Agent } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
 import { safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
+import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -944,81 +945,12 @@ export default function SettingsPage() {
                 </button>
               </div>
 
-              {/* Docker Agent Download Box */}
-              <div
-                style={{
-                  background: 'linear-gradient(135deg, rgba(36, 101, 245, 0.08) 0%, rgba(16, 185, 129, 0.05) 100%)',
-                  padding: '1.25rem',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid rgba(36, 101, 245, 0.3)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.875rem',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                  <div style={{ flex: 1, minWidth: '16rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-                      <h4 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>
-                        📦 Download Local Docker Agent (.zip)
-                      </h4>
-                      <span className="badge badge-primary" style={{ fontSize: '0.6875rem' }}>
-                        Ready to Install
-                      </span>
-                    </div>
-                    <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.5 }}>
-                      Everything required to run the on-premises agent for Windows, macOS, Linux, or Raspberry Pi. Includes <code>docker-compose.yml</code>, <code>START_AGENT.bat</code>, <code>start_agent.sh</code>, and automatic LAN console discovery.
-                    </p>
-                  </div>
-                  <a
-                    href="/api/agent/download"
-                    download="unifi-pco-agent.zip"
-                    className="btn btn-primary"
-                    style={{
-                      textDecoration: 'none',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      fontWeight: 600,
-                      whiteSpace: 'nowrap',
-                      padding: '0.6rem 1.1rem',
-                      boxShadow: '0 2px 8px rgba(36, 101, 245, 0.3)',
-                    }}
-                  >
-                    <DownloadIcon />
-                    <span>Download Docker Agent (.zip)</span>
-                  </a>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(13rem, 1fr))', gap: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(36, 101, 245, 0.15)', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                  <div><strong>🪟 Windows:</strong> Unzip &amp; double-click <code>START_AGENT.bat</code></div>
-                  <div><strong>🍎 macOS / 🐧 Linux:</strong> Unzip &amp; run <code>./start_agent.sh</code> or <code>docker compose up -d</code></div>
-                  <div><strong>🌐 Local UI:</strong> Browser configuration portal opens at <code>http://localhost:8080</code></div>
-                </div>
-              </div>
-
-              {/* Setup Instructions */}
+              {/* Docker Agent Download & Installation Guide */}
               <div style={{ background: 'var(--color-bg-base)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
-                <h4 style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--color-text-primary)' }}>
-                  📖 Docker Deployment Options:
+                <h4 style={{ fontSize: '0.9375rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--color-text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>📖</span> Docker Agent Download &amp; Setup Instructions
                 </h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                  <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
-                    <strong style={{ color: 'var(--color-text-primary)' }}>Option 1: Quick Launch from Downloaded Zip (Recommended)</strong>
-                    <p style={{ margin: '0.25rem 0 0.5rem 0' }}>
-                      Download the zip above, extract it to a permanent folder on your church machine, and double-click <code>START_AGENT.bat</code> (Windows) or run <code>./start_agent.sh</code> (Mac/Linux). Open <code>http://localhost:8080</code> to paste your connection token.
-                    </p>
-                  </div>
-                  <div style={{ padding: '0.75rem', background: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
-                    <strong style={{ color: 'var(--color-text-primary)' }}>Option 2: Zero-Touch CLI Command</strong>
-                    <p style={{ margin: '0.25rem 0 0.5rem 0' }}>
-                      If running from the extracted folder via command line, you can pass your token directly:
-                    </p>
-                    <code style={{ display: 'block', background: 'var(--color-bg-base)', padding: '0.5rem', borderRadius: '4px', wordBreak: 'break-all' }}>
-                      docker run -d --name unifi-pco-agent --restart unless-stopped --network host -e CONNECTION_TOKEN={connectionToken || '&lt;YOUR_TOKEN&gt;'} unifi-pco-agent
-                    </code>
-                  </div>
-                </div>
+                <AgentInstallGuide connectionToken={connectionToken} showDownloadButton={true} />
               </div>
 
               {/* Advanced: Manual Config */}

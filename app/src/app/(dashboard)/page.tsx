@@ -18,6 +18,8 @@ import { isDoorHidden } from '@/lib/types';
 import { safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
 import { getDoorUnlockStatus } from '@/lib/door-status-utils';
 import { Sparkline } from '@/components/analytics/Sparkline';
+import Modal from '@/components/ui/Modal';
+import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -303,6 +305,8 @@ export default function DashboardPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
 
+  const [installGuideOpen, setInstallGuideOpen] = useState(false);
+
   const [scheduleWindows, setScheduleWindows] = useState<ScheduleWindow[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(true);
 
@@ -528,6 +532,14 @@ export default function DashboardPage() {
                 </svg>
                 <span>Download Docker Agent (.zip)</span>
               </a>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setInstallGuideOpen(true)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 500 }}
+              >
+                <span>📖 View Step-by-Step Instructions</span>
+              </button>
               <Link
                 href="/settings"
                 className="btn btn-secondary"
@@ -694,6 +706,14 @@ export default function DashboardPage() {
               >
                 📥 Download Docker Agent (.zip)
               </a>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setInstallGuideOpen(true)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                📖 Installation Guide
+              </button>
               <Link href="/settings" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
                 Configure in Settings →
               </Link>
@@ -750,6 +770,15 @@ export default function DashboardPage() {
           )}
         </section>
       </div>
+
+      <Modal
+        isOpen={installGuideOpen}
+        onClose={() => setInstallGuideOpen(false)}
+        title="UnFi-PCO Docker Agent Installation Guide"
+        maxWidth="44rem"
+      >
+        <AgentInstallGuide connectionToken="" showDownloadButton={true} />
+      </Modal>
 
       <style>{`
         @media (max-width: 768px) {

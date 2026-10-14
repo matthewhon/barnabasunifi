@@ -25,6 +25,7 @@ import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
 import { getDoorUnlockStatus } from '@/lib/door-status-utils';
 import Modal from '@/components/ui/Modal';
 import DoorPhotoModal from '@/components/doors/DoorPhotoModal';
+import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -1098,6 +1099,9 @@ export default function DoorsPage() {
   const [lockModalOpen, setLockModalOpen] = useState(false);
   const [lockDoor, setLockDoor] = useState<Door | null>(null);
 
+  // Agent installation guide modal state
+  const [agentGuideOpen, setAgentGuideOpen] = useState(false);
+
   // Assign Campus & Location Modal
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [doorsToAssign, setDoorsToAssign] = useState<Door[]>([]);
@@ -1859,6 +1863,14 @@ export default function DoorsPage() {
                 >
                   📥 Download Docker Agent (.zip)
                 </a>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setAgentGuideOpen(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  📖 Installation Guide
+                </button>
                 <Link href="/settings" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
                   Agent Setup in Settings →
                 </Link>
@@ -2187,6 +2199,16 @@ export default function DoorsPage() {
             </>
           )}
         </div>
+      </Modal>
+
+      {/* Agent Installation Guide Modal */}
+      <Modal
+        isOpen={agentGuideOpen}
+        onClose={() => setAgentGuideOpen(false)}
+        title="UnFi-PCO Docker Agent Installation Guide"
+        maxWidth="44rem"
+      >
+        <AgentInstallGuide connectionToken="" showDownloadButton={true} />
       </Modal>
 
       <style>{`
