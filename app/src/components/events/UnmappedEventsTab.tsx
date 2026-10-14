@@ -142,7 +142,11 @@ function isUrgent(startsAtIso: string | unknown): boolean {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function UnmappedEventsTab() {
+export interface UnmappedEventsTabProps {
+  defaultTab?: 'unreviewed' | 'mapped' | 'dismissed' | 'all';
+}
+
+export function UnmappedEventsTab({ defaultTab = 'unreviewed' }: UnmappedEventsTabProps = {}) {
   const { orgId, profile, role, isSuperAdmin } = useAuth();
   const { showToast } = useToast();
   const isManager = role === 'org_admin' || role === 'manager' || isSuperAdmin;
@@ -155,7 +159,14 @@ export function UnmappedEventsTab() {
   const [syncing, setSyncing] = useState<boolean>(false);
 
   // Filters & Tabs
-  const [tab, setTab] = useState<'unreviewed' | 'mapped' | 'dismissed' | 'all'>('unreviewed');
+  const [tab, setTab] = useState<'unreviewed' | 'mapped' | 'dismissed' | 'all'>(defaultTab);
+
+  useEffect(() => {
+    if (defaultTab) {
+      setTab(defaultTab);
+    }
+  }, [defaultTab]);
+
   const [daysAhead, setDaysAhead] = useState<number>(30);
   const [sourceFilter, setSourceFilter] = useState<'all' | 'service' | 'group'>('all');
   const [timeTypeFilter, setTimeTypeFilter] = useState<'all' | 'service' | 'rehearsal' | 'other'>('all');
@@ -563,15 +574,25 @@ export function UnmappedEventsTab() {
       <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
         <div>
           <h2 style={{ fontSize: '1.125rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.625rem', margin: 0 }}>
-            Unmapped Upcoming Events
-            {unreviewedWindows.length > 0 && (
-              <span className="badge badge-warning" style={{ fontSize: '0.8125rem', padding: '0.2rem 0.6rem' }}>
-                {unreviewedWindows.length} Needs Review
-              </span>
+            {tab === 'mapped' ? 'Mapped Upcoming Events' : 'Unmapped Upcoming Events'}
+            {tab === 'mapped' ? (
+              oneTimeMappedWindows.length > 0 && (
+                <span className="badge badge-success" style={{ fontSize: '0.8125rem', padding: '0.2rem 0.6rem' }}>
+                  {oneTimeMappedWindows.length} Mapped
+                </span>
+              )
+            ) : (
+              unreviewedWindows.length > 0 && (
+                <span className="badge badge-warning" style={{ fontSize: '0.8125rem', padding: '0.2rem 0.6rem' }}>
+                  {unreviewedWindows.length} Needs Review
+                </span>
+              )
             )}
           </h2>
           <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
-            Review upcoming Planning Center plans and group events that do not have door schedule access mapped.
+            {tab === 'mapped'
+              ? 'View and manage upcoming Planning Center events with door schedules assigned.'
+              : 'Review upcoming Planning Center plans and group events that do not have door schedule access mapped.'}
           </p>
         </div>
 

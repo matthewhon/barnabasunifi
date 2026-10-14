@@ -3065,7 +3065,7 @@ function AddMappingModal({
 export default function MappingsPage() {
   const { orgId } = useAuth();
 
-  const [tab, setTab] = useState<MappingSourceType | 'user_policy' | 'unmapped'>('service');
+  const [tab, setTab] = useState<MappingSourceType | 'user_policy' | 'unmapped' | 'mapped'>('service');
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [policyMappings, setPolicyMappings] = useState<AccessPolicyMapping[]>([]);
   const [syncedUsers, setSyncedUsers] = useState<SyncedUser[]>([]);
@@ -3193,7 +3193,7 @@ export default function MappingsPage() {
 
   // Load PCO resources when tab changes or orgId changes
   const fetchPcoResources = useCallback(() => {
-    if (!orgId || tab === 'user_policy' || tab === 'unmapped') return;
+    if (!orgId || tab === 'user_policy' || tab === 'unmapped' || tab === 'mapped') return;
     setPcoLoading(true);
     setPcoError(null);
     const getPcoResources = httpsCallable<
@@ -3201,7 +3201,7 @@ export default function MappingsPage() {
       { items?: Array<PcoServiceType | PcoGroup>; resources?: Array<PcoServiceType | PcoGroup> }
     >(functions, 'getPcoResources');
 
-    getPcoResources({ orgId, type: tab })
+    getPcoResources({ orgId, type: tab as MappingSourceType })
       .then((res) => {
         setPcoResources(res.data.items ?? res.data.resources ?? []);
         setPcoError(null);
@@ -3240,7 +3240,7 @@ export default function MappingsPage() {
     }
   }, [tab, fetchPcoResources, fetchPcoLists]);
 
-  const filteredMappings = (tab !== 'user_policy' && tab !== 'unmapped')
+  const filteredMappings = (tab !== 'user_policy' && tab !== 'unmapped' && tab !== 'mapped')
     ? mappings.filter((m) => m.source_type === tab)
     : [];
 
@@ -3296,17 +3296,17 @@ export default function MappingsPage() {
       door_timings?: Record<string, DoorTimingConfig>;
       enabled: boolean;
     }) => {
-      if (!orgId || tab === 'user_policy' || tab === 'unmapped') return;
+      if (!orgId || tab === 'user_policy' || tab === 'unmapped' || tab === 'mapped') return;
       setSaving(true);
       try {
         const id = await createMapping(orgId, {
-          source_type: tab,
+          source_type: tab as MappingSourceType,
           ...data,
         });
         const newMapping: Mapping = {
           id,
           org_id: orgId,
-          source_type: tab,
+          source_type: tab as MappingSourceType,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           ...data,
@@ -3566,7 +3566,7 @@ export default function MappingsPage() {
               Add List Mapping
             </button>
           </div>
-        ) : tab === 'unmapped' ? null : (
+        ) : (tab === 'unmapped' || tab === 'mapped') ? null : (
           <button className="btn btn-primary btn-sm" onClick={() => setModalOpen(true)}>
             <PlusIcon />
             Add Mapping
@@ -3615,13 +3615,20 @@ export default function MappingsPage() {
               {unmappedCount}
             </span>
           )}
+        </button>
+        <button
+          className={`tab ${tab === 'mapped' ? 'active' : ''}`}
+          onClick={() => setTab('mapped')}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}
+        >
+          Mapped Events
           {oneTimeMappedCount > 0 && (
             <span
               className="badge badge-success"
               style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem', borderRadius: '1rem', fontWeight: 700 }}
               title={`${oneTimeMappedCount} one-time mapped events`}
             >
-              {oneTimeMappedCount} mapped
+              {oneTimeMappedCount}
             </span>
           )}
         </button>
@@ -3629,7 +3636,12 @@ export default function MappingsPage() {
 
       {/* ─── TAB: Unmapped Events ─── */}
       {tab === 'unmapped' && (
-        <UnmappedEventsTab />
+        <UnmappedEventsTab defaultTab="unreviewed" />
+      )}
+
+      {/* ─── TAB: Mapped Events ─── */}
+      {tab === 'mapped' && (
+        <UnmappedEventsTab defaultTab="mapped" />
       )}
 
       {/* ─── TAB: Lists & Users ─── */}
@@ -4117,7 +4129,7 @@ export default function MappingsPage() {
       <AddMappingModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        sourceType={(tab === 'user_policy' || tab === 'unmapped') ? 'service' : tab}
+        sourceType={(tab === 'user_policy' || tab === 'unmapped' || tab === 'mapped') ? 'service' : tab}
         pcoResources={pcoResources}
         doors={doors}
         pcoError={pcoError}
