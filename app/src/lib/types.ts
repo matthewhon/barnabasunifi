@@ -632,5 +632,7 @@ export interface AccessLogEntry {
   source_label?: string;
   source_type?: string;
   time_type?: string;
+  window_unlock_at?: string;
+  window_lock_at?: string;
   raw_data?: Record<string, unknown>;
 }

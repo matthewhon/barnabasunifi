@@ -127,6 +127,15 @@ function RemoteIcon() {
   );
 }
 
+function ClockIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </svg>
+  );
+}
+
 function UserFaceIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -248,7 +257,7 @@ function renderResultBadge(result: string, eventType: string) {
 }
 
 function exportCsv(entries: AccessLogEntry[]) {
-  const headers = ['Timestamp', 'Door', 'User / Actor', 'User Type', 'Access Method', 'Event', 'Result', 'Associated Mapping', 'PCO Source', 'Message'];
+  const headers = ['Timestamp', 'Door', 'User / Actor', 'User Type', 'Access Method', 'Event', 'Result', 'Associated Mapping', 'PCO Source', 'Scheduled Unlock Time', 'Scheduled Lock Time', 'Message'];
   const rows = entries.map((e) => [
     e.timestamp,
     e.door_label ?? '',
@@ -259,6 +268,8 @@ function exportCsv(entries: AccessLogEntry[]) {
     e.event_result,
     e.mapping_name ?? '',
     e.source_label ?? '',
+    e.window_unlock_at ?? '',
+    e.window_lock_at ?? '',
     e.display_message ?? '',
   ]);
 
@@ -389,10 +400,26 @@ export default function AccessActivityPage() {
 
   // Merged Activity Stream (Access Logs + Scheduled Events)
   const allEntries = useMemo(() => {
-    // 1. Process access_logs entries and enrich scheduled entries with mapping info
+    // 1. Process access_logs entries and enrich scheduled entries with mapping info & window timestamps
     const enrichedLogs: AccessLogEntry[] = rawLogs.map((entry) => {
-      if (entry.access_method === 'schedule' || entry.schedule_window_id || entry.user_type === 'scheduler') {
-        const window = entry.schedule_window_id ? windowsMap.get(entry.schedule_window_id) : undefined;
+      let window = entry.schedule_window_id ? windowsMap.get(entry.schedule_window_id) : undefined;
+      const isExplicitScheduled = entry.access_method === 'schedule' || Boolean(entry.schedule_window_id) || entry.user_type === 'scheduler';
+
+      // Match window by door and time if window ID is missing from entry
+      if (!window && entry.door_id) {
+        const eMs = new Date(entry.timestamp).getTime();
+        window = scheduleWindows.find((w) => {
+          if (!w.door_ids.includes(entry.door_id)) return false;
+          const timing = w.door_timings?.[entry.door_id];
+          const uMs = new Date(timing?.unlock_at || w.unlock_at).getTime();
+          const lMs = new Date(timing?.lock_at || w.lock_at).getTime();
+          return !isNaN(uMs) && !isNaN(lMs) && Math.abs(eMs - uMs) <= 15 * 60 * 1000;
+        });
+      }
+
+      const isScheduled = isExplicitScheduled || Boolean(window);
+
+      if (isScheduled) {
         const mappingId = entry.mapping_id || window?.mapping_id || window?.service_mapping_id || window?.group_mapping_id;
         const mapping = mappingId ? mappingsMap.get(mappingId) : undefined;
 
@@ -407,6 +434,10 @@ export default function AccessActivityPage() {
 
         const isLock = entry.event_type === 'door_lock' || (entry.event_type.includes('lock') && !entry.event_type.includes('unlock'));
 
+        const doorTiming = entry.door_id && window?.door_timings ? window.door_timings[entry.door_id] : undefined;
+        const windowUnlockAt = entry.window_unlock_at || doorTiming?.unlock_at || window?.unlock_at;
+        const windowLockAt = entry.window_lock_at || doorTiming?.lock_at || window?.lock_at;
+
         return {
           ...entry,
           event_type: isLock ? 'door_lock' : 'door_unlock',
@@ -419,6 +450,8 @@ export default function AccessActivityPage() {
           source_label: sourceLabel,
           source_type: sourceType,
           time_type: timeType,
+          window_unlock_at: windowUnlockAt,
+          window_lock_at: windowLockAt,
         };
       }
       return entry;
@@ -427,10 +460,32 @@ export default function AccessActivityPage() {
     // 2. Incorporate scheduled lock/unlock entries recorded in audit_log
     const scheduledAuditEntries: AccessLogEntry[] = [];
     for (const a of auditEntries) {
-      if ((a.action === 'unlock' || a.action === 'lock') && a.triggered_by !== 'manual') {
-        const isUnlock = a.action === 'unlock';
+      const actionStr = String(a.action || '');
+      const triggeredByStr = String(a.triggered_by || '');
+      const isUnlock = actionStr === 'unlock' || actionStr === 'manual_unlock' || actionStr.includes('unlock');
+      const isLock = actionStr === 'lock' || actionStr === 'manual_lock' || (actionStr.includes('lock') && !actionStr.includes('unlock'));
+
+      const isScheduled = triggeredByStr === 'scheduler' ||
+        triggeredByStr === 'local_scheduler' ||
+        Boolean((a as any).schedule_window_id) ||
+        Boolean((a as any).window_id) ||
+        Boolean((a as any).mapping_id);
+
+      if ((isUnlock || isLock) && isScheduled) {
         const eventType = isUnlock ? 'door_unlock' : 'door_lock';
-        const window = (a as any).schedule_window_id ? windowsMap.get((a as any).schedule_window_id) : undefined;
+        const winId = (a as any).schedule_window_id || (a as any).window_id;
+        let window = winId ? windowsMap.get(winId) : undefined;
+        if (!window && a.door_id) {
+          const aTimeMs = new Date(a.timestamp).getTime();
+          window = scheduleWindows.find((w) => {
+            if (!w.door_ids.includes(a.door_id!)) return false;
+            const timing = w.door_timings?.[a.door_id!];
+            const uMs = new Date(timing?.unlock_at || w.unlock_at).getTime();
+            const lMs = new Date(timing?.lock_at || w.lock_at).getTime();
+            return !isNaN(uMs) && !isNaN(lMs) && (Math.abs(aTimeMs - uMs) <= 15 * 60 * 1000 || Math.abs(aTimeMs - lMs) <= 15 * 60 * 1000);
+          });
+        }
+
         const mappingId = (a as any).mapping_id || window?.mapping_id || window?.service_mapping_id || window?.group_mapping_id;
         const mapping = mappingId ? mappingsMap.get(mappingId) : undefined;
 
@@ -442,6 +497,10 @@ export default function AccessActivityPage() {
         const sourceLabel = (a as any).source_label || window?.source_label;
         const sourceType = window?.source_type || mapping?.source_type;
         const timeType = window?.time_type;
+
+        const doorTiming = a.door_id && window?.door_timings ? window.door_timings[a.door_id] : undefined;
+        const windowUnlockAt = doorTiming?.unlock_at || window?.unlock_at;
+        const windowLockAt = doorTiming?.lock_at || window?.lock_at;
 
         // Dedup: check if an entry with this window_id/door_id/action and close timestamp already exists in enrichedLogs
         const aTimeMs = new Date(a.timestamp).getTime();
@@ -478,21 +537,118 @@ export default function AccessActivityPage() {
             access_method: 'schedule',
             access_method_label: isUnlock ? 'Scheduled Unlock' : 'Scheduled Lock',
             display_message: displayMsg,
-            schedule_window_id: (a as any).schedule_window_id,
+            schedule_window_id: winId,
             mapping_id: mappingId,
             mapping_name: mappingName,
             source_label: sourceLabel,
             source_type: sourceType,
             time_type: timeType,
+            window_unlock_at: windowUnlockAt,
+            window_lock_at: windowLockAt,
           });
         }
       }
     }
 
-    const combined = [...enrichedLogs, ...scheduledAuditEntries];
+    // 3. Ensure executed / past schedule windows have both unlock and lock representations
+    const windowEntries: AccessLogEntry[] = [];
+    const nowMs = Date.now();
+    for (const w of scheduleWindows) {
+      const mapping = (w.mapping_id || w.service_mapping_id || w.group_mapping_id)
+        ? mappingsMap.get(w.mapping_id || w.service_mapping_id || w.group_mapping_id!)
+        : undefined;
+      const mappingName = w.mapping_name || mapping?.pco_resource_label || w.source_label;
+
+      for (let i = 0; i < (w.door_ids || []).length; i++) {
+        const doorId = w.door_ids[i];
+        const doorObj = doors.find((d) => d.id === doorId || d.unifi_door_id === doorId);
+        const doorLabel = w.door_labels?.[i] || doorObj?.label || doorId;
+        const timing = w.door_timings?.[doorId];
+        const dUnlockAt = timing?.unlock_at || w.unlock_at;
+        const dLockAt = timing?.lock_at || w.lock_at;
+        const uTimeMs = new Date(dUnlockAt).getTime();
+        const lTimeMs = new Date(dLockAt).getTime();
+
+        // 3a. UNLOCK event: If unlock time has arrived or passed
+        if (!isNaN(uTimeMs) && uTimeMs <= nowMs) {
+          const hasUnlock = [...enrichedLogs, ...scheduledAuditEntries, ...windowEntries].some((e) => {
+            if (e.event_type !== 'door_unlock') return false;
+            if (e.door_id !== doorId) return false;
+            if (e.schedule_window_id === w.id) return true;
+            const eMs = new Date(e.timestamp).getTime();
+            return Math.abs(eMs - uTimeMs) < 5 * 60 * 1000;
+          });
+
+          if (!hasUnlock) {
+            windowEntries.push({
+              id: `win-unlock-${w.id}-${doorId}`,
+              org_id: w.org_id || orgId || '',
+              timestamp: dUnlockAt,
+              event_type: 'door_unlock',
+              event_result: w.status === 'error' ? 'failed' : 'success',
+              door_id: doorId,
+              door_label: doorLabel,
+              user_id: 'scheduler',
+              user_name: 'Scheduled Automation',
+              user_type: 'scheduler',
+              access_method: 'schedule',
+              access_method_label: 'Scheduled Unlock',
+              display_message: `Scheduled unlock for "${doorLabel}" via ${mappingName}`,
+              schedule_window_id: w.id,
+              mapping_id: w.mapping_id || w.service_mapping_id || w.group_mapping_id,
+              mapping_name: mappingName,
+              source_label: w.source_label,
+              source_type: w.source_type,
+              time_type: w.time_type,
+              window_unlock_at: dUnlockAt,
+              window_lock_at: dLockAt,
+            });
+          }
+        }
+
+        // 3b. LOCK event: If lock time has arrived or passed
+        if (!isNaN(lTimeMs) && lTimeMs <= nowMs) {
+          const hasLock = [...enrichedLogs, ...scheduledAuditEntries, ...windowEntries].some((e) => {
+            if (e.event_type !== 'door_lock') return false;
+            if (e.door_id !== doorId) return false;
+            if (e.schedule_window_id === w.id) return true;
+            const eMs = new Date(e.timestamp).getTime();
+            return Math.abs(eMs - lTimeMs) < 5 * 60 * 1000;
+          });
+
+          if (!hasLock) {
+            windowEntries.push({
+              id: `win-lock-${w.id}-${doorId}`,
+              org_id: w.org_id || orgId || '',
+              timestamp: dLockAt,
+              event_type: 'door_lock',
+              event_result: w.status === 'error' ? 'failed' : 'success',
+              door_id: doorId,
+              door_label: doorLabel,
+              user_id: 'scheduler',
+              user_name: 'Scheduled Automation',
+              user_type: 'scheduler',
+              access_method: 'schedule',
+              access_method_label: 'Scheduled Lock',
+              display_message: `Scheduled lock for "${doorLabel}" via ${mappingName}`,
+              schedule_window_id: w.id,
+              mapping_id: w.mapping_id || w.service_mapping_id || w.group_mapping_id,
+              mapping_name: mappingName,
+              source_label: w.source_label,
+              source_type: w.source_type,
+              time_type: w.time_type,
+              window_unlock_at: dUnlockAt,
+              window_lock_at: dLockAt,
+            });
+          }
+        }
+      }
+    }
+
+    const combined = [...enrichedLogs, ...scheduledAuditEntries, ...windowEntries];
     combined.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     return combined;
-  }, [rawLogs, auditEntries, mappingsMap, windowsMap, doors, orgId]);
+  }, [rawLogs, auditEntries, scheduleWindows, mappingsMap, windowsMap, doors, orgId]);
 
   // KPI Calculations
   const kpis = useMemo(() => {
@@ -1084,6 +1240,32 @@ export default function AccessActivityPage() {
                         <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
                           {safeFormat(entry.timestamp, 'MMM d, yyyy')}
                         </div>
+                        {isScheduled && isLock && entry.window_unlock_at && (
+                          <div
+                            style={{
+                              fontSize: '0.6875rem',
+                              color: 'var(--color-success, #10b981)',
+                              fontWeight: 600,
+                              marginTop: '0.25rem',
+                            }}
+                            title={`Door was scheduled to unlock at ${safeFormat(entry.window_unlock_at, 'h:mm:ss a')}`}
+                          >
+                            🔓 Unlocked: {safeFormat(entry.window_unlock_at, 'h:mm a')}
+                          </div>
+                        )}
+                        {isScheduled && !isLock && entry.window_lock_at && (
+                          <div
+                            style={{
+                              fontSize: '0.6875rem',
+                              color: '#d97706',
+                              fontWeight: 600,
+                              marginTop: '0.25rem',
+                            }}
+                            title={`Door is scheduled to lock at ${safeFormat(entry.window_lock_at, 'h:mm:ss a')}`}
+                          >
+                            🔒 Locks: {safeFormat(entry.window_lock_at, 'h:mm a')}
+                          </div>
+                        )}
                       </td>
 
                       {/* User / Actor */}
@@ -1274,6 +1456,40 @@ export default function AccessActivityPage() {
                                 </span>
                               )}
                             </div>
+
+                            {/* Scheduled Window Time Range */}
+                            {(entry.window_unlock_at || entry.window_lock_at) && (
+                              <div
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.4rem',
+                                  padding: '0.2rem 0.5rem',
+                                  borderRadius: 'var(--radius-sm, 4px)',
+                                  background: 'rgba(16, 185, 129, 0.08)',
+                                  border: '1px solid rgba(16, 185, 129, 0.25)',
+                                  fontSize: '0.75rem',
+                                  marginTop: '0.35rem',
+                                  flexWrap: 'wrap',
+                                }}
+                              >
+                                <ClockIcon />
+                                <span>
+                                  <span style={{ color: 'var(--color-text-muted)', fontWeight: 500 }}>Scheduled Window:</span>{' '}
+                                  {entry.window_unlock_at && (
+                                    <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 700 }}>
+                                      🔓 Unlock: {safeFormat(entry.window_unlock_at, 'h:mm a')}
+                                    </span>
+                                  )}
+                                  {entry.window_unlock_at && entry.window_lock_at && <span> → </span>}
+                                  {entry.window_lock_at && (
+                                    <span style={{ color: '#d97706', fontWeight: 700 }}>
+                                      🔒 Lock: {safeFormat(entry.window_lock_at, 'h:mm a')}
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                            )}
 
                             {/* Detailed description */}
                             <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
