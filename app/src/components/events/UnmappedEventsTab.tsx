@@ -10,6 +10,7 @@ import {
   getOrgSettings,
   updateScheduleWindowReviewStatus,
   assignOneTimeScheduleWindowDoors,
+  unassignOneTimeScheduleWindowDoors,
   createMapping,
 } from '@/lib/firestore';
 import type {
@@ -144,7 +145,7 @@ export function UnmappedEventsTab() {
   const [syncing, setSyncing] = useState<boolean>(false);
 
   // Filters & Tabs
-  const [tab, setTab] = useState<'unreviewed' | 'dismissed' | 'all'>('unreviewed');
+  const [tab, setTab] = useState<'unreviewed' | 'mapped' | 'dismissed' | 'all'>('unreviewed');
   const [daysAhead, setDaysAhead] = useState<number>(30);
   const [sourceFilter, setSourceFilter] = useState<'all' | 'service' | 'group'>('all');
   const [timeTypeFilter, setTimeTypeFilter] = useState<'all' | 'service' | 'rehearsal' | 'other'>('all');
@@ -236,6 +237,16 @@ export function UnmappedEventsTab() {
     );
   }, [upcomingWindows]);
 
+  const oneTimeMappedWindows = useMemo(() => {
+    return upcomingWindows.filter((w) =>
+      Boolean(
+        w.is_one_time ||
+        w.mapping_type === 'one_time' ||
+        (w.review_status === 'mapped' && (w.door_ids?.length ?? 0) > 0 && !w.mapping_id && !w.service_mapping_id && !w.group_mapping_id)
+      )
+    );
+  }, [upcomingWindows]);
+
   const urgentCount = useMemo(() => {
     return unreviewedWindows.filter((w) => isUrgent(w.starts_at)).length;
   }, [unreviewedWindows]);
@@ -255,6 +266,8 @@ export function UnmappedEventsTab() {
 
     if (tab === 'unreviewed') {
       sourceList = unreviewedWindows;
+    } else if (tab === 'mapped') {
+      sourceList = oneTimeMappedWindows;
     } else if (tab === 'dismissed') {
       sourceList = dismissedWindows;
     }
@@ -317,20 +330,28 @@ export function UnmappedEventsTab() {
   };
 
   // Open Quick Map Modal Wizard
-  const handleOpenMapModal = (win: ScheduleWindow) => {
+  const handleOpenMapModal = (win: ScheduleWindow, initialMode: 'one_time' | 'recurring' = 'one_time') => {
     setMappingModalWindow(win);
     setWizardStep(1);
-    setMappingMode('one_time');
+    setMappingMode(initialMode);
     setSelectedDoorIds(win.door_ids || []);
     setDoorSearch('');
     setSelectedCampusFilter('all');
 
     const defaultUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
     const defaultLock = orgSettings?.lock_buffer_after_min ?? 15;
-    setTimingChoice('default');
-    setUnlockOffsetMin(defaultUnlock);
-    setLockOffsetMin(defaultLock);
-    setLockTimingMode('after_end');
+
+    if (win.lock_timing_mode || win.unlock_offset_min !== undefined || win.lock_offset_min !== undefined) {
+      setTimingChoice(win.lock_timing_mode === 'after_start' ? 'after_start' : 'after_end');
+      setUnlockOffsetMin(win.unlock_offset_min ?? defaultUnlock);
+      setLockOffsetMin(win.lock_offset_min ?? defaultLock);
+      setLockTimingMode(win.lock_timing_mode || 'after_end');
+    } else {
+      setTimingChoice('default');
+      setUnlockOffsetMin(defaultUnlock);
+      setLockOffsetMin(defaultLock);
+      setLockTimingMode('after_end');
+    }
     setDoorTimings(win.door_timings ? JSON.parse(JSON.stringify(win.door_timings)) : {});
 
     const isRehearsal = win.time_type === 'rehearsal' || win.source_label.toLowerCase().includes('(rehearsal)');
@@ -426,7 +447,8 @@ export function UnmappedEventsTab() {
           door_timings: Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined,
         });
 
-        showToast('Doors assigned to event window successfully.', 'success');
+        showToast('Doors assigned to one-time event successfully.', 'success');
+        setTab('mapped');
       } else {
         // Create permanent recurring service/group mapping
         const resourceId =
@@ -504,6 +526,25 @@ export function UnmappedEventsTab() {
     }
   };
 
+  // Unmap One-Time Event back to Unreviewed
+  const handleUnmapOneTime = async (win: ScheduleWindow) => {
+    if (!orgId) return;
+    if (!confirm(`Are you sure you want to remove door mapping for "${win.source_label}"? It will return to the Needs Review queue.`)) {
+      return;
+    }
+    try {
+      await unassignOneTimeScheduleWindowDoors(orgId, win.id);
+      showToast(`Door mapping removed for "${win.source_label}".`, 'success');
+
+      // Trigger background sync to refresh schedule
+      const triggerFn = httpsCallable<{ orgId: string }, any>(functions, 'triggerPcoSync');
+      triggerFn({ orgId }).catch((e) => console.warn('Background sync after unmap failed:', e));
+    } catch (err: any) {
+      console.error('Failed to unmap event:', err);
+      showToast(`Failed to unmap event: ${err?.message || 'Unknown error'}`, 'error');
+    }
+  };
+
   return (
     <>
       {/* Header */}
@@ -578,6 +619,20 @@ export function UnmappedEventsTab() {
             </div>
           </div>
         </div>
+
+        <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '1rem', borderLeft: '4px solid var(--color-success)' }}>
+          <div style={{ background: 'rgba(34, 197, 94, 0.12)', padding: '0.75rem', borderRadius: '50%', color: 'var(--color-success)' }}>
+            <CheckCircleIcon />
+          </div>
+          <div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 700, lineHeight: 1.1, color: 'var(--color-text-primary)' }}>
+              {oneTimeMappedWindows.length}
+            </div>
+            <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
+              One-Time Mapped ({daysAhead}d horizon)
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Controls Bar: Tabs, Search & Filters */}
@@ -590,6 +645,12 @@ export function UnmappedEventsTab() {
               onClick={() => { setTab('unreviewed'); setSelectedWindowIds([]); }}
             >
               Needs Review ({unreviewedWindows.length})
+            </button>
+            <button
+              className={`btn btn-sm ${tab === 'mapped' ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => { setTab('mapped'); setSelectedWindowIds([]); }}
+            >
+              ✅ One-Time Mapped ({oneTimeMappedWindows.length})
             </button>
             <button
               className={`btn btn-sm ${tab === 'dismissed' ? 'btn-primary' : 'btn-ghost'}`}
@@ -684,11 +745,17 @@ export function UnmappedEventsTab() {
               <CheckCircleIcon />
             </div>
             <h3 style={{ fontSize: '1.125rem', fontWeight: 600, margin: 0, color: 'var(--color-text-primary)' }}>
-              {tab === 'unreviewed' ? 'All Upcoming Events Mapped!' : 'No Events Found'}
+              {tab === 'unreviewed'
+                ? 'All Upcoming Events Mapped!'
+                : tab === 'mapped'
+                ? 'No One-Time Mapped Events'
+                : 'No Events Found'}
             </h3>
             <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', marginTop: '0.5rem', maxWidth: '28rem', margin: '0.5rem auto 0' }}>
               {tab === 'unreviewed'
                 ? 'There are no unmapped events needing door schedule review in the selected time range.'
+                : tab === 'mapped'
+                ? 'Events mapped as one-time will appear here with their door schedules and unlock/lock times.'
                 : 'No events match your current filter settings.'}
             </p>
           </div>
@@ -817,9 +884,35 @@ export function UnmappedEventsTab() {
 
                       <td style={{ padding: '0.75rem 1rem', whiteSpace: 'nowrap' }}>
                         {win.door_labels && win.door_labels.length > 0 ? (
-                          <span className="badge badge-success">
-                            🚪 {win.door_labels.join(', ')}
-                          </span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-start' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+                              <span className="badge badge-success">
+                                🚪 {win.door_labels.join(', ')}
+                              </span>
+                              {Boolean(win.is_one_time || (!win.mapping_id && !win.service_mapping_id && !win.group_mapping_id)) && (
+                                <span
+                                  style={{
+                                    fontSize: '0.6875rem',
+                                    padding: '0.125rem 0.375rem',
+                                    borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(36, 101, 245, 0.12)',
+                                    color: 'var(--color-accent)',
+                                    border: '1px solid rgba(36, 101, 245, 0.3)',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  ⚡ One-Time Mapped
+                                </span>
+                              )}
+                            </div>
+                            {win.unlock_at && win.lock_at && (
+                              <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                                <span>🔓 {format(toZonedTime(new Date(win.unlock_at), timezone), 'h:mm a')}</span>
+                                <span>→</span>
+                                <span>🔒 {format(toZonedTime(new Date(win.lock_at), timezone), 'h:mm a')}</span>
+                              </div>
+                            )}
+                          </div>
                         ) : win.review_status === 'dismissed' ? (
                           <span className="badge badge-neutral" style={{ opacity: 0.8 }}>
                             👁️ Dismissed
@@ -842,6 +935,31 @@ export function UnmappedEventsTab() {
                               >
                                 Restore
                               </button>
+                            ) : win.door_labels && win.door_labels.length > 0 ? (
+                              <>
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => handleOpenMapModal(win, 'one_time')}
+                                  title="Edit doors and unlock/lock buffer timings"
+                                >
+                                  Edit Doors
+                                </button>
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={() => handleOpenMapModal(win, 'recurring')}
+                                  title="Convert to a recurring mapping rule"
+                                >
+                                  Make Recurring
+                                </button>
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={() => handleUnmapOneTime(win)}
+                                  style={{ color: 'var(--color-danger)' }}
+                                  title="Remove doors and return to unmapped review queue"
+                                >
+                                  Unmap
+                                </button>
+                              </>
                             ) : (
                               <>
                                 <button

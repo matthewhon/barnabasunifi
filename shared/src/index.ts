@@ -217,6 +217,12 @@ export interface ScheduleWindow {
   door_timings?: Record<string, ScheduleWindowDoorTiming>;
   status: ScheduleWindowStatus;
   review_status?: EventReviewStatus;
+  is_one_time?: boolean;
+  mapping_type?: 'recurring' | 'one_time';
+  unlock_offset_min?: number;
+  lock_offset_min?: number;
+  mapped_at?: string;
+  mapped_by?: string;
   dismissed_at?: string;
   dismissed_by?: string;
   dismissed_reason?: string;

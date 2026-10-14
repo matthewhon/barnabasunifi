@@ -597,19 +597,228 @@ export async function assignOneTimeScheduleWindowDoors(
   }
 ): Promise<void> {
   const windowRef = doc(db, 'organizations', orgId, 'schedule_windows', windowId);
+  const windowSnap = await getDoc(windowRef);
+  const windowData = windowSnap.exists() ? (windowSnap.data() as Partial<ScheduleWindow>) : {};
+
+  const startsAt = windowData.starts_at ? new Date(windowData.starts_at) : new Date();
+  const endsAt = windowData.ends_at ? new Date(windowData.ends_at) : startsAt;
+
+  const unlockOffsetMin = doorsData.unlock_offset_min ?? 15;
+  const lockTimingMode = doorsData.lock_timing_mode ?? 'after_end';
+  const lockOffsetMin = doorsData.lock_offset_min ?? 15;
+
+  // Compute door-specific unlock and lock times
+  const computedDoorTimings: Record<string, {
+    unlock_at: string;
+    lock_at: string;
+    unlock_offset_min: number;
+    lock_offset_min: number;
+    lock_timing_mode: 'after_end' | 'after_start';
+  }> = {};
+
+  let earliestUnlockMs = Infinity;
+  let latestLockMs = -Infinity;
+
+  for (const doorId of doorsData.door_ids) {
+    const override = doorsData.door_timings?.[doorId];
+    const dUnlockOffset = override?.unlock_offset_min ?? unlockOffsetMin;
+    const dLockMode = override?.lock_timing_mode ?? lockTimingMode;
+    const dLockOffset = override?.lock_offset_min ?? lockOffsetMin;
+
+    const dUnlockAt = new Date(startsAt.getTime() - dUnlockOffset * 60 * 1000);
+    const dLockAt = dLockMode === 'after_start'
+      ? new Date(startsAt.getTime() + dLockOffset * 60 * 1000)
+      : new Date(endsAt.getTime() + dLockOffset * 60 * 1000);
+
+    earliestUnlockMs = Math.min(earliestUnlockMs, dUnlockAt.getTime());
+    latestLockMs = Math.max(latestLockMs, dLockAt.getTime());
+
+    computedDoorTimings[doorId] = {
+      unlock_at: dUnlockAt.toISOString(),
+      lock_at: dLockAt.toISOString(),
+      unlock_offset_min: dUnlockOffset,
+      lock_offset_min: dLockOffset,
+      lock_timing_mode: dLockMode,
+    };
+  }
+
+  const baseUnlockAt = new Date(startsAt.getTime() - unlockOffsetMin * 60 * 1000);
+  const baseLockAt = lockTimingMode === 'after_start'
+    ? new Date(startsAt.getTime() + lockOffsetMin * 60 * 1000)
+    : new Date(endsAt.getTime() + lockOffsetMin * 60 * 1000);
+
+  const finalUnlockAt = isFinite(earliestUnlockMs) ? new Date(earliestUnlockMs) : baseUnlockAt;
+  const finalLockAt = isFinite(latestLockMs) ? new Date(latestLockMs) : baseLockAt;
+
+  const currentUser = auth.currentUser;
   const payload: any = {
     door_ids: doorsData.door_ids,
     door_labels: doorsData.door_labels,
-    unlock_offset_min: doorsData.unlock_offset_min,
-    lock_offset_min: doorsData.lock_offset_min,
-    lock_timing_mode: doorsData.lock_timing_mode,
+    unlock_offset_min: unlockOffsetMin,
+    lock_offset_min: lockOffsetMin,
+    lock_timing_mode: lockTimingMode,
+    unlock_at: finalUnlockAt.toISOString(),
+    lock_at: finalLockAt.toISOString(),
+    is_one_time: true,
+    mapping_type: 'one_time',
     review_status: 'mapped',
+    mapped_at: new Date().toISOString(),
+    mapped_by: currentUser?.displayName || currentUser?.email || 'Admin',
     updated_at: serverTimestamp(),
   };
-  if (doorsData.door_timings && Object.keys(doorsData.door_timings).length > 0) {
-    payload.door_timings = doorsData.door_timings;
+
+  if (Object.keys(computedDoorTimings).length > 0) {
+    payload.door_timings = computedDoorTimings;
   }
+
   await updateDoc(windowRef, payload);
+
+  // Immediately create or update door commands if in next 24h
+  try {
+    const nowMs = Date.now();
+    const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+    const commandsCol = collection(db, 'organizations', orgId, 'door_commands');
+
+    for (let i = 0; i < doorsData.door_ids.length; i++) {
+      const doorId = doorsData.door_ids[i];
+      const doorLabel = doorsData.door_labels[i] || doorId;
+      const timing = computedDoorTimings[doorId];
+      const dUnlockAt = timing ? new Date(timing.unlock_at) : finalUnlockAt;
+      const dLockAt = timing ? new Date(timing.lock_at) : finalLockAt;
+
+      if (dUnlockAt.getTime() - nowMs < twentyFourHoursMs) {
+        const durationMin = Math.max(1, Math.round((dLockAt.getTime() - dUnlockAt.getTime()) / (60 * 1000)));
+
+        const commandMeta = {
+          mapping_id: `onetime_${windowId}`,
+          mapping_name: `One-Time: ${windowData.source_label || 'Event'}`,
+          source_label: windowData.source_label || null,
+          source_type: windowData.source_type || null,
+          time_type: windowData.time_type || null,
+        };
+
+        // Upsert unlock command
+        const unlockSnap = await getDocs(
+          query(
+            commandsCol,
+            where('schedule_window_id', '==', windowId),
+            where('door_id', '==', doorId),
+            where('action', '==', 'unlock'),
+            limit(1)
+          )
+        );
+
+        if (!unlockSnap.empty) {
+          const uDoc = unlockSnap.docs[0];
+          if (uDoc.data().status === 'pending') {
+            await updateDoc(uDoc.ref, {
+              execute_at: dUnlockAt.toISOString(),
+              duration_min: durationMin,
+              ...commandMeta,
+            });
+          }
+        } else {
+          await addDoc(commandsCol, {
+            schedule_window_id: windowId,
+            window_id: windowId,
+            org_id: orgId,
+            door_id: doorId,
+            unifi_door_id: doorId,
+            door_label: doorLabel,
+            action: 'unlock',
+            execute_at: dUnlockAt.toISOString(),
+            duration_min: durationMin,
+            status: 'pending',
+            triggered_by: 'scheduler',
+            created_at: serverTimestamp(),
+            ...commandMeta,
+          });
+        }
+
+        // Upsert lock command
+        const lockSnap = await getDocs(
+          query(
+            commandsCol,
+            where('schedule_window_id', '==', windowId),
+            where('door_id', '==', doorId),
+            where('action', '==', 'lock'),
+            limit(1)
+          )
+        );
+
+        if (!lockSnap.empty) {
+          const lDoc = lockSnap.docs[0];
+          if (lDoc.data().status === 'pending') {
+            await updateDoc(lDoc.ref, {
+              execute_at: dLockAt.toISOString(),
+              ...commandMeta,
+            });
+          }
+        } else {
+          await addDoc(commandsCol, {
+            schedule_window_id: windowId,
+            window_id: windowId,
+            org_id: orgId,
+            door_id: doorId,
+            unifi_door_id: doorId,
+            door_label: doorLabel,
+            action: 'lock',
+            execute_at: dLockAt.toISOString(),
+            status: 'pending',
+            triggered_by: 'scheduler',
+            created_at: serverTimestamp(),
+            ...commandMeta,
+          });
+        }
+      }
+    }
+  } catch (cmdErr) {
+    console.warn('Failed to pre-create door commands on client:', cmdErr);
+  }
+}
+
+export async function unassignOneTimeScheduleWindowDoors(
+  orgId: string,
+  windowId: string
+): Promise<void> {
+  const windowRef = doc(db, 'organizations', orgId, 'schedule_windows', windowId);
+  await updateDoc(windowRef, {
+    door_ids: [],
+    door_labels: [],
+    door_timings: deleteField(),
+    is_one_time: false,
+    mapping_type: deleteField(),
+    review_status: 'unreviewed',
+    mapped_at: deleteField(),
+    mapped_by: deleteField(),
+    updated_at: serverTimestamp(),
+  });
+
+  // Cancel any pending door commands for this window
+  try {
+    const commandsCol = collection(db, 'organizations', orgId, 'door_commands');
+    const pendingCommandsSnap = await getDocs(
+      query(
+        commandsCol,
+        where('schedule_window_id', '==', windowId),
+        where('status', '==', 'pending')
+      )
+    );
+
+    const batch = writeBatch(db);
+    pendingCommandsSnap.docs.forEach((d) => {
+      batch.update(d.ref, {
+        status: 'cancelled',
+        result_message: 'Cancelled due to one-time mapping removal',
+        updated_at: serverTimestamp(),
+      });
+    });
+    if (pendingCommandsSnap.docs.length > 0) {
+      await batch.commit();
+    }
+  } catch (cancelErr) {
+    console.warn('Failed to cancel pending commands on unassign:', cancelErr);
+  }
 }
 
 // ─── Door Commands ────────────────────────────────────────────────────────────

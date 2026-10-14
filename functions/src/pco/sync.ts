@@ -249,6 +249,13 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
     const initialReviewStatus = doorIds.length > 0 ? 'mapped' : 'unreviewed';
 
+    let finalDoorIds = doorIds;
+    let finalDoorLabels = doorLabels;
+    let finalComputedDoorTimings = computedDoorTimings;
+    let finalUnlockAt = unlockAt;
+    let finalLockAt = lockAt;
+    let isOneTime = false;
+
     if (existingSnap.empty) {
       const newWindowRef = await windowsRef.add({
         ...windowData,
@@ -265,38 +272,127 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       // Preserve existing status (e.g. 'unlocked', 'locked') if already progressed
       const preservedStatus = existingData?.status || metadata.status || 'pending';
 
-      // Update review status logic: if doors are now mapped, set to 'mapped'.
-      // Otherwise preserve existing review_status if available (e.g. 'dismissed' or 'unreviewed').
-      let updatedReviewStatus = existingData?.review_status || initialReviewStatus;
-      if (doorIds.length > 0 && updatedReviewStatus !== 'mapped') {
-        updatedReviewStatus = 'mapped';
-      }
+      const isExistingOneTime = Boolean(
+        existingData?.is_one_time ||
+        existingData?.mapping_type === 'one_time' ||
+        (existingData?.review_status === 'mapped' && doorIds.length === 0 && Array.isArray(existingData?.door_ids) && existingData.door_ids.length > 0)
+      );
 
+      let updatedReviewStatus = existingData?.review_status || initialReviewStatus;
       const { status: _ignoredStatus, ...restWindowData } = windowData;
-      await existingDoc.ref.update({
-        ...restWindowData,
-        status: preservedStatus,
-        review_status: updatedReviewStatus,
-      });
+
+      // If no recurring mapping matched, but this event was mapped as a one-time event,
+      // preserve the one-time mapping doors and recalculate unlock/lock timings based on startsAt/endsAt!
+      if (doorIds.length === 0 && isExistingOneTime) {
+        isOneTime = true;
+        updatedReviewStatus = 'mapped';
+        finalDoorIds = (existingData.door_ids as string[]) || [];
+        finalDoorLabels = (existingData.door_labels as string[]) || [];
+
+        const effectiveUnlockOffsetMin = existingData.unlock_offset_min ?? defaultUnlockOffsetMin;
+        const effectiveLockMode = existingData.lock_timing_mode ?? defaultLockMode;
+        const effectiveLockOffsetMin = existingData.lock_offset_min ?? defaultLockOffsetMin;
+
+        const oneTimeDoorTimings: Record<string, {
+          unlock_at: Timestamp;
+          lock_at: Timestamp;
+          unlock_offset_min: number;
+          lock_offset_min: number;
+          lock_timing_mode: 'after_end' | 'after_start';
+        }> = {};
+
+        let oneTimeEarliestUnlockMs = Infinity;
+        let oneTimeLatestLockMs = -Infinity;
+
+        if (finalDoorIds.length > 0) {
+          for (const dId of finalDoorIds) {
+            const override = existingData.door_timings?.[dId];
+            const dUnlockOffset = override?.unlock_offset_min ?? effectiveUnlockOffsetMin;
+            const dLockMode = override?.lock_timing_mode ?? effectiveLockMode;
+            const dLockOffset = override?.lock_offset_min ?? effectiveLockOffsetMin;
+
+            const dUnlockAt = new Date(startsAt.getTime() - dUnlockOffset * 60 * 1000);
+            const dLockAt = dLockMode === 'after_start'
+              ? new Date(startsAt.getTime() + dLockOffset * 60 * 1000)
+              : new Date(endsAt.getTime() + dLockOffset * 60 * 1000);
+
+            oneTimeEarliestUnlockMs = Math.min(oneTimeEarliestUnlockMs, dUnlockAt.getTime());
+            oneTimeLatestLockMs = Math.max(oneTimeLatestLockMs, dLockAt.getTime());
+
+            oneTimeDoorTimings[dId] = {
+              unlock_at: Timestamp.fromDate(dUnlockAt),
+              lock_at: Timestamp.fromDate(dLockAt),
+              unlock_offset_min: dUnlockOffset,
+              lock_offset_min: dLockOffset,
+              lock_timing_mode: dLockMode,
+            };
+          }
+        }
+
+        const oneTimeBaseUnlockAt = new Date(startsAt.getTime() - effectiveUnlockOffsetMin * 60 * 1000);
+        const oneTimeBaseLockAt = effectiveLockMode === 'after_start'
+          ? new Date(startsAt.getTime() + effectiveLockOffsetMin * 60 * 1000)
+          : new Date(endsAt.getTime() + effectiveLockOffsetMin * 60 * 1000);
+
+        finalUnlockAt = isFinite(oneTimeEarliestUnlockMs) ? new Date(oneTimeEarliestUnlockMs) : oneTimeBaseUnlockAt;
+        finalLockAt = isFinite(oneTimeLatestLockMs) ? new Date(oneTimeLatestLockMs) : oneTimeBaseLockAt;
+        finalComputedDoorTimings = oneTimeDoorTimings;
+
+        const updatePayload: Record<string, unknown> = {
+          ...restWindowData,
+          status: preservedStatus,
+          review_status: 'mapped',
+          door_ids: finalDoorIds,
+          door_labels: finalDoorLabels,
+          unlock_at: Timestamp.fromDate(finalUnlockAt),
+          lock_at: Timestamp.fromDate(finalLockAt),
+          unlock_offset_min: effectiveUnlockOffsetMin,
+          lock_offset_min: effectiveLockOffsetMin,
+          lock_timing_mode: effectiveLockMode,
+          is_one_time: true,
+          mapping_type: 'one_time',
+        };
+
+        if (Object.keys(oneTimeDoorTimings).length > 0) {
+          updatePayload.door_timings = oneTimeDoorTimings;
+        }
+        if (existingData.mapped_at) {
+          updatePayload.mapped_at = existingData.mapped_at;
+        }
+        if (existingData.mapped_by) {
+          updatePayload.mapped_by = existingData.mapped_by;
+        }
+
+        await existingDoc.ref.update(updatePayload);
+      } else {
+        if (doorIds.length > 0 && updatedReviewStatus !== 'mapped') {
+          updatedReviewStatus = 'mapped';
+        }
+        await existingDoc.ref.update({
+          ...restWindowData,
+          status: preservedStatus,
+          review_status: updatedReviewStatus,
+        });
+      }
       windowsUpdated++;
     }
 
     // Create door_commands for windows within the next 24 hours ONLY if doors are mapped
-    if (doorIds.length > 0) {
+    if (finalDoorIds.length > 0) {
       const commandMeta = {
-        mapping_id: (metadata.mapping_id as string) || (metadata.service_mapping_id as string) || (metadata.group_mapping_id as string) || null,
-        mapping_name: (metadata.mapping_name as string) || null,
+        mapping_id: (metadata.mapping_id as string) || (metadata.service_mapping_id as string) || (metadata.group_mapping_id as string) || (isOneTime ? `onetime_${windowId}` : null),
+        mapping_name: (metadata.mapping_name as string) || (isOneTime ? `One-Time: ${(metadata.source_label as string) || 'Event'}` : null),
         source_label: (metadata.source_label as string) || null,
         source_type: (metadata.source_type as string) || null,
         time_type: (metadata.time_type as string) || null,
       };
 
-      for (let i = 0; i < doorIds.length; i++) {
-        const doorId = doorIds[i];
-        const doorLabel = doorLabels[i] || doorId;
-        const timing = computedDoorTimings[doorId];
-        const dUnlockAt = timing ? timing.unlock_at.toDate() : unlockAt;
-        const dLockAt = timing ? timing.lock_at.toDate() : lockAt;
+      for (let i = 0; i < finalDoorIds.length; i++) {
+        const doorId = finalDoorIds[i];
+        const doorLabel = finalDoorLabels[i] || doorId;
+        const timing = finalComputedDoorTimings[doorId];
+        const dUnlockAt = timing ? timing.unlock_at.toDate() : finalUnlockAt;
+        const dLockAt = timing ? timing.lock_at.toDate() : finalLockAt;
 
         if (dUnlockAt.getTime() - now < twentyFourHoursMs) {
           const durationMin = Math.max(1, Math.round((dLockAt.getTime() - dUnlockAt.getTime()) / (60 * 1000)));

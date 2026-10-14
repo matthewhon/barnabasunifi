@@ -3126,6 +3126,19 @@ export default function MappingsPage() {
     setTimeout(() => setFeedback(null), 4000);
   }
 
+  // Handle URL query parameter for tab
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const tabParam = urlParams.get('tab');
+      if (tabParam === 'unmapped' || tabParam === 'mapped') {
+        setTab('unmapped');
+      } else if (tabParam === 'service' || tabParam === 'group' || tabParam === 'user_policy') {
+        setTab(tabParam as any);
+      }
+    }
+  }, []);
+
   // Load initial mappings and org settings
   useEffect(() => {
     if (!orgId) return;
@@ -3513,12 +3526,24 @@ export default function MappingsPage() {
     return nameMatch || emailMatch || listMatch || policyMatch;
   });
 
-  // Compute unmapped count for badge display on the Unmapped Events tab
+  // Compute unmapped count and one-time mapped count for badge display on the Unmapped Events tab
+  const now = new Date();
   const unmappedCount = scheduleWindows.filter((w) => {
     if (w.status === 'cancelled') return false;
     const lockAt = w.lock_at ? new Date(w.lock_at) : null;
-    if (lockAt && lockAt < new Date()) return false;
+    if (lockAt && lockAt < now) return false;
     return (!w.door_ids || w.door_ids.length === 0) && w.review_status !== 'dismissed';
+  }).length;
+
+  const oneTimeMappedCount = scheduleWindows.filter((w) => {
+    if (w.status === 'cancelled') return false;
+    const lockAt = w.lock_at ? new Date(w.lock_at) : null;
+    if (lockAt && lockAt < now) return false;
+    return Boolean(
+      w.is_one_time ||
+      w.mapping_type === 'one_time' ||
+      (w.review_status === 'mapped' && (w.door_ids?.length ?? 0) > 0 && !w.mapping_id && !w.service_mapping_id && !w.group_mapping_id)
+    );
   }).length;
 
   return (
@@ -3585,8 +3610,18 @@ export default function MappingsPage() {
             <span
               className="badge badge-warning"
               style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem', borderRadius: '1rem', fontWeight: 700 }}
+              title={`${unmappedCount} unmapped events needing review`}
             >
               {unmappedCount}
+            </span>
+          )}
+          {oneTimeMappedCount > 0 && (
+            <span
+              className="badge badge-success"
+              style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem', borderRadius: '1rem', fontWeight: 700 }}
+              title={`${oneTimeMappedCount} one-time mapped events`}
+            >
+              {oneTimeMappedCount} mapped
             </span>
           )}
         </button>
