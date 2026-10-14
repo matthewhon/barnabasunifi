@@ -24,7 +24,7 @@ import type {
 } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
 import { format } from 'date-fns';
-import { safeIsPast, safeFormatDistanceToNow } from '@/lib/date-utils';
+import { safeIsPast, safeFormatDistanceToNow, parseSafeDate } from '@/lib/date-utils';
 import { toZonedTime } from 'date-fns-tz';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
@@ -111,23 +111,33 @@ function EyeOffIcon() {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function formatWindowTime(iso: string, tz: string): string {
+function formatWindowTime(iso: string | unknown, tz: string): string {
+  const d = parseSafeDate(iso);
+  if (!d) return '—';
   try {
-    const zoned = toZonedTime(new Date(iso), tz);
+    const zoned = toZonedTime(d, tz);
     return format(zoned, 'EEE, MMM d, yyyy · h:mm a');
   } catch {
-    return format(new Date(iso), 'EEE, MMM d, yyyy · h:mm a');
+    return format(d, 'EEE, MMM d, yyyy · h:mm a');
   }
 }
 
-function isUrgent(startsAtIso: string): boolean {
+function formatWindowTimeOnly(iso: string | unknown, tz: string): string {
+  const d = parseSafeDate(iso);
+  if (!d) return '—';
   try {
-    const startMs = new Date(startsAtIso).getTime();
-    const diffHours = (startMs - Date.now()) / (1000 * 60 * 60);
-    return diffHours >= 0 && diffHours <= 48;
+    const zoned = toZonedTime(d, tz);
+    return format(zoned, 'h:mm a');
   } catch {
-    return false;
+    return format(d, 'h:mm a');
   }
+}
+
+function isUrgent(startsAtIso: string | unknown): boolean {
+  const d = parseSafeDate(startsAtIso);
+  if (!d) return false;
+  const diffHours = (d.getTime() - Date.now()) / (1000 * 60 * 60);
+  return diffHours >= 0 && diffHours <= 48;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -226,7 +236,7 @@ export function UnmappedEventsTab() {
   const upcomingWindows = useMemo(() => {
     return scheduleWindows.filter((w) => {
       if (safeIsPast(w.lock_at) || w.status === 'cancelled') return false;
-      const startMs = new Date(w.starts_at).getTime();
+      const startMs = parseSafeDate(w.starts_at)?.getTime() ?? 0;
       return startMs <= maxFutureDate.getTime();
     });
   }, [scheduleWindows, maxFutureDate]);
@@ -253,7 +263,7 @@ export function UnmappedEventsTab() {
 
   const thisWeekCount = useMemo(() => {
     const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).getTime();
-    return unreviewedWindows.filter((w) => new Date(w.starts_at).getTime() <= weekFromNow).length;
+    return unreviewedWindows.filter((w) => (parseSafeDate(w.starts_at)?.getTime() ?? 0) <= weekFromNow).length;
   }, [unreviewedWindows, now]);
 
   const dismissedWindows = useMemo(() => {
@@ -445,6 +455,8 @@ export function UnmappedEventsTab() {
           lock_offset_min: timingChoice === 'default' ? undefined : lockOffsetMin,
           lock_timing_mode: timingChoice === 'default' ? undefined : (timingChoice === 'after_start' ? 'after_start' : 'after_end'),
           door_timings: Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined,
+          starts_at: mappingModalWindow.starts_at,
+          ends_at: mappingModalWindow.ends_at,
         });
 
         showToast('Doors assigned to one-time event successfully.', 'success');
@@ -907,9 +919,9 @@ export function UnmappedEventsTab() {
                             </div>
                             {win.unlock_at && win.lock_at && (
                               <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-                                <span>🔓 {format(toZonedTime(new Date(win.unlock_at), timezone), 'h:mm a')}</span>
+                                <span>🔓 {formatWindowTimeOnly(win.unlock_at, timezone)}</span>
                                 <span>→</span>
-                                <span>🔒 {format(toZonedTime(new Date(win.lock_at), timezone), 'h:mm a')}</span>
+                                <span>🔒 {formatWindowTimeOnly(win.lock_at, timezone)}</span>
                               </div>
                             )}
                           </div>

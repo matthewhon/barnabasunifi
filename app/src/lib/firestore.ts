@@ -17,9 +17,11 @@ import {
   writeBatch,
   Unsubscribe,
   QueryConstraint,
+  Timestamp,
 } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage, auth } from '@/lib/firebase';
+import { parseSafeDate } from '@/lib/date-utils';
 import type {
   Organization,
   OrgSettings,
@@ -283,19 +285,8 @@ export async function getAccessPolicies(orgId: string): Promise<UnifiAccessPolic
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function normalizeTimestamp(val: unknown): string {
-  if (!val) return new Date().toISOString();
-  if (typeof (val as { toDate?: () => Date }).toDate === 'function') {
-    try {
-      return (val as { toDate: () => Date }).toDate().toISOString();
-    } catch {
-      return new Date().toISOString();
-    }
-  }
-  if (typeof val === 'object' && val !== null && 'seconds' in val) {
-    return new Date((val as { seconds: number }).seconds * 1000).toISOString();
-  }
-  const d = new Date(val as string | number);
-  return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+  const d = parseSafeDate(val);
+  return d ? d.toISOString() : new Date().toISOString();
 }
 
 // ─── Doors ───────────────────────────────────────────────────────────────────
@@ -594,14 +585,16 @@ export async function assignOneTimeScheduleWindowDoors(
     lock_offset_min?: number;
     lock_timing_mode?: 'after_end' | 'after_start';
     door_timings?: Record<string, DoorTimingConfig>;
+    starts_at?: string | Date;
+    ends_at?: string | Date;
   }
 ): Promise<void> {
   const windowRef = doc(db, 'organizations', orgId, 'schedule_windows', windowId);
   const windowSnap = await getDoc(windowRef);
   const windowData = windowSnap.exists() ? (windowSnap.data() as Partial<ScheduleWindow>) : {};
 
-  const startsAt = windowData.starts_at ? new Date(windowData.starts_at) : new Date();
-  const endsAt = windowData.ends_at ? new Date(windowData.ends_at) : startsAt;
+  const startsAt = parseSafeDate(doorsData.starts_at) || parseSafeDate(windowData.starts_at) || new Date();
+  const endsAt = parseSafeDate(doorsData.ends_at) || parseSafeDate(windowData.ends_at) || startsAt;
 
   const unlockOffsetMin = doorsData.unlock_offset_min ?? 15;
   const lockTimingMode = doorsData.lock_timing_mode ?? 'after_end';
@@ -609,8 +602,8 @@ export async function assignOneTimeScheduleWindowDoors(
 
   // Compute door-specific unlock and lock times
   const computedDoorTimings: Record<string, {
-    unlock_at: string;
-    lock_at: string;
+    unlock_at: Timestamp;
+    lock_at: Timestamp;
     unlock_offset_min: number;
     lock_offset_min: number;
     lock_timing_mode: 'after_end' | 'after_start';
@@ -634,8 +627,8 @@ export async function assignOneTimeScheduleWindowDoors(
     latestLockMs = Math.max(latestLockMs, dLockAt.getTime());
 
     computedDoorTimings[doorId] = {
-      unlock_at: dUnlockAt.toISOString(),
-      lock_at: dLockAt.toISOString(),
+      unlock_at: Timestamp.fromDate(dUnlockAt),
+      lock_at: Timestamp.fromDate(dLockAt),
       unlock_offset_min: dUnlockOffset,
       lock_offset_min: dLockOffset,
       lock_timing_mode: dLockMode,
@@ -657,12 +650,12 @@ export async function assignOneTimeScheduleWindowDoors(
     unlock_offset_min: unlockOffsetMin,
     lock_offset_min: lockOffsetMin,
     lock_timing_mode: lockTimingMode,
-    unlock_at: finalUnlockAt.toISOString(),
-    lock_at: finalLockAt.toISOString(),
+    unlock_at: Timestamp.fromDate(finalUnlockAt),
+    lock_at: Timestamp.fromDate(finalLockAt),
     is_one_time: true,
     mapping_type: 'one_time',
     review_status: 'mapped',
-    mapped_at: new Date().toISOString(),
+    mapped_at: serverTimestamp(),
     mapped_by: currentUser?.displayName || currentUser?.email || 'Admin',
     updated_at: serverTimestamp(),
   };
@@ -683,8 +676,8 @@ export async function assignOneTimeScheduleWindowDoors(
       const doorId = doorsData.door_ids[i];
       const doorLabel = doorsData.door_labels[i] || doorId;
       const timing = computedDoorTimings[doorId];
-      const dUnlockAt = timing ? new Date(timing.unlock_at) : finalUnlockAt;
-      const dLockAt = timing ? new Date(timing.lock_at) : finalLockAt;
+      const dUnlockAt = timing ? timing.unlock_at.toDate() : finalUnlockAt;
+      const dLockAt = timing ? timing.lock_at.toDate() : finalLockAt;
 
       if (dUnlockAt.getTime() - nowMs < twentyFourHoursMs) {
         const durationMin = Math.max(1, Math.round((dLockAt.getTime() - dUnlockAt.getTime()) / (60 * 1000)));
@@ -712,7 +705,7 @@ export async function assignOneTimeScheduleWindowDoors(
           const uDoc = unlockSnap.docs[0];
           if (uDoc.data().status === 'pending') {
             await updateDoc(uDoc.ref, {
-              execute_at: dUnlockAt.toISOString(),
+              execute_at: Timestamp.fromDate(dUnlockAt),
               duration_min: durationMin,
               ...commandMeta,
             });
@@ -726,7 +719,7 @@ export async function assignOneTimeScheduleWindowDoors(
             unifi_door_id: doorId,
             door_label: doorLabel,
             action: 'unlock',
-            execute_at: dUnlockAt.toISOString(),
+            execute_at: Timestamp.fromDate(dUnlockAt),
             duration_min: durationMin,
             status: 'pending',
             triggered_by: 'scheduler',
@@ -750,7 +743,7 @@ export async function assignOneTimeScheduleWindowDoors(
           const lDoc = lockSnap.docs[0];
           if (lDoc.data().status === 'pending') {
             await updateDoc(lDoc.ref, {
-              execute_at: dLockAt.toISOString(),
+              execute_at: Timestamp.fromDate(dLockAt),
               ...commandMeta,
             });
           }
@@ -763,7 +756,7 @@ export async function assignOneTimeScheduleWindowDoors(
             unifi_door_id: doorId,
             door_label: doorLabel,
             action: 'lock',
-            execute_at: dLockAt.toISOString(),
+            execute_at: Timestamp.fromDate(dLockAt),
             status: 'pending',
             triggered_by: 'scheduler',
             created_at: serverTimestamp(),
