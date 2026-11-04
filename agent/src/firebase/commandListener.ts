@@ -8,8 +8,7 @@
  * double-execution in multi-agent deployments.
  */
 
-import * as admin from 'firebase-admin';
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient, UnifiVisitor } from '../unifi/access';
 import { logger } from '../logger';
 
@@ -94,7 +93,7 @@ export type CommandCallback = (command: DoorCommand) => void;
 // ---------------------------------------------------------------------------
 
 function nowTimestamp(): FirebaseFirestore.Timestamp {
-  return admin.firestore.Timestamp.now();
+  return firestoreTimestamp.now();
 }
 
 function parseExecuteAtMillis(executeAt: unknown): number {
@@ -240,14 +239,29 @@ export function startCommandListener(
   const db = getDb();
   const commandsRef = db.collection(`organizations/${orgId}/door_commands`);
   const activeTimers = new Map<string, NodeJS.Timeout>();
+  const inFlightCommands = new Set<string>();
 
   logger.info(`[CommandListener] Watching commands for org: ${orgId}`);
 
   async function processCommand(doc: FirebaseFirestore.DocumentSnapshot) {
     const commandId = doc.id;
+    if (inFlightCommands.has(commandId)) return;
     const rawData = doc.data();
     if (!rawData) return;
 
+    inFlightCommands.add(commandId);
+    try {
+      await processCommandInner(doc, commandId, rawData);
+    } finally {
+      inFlightCommands.delete(commandId);
+    }
+  }
+
+  async function processCommandInner(
+    doc: FirebaseFirestore.DocumentSnapshot,
+    commandId: string,
+    rawData: FirebaseFirestore.DocumentData
+  ) {
     // Step 1: Atomically claim the command with a Firestore transaction
     let command: DoorCommand;
     try {
@@ -314,62 +328,105 @@ export function startCommandListener(
     // Step 2: Execute the command against the UniFi Access API
     let finalStatus: CommandStatus = 'done';
     let resultMessage = '';
+    let skipPostExecutionSideEffects = false;
 
     try {
+      const executeAtMs = parseExecuteAtMillis(command.execute_at);
+      const isScheduledCmd = command.triggered_by === 'scheduler' || Boolean(command.schedule_window_id);
+
       if (command.action === 'unlock') {
         if (!command.unifi_door_id) throw new Error('Missing unifi_door_id for unlock action');
-        const durationMin = command.duration_min ?? 60;
-        await unifiClient.unlockDoor(command.unifi_door_id, durationMin);
-        resultMessage = `Door unlocked for ${durationMin} minute(s).`;
-        if (command.schedule_window_id) {
-          getCacheStore().recordExecutedAction(`${command.schedule_window_id}:${command.unifi_door_id}:unlock`);
+        let durationMin = command.duration_min ?? 60;
+
+        if (isScheduledCmd && command.schedule_window_id) {
+          const actionKey = `${command.schedule_window_id}:${command.unifi_door_id}:unlock`;
+          if (getCacheStore().hasExecutedAction(actionKey)) {
+            resultMessage = 'Unlock already executed locally via LocalScheduler.';
+            skipPostExecutionSideEffects = true;
+          } else if (executeAtMs > 0) {
+            const unlockEndMs = executeAtMs + durationMin * 60 * 1000;
+            const nowMs = Date.now();
+            if (nowMs >= unlockEndMs) {
+              finalStatus = 'skipped';
+              resultMessage = 'Skipped expired scheduled unlock (event window already ended).';
+              skipPostExecutionSideEffects = true;
+            } else {
+              durationMin = Math.max(1, Math.round((unlockEndMs - nowMs) / 60000));
+            }
+          }
         }
-        syncDoors(orgId, unifiClient).catch(() => {});
+
+        if (!skipPostExecutionSideEffects) {
+          command.duration_min = durationMin;
+          await unifiClient.unlockDoor(command.unifi_door_id, durationMin);
+          resultMessage = `Door unlocked for ${durationMin} minute(s).`;
+          if (command.schedule_window_id) {
+            getCacheStore().recordExecutedAction(`${command.schedule_window_id}:${command.unifi_door_id}:unlock`);
+          }
+          syncDoors(orgId, unifiClient).catch(() => {});
+        }
       } else if (command.action === 'lock') {
         if (!command.unifi_door_id) throw new Error('Missing unifi_door_id for lock action');
 
-        // Guard against premature lock if another schedule window is currently active for this door
+        // Guard against premature or stale lock
         let skipLock = false;
         if (command.triggered_by !== 'manual') {
-          try {
-            const now = Date.now();
-            let hasActiveOverlappingWindow = false;
-
-            // 1. First check local memory cache
-            const cachedWindows = getCacheStore().getScheduleWindows();
-            hasActiveOverlappingWindow = cachedWindows.some((cw) => {
-              if (cw.id === command.schedule_window_id) return false;
-              if (!cw.door_ids.includes(command.unifi_door_id!)) return false;
-              const uMs = new Date(cw.unlock_at).getTime();
-              const lMs = new Date(cw.lock_at).getTime();
-              return !isNaN(uMs) && !isNaN(lMs) && uMs <= now && lMs > now;
-            });
-
-            // 2. Also check Firestore if available
-            if (!hasActiveOverlappingWindow) {
-              const activeWindowsSnap = await db
-                .collection(`organizations/${orgId}/schedule_windows`)
-                .where('door_ids', 'array-contains', command.unifi_door_id)
-                .get();
-
-              hasActiveOverlappingWindow = activeWindowsSnap.docs.some((wDoc) => {
-                if (wDoc.id === command.schedule_window_id) return false;
-                const d = wDoc.data();
-                const unlockAt = d.unlock_at?.toMillis ? d.unlock_at.toMillis() : new Date(d.unlock_at).getTime();
-                const lockAt = d.lock_at?.toMillis ? d.lock_at.toMillis() : new Date(d.lock_at).getTime();
-                return !isNaN(unlockAt) && !isNaN(lockAt) && unlockAt <= now && lockAt > now;
-              });
-            }
-
-            if (hasActiveOverlappingWindow) {
-              logger.info(
-                `[CommandListener] Suppressing lock command ${commandId} for door ${command.unifi_door_id}: another scheduled window is actively keeping this door unlocked.`
-              );
-              resultMessage = 'Lock deferred: another scheduled window is actively keeping this door unlocked.';
+          const now = Date.now();
+          if (command.schedule_window_id) {
+            const actionKey = `${command.schedule_window_id}:${command.unifi_door_id}:lock`;
+            if (getCacheStore().hasExecutedAction(actionKey)) {
+              resultMessage = 'Lock already executed locally via LocalScheduler.';
               skipLock = true;
+              skipPostExecutionSideEffects = true;
             }
-          } catch (guardErr) {
-            logger.warn(`[CommandListener] Active window check notice: ${String(guardErr)}`);
+          }
+          if (!skipLock && executeAtMs > 0 && now - executeAtMs > 2 * 60 * 60 * 1000) {
+            finalStatus = 'skipped';
+            resultMessage = 'Skipped stale scheduled lock (>2h past scheduled time).';
+            skipLock = true;
+            skipPostExecutionSideEffects = true;
+          }
+          if (!skipLock) {
+            try {
+              let hasActiveOverlappingWindow = false;
+
+              // 1. First check local memory cache
+              const cachedWindows = getCacheStore().getScheduleWindows();
+              hasActiveOverlappingWindow = cachedWindows.some((cw) => {
+                if (cw.id === command.schedule_window_id) return false;
+                if (!cw.door_ids.includes(command.unifi_door_id!)) return false;
+                const uMs = new Date(cw.unlock_at).getTime();
+                const lMs = new Date(cw.lock_at).getTime();
+                return !isNaN(uMs) && !isNaN(lMs) && uMs <= now && lMs > now;
+              });
+
+              // 2. Also check Firestore if available
+              if (!hasActiveOverlappingWindow) {
+                const activeWindowsSnap = await db
+                  .collection(`organizations/${orgId}/schedule_windows`)
+                  .where('door_ids', 'array-contains', command.unifi_door_id)
+                  .get();
+
+                hasActiveOverlappingWindow = activeWindowsSnap.docs.some((wDoc) => {
+                  if (wDoc.id === command.schedule_window_id) return false;
+                  const d = wDoc.data();
+                  const unlockAt = d.unlock_at?.toMillis ? d.unlock_at.toMillis() : new Date(d.unlock_at).getTime();
+                  const lockAt = d.lock_at?.toMillis ? d.lock_at.toMillis() : new Date(d.lock_at).getTime();
+                  return !isNaN(unlockAt) && !isNaN(lockAt) && unlockAt <= now && lockAt > now;
+                });
+              }
+
+              if (hasActiveOverlappingWindow) {
+                logger.info(
+                  `[CommandListener] Suppressing lock command ${commandId} for door ${command.unifi_door_id}: another scheduled window is actively keeping this door unlocked.`
+                );
+                resultMessage = 'Lock deferred: another scheduled window is actively keeping this door unlocked.';
+                skipLock = true;
+                skipPostExecutionSideEffects = true;
+              }
+            } catch (guardErr) {
+              logger.warn(`[CommandListener] Active window check notice: ${String(guardErr)}`);
+            }
           }
         }
 
@@ -712,7 +769,11 @@ export function startCommandListener(
 
       // Immediately update the door's state in Firestore so the dashboard reflects the change
       const targetDoorId = command.door_id || command.unifi_door_id;
-      if (targetDoorId && (command.action === 'unlock' || command.action === 'lock')) {
+      if (
+        !skipPostExecutionSideEffects &&
+        targetDoorId &&
+        (command.action === 'unlock' || command.action === 'lock')
+      ) {
         try {
           const newCurrentState = command.action === 'unlock' ? 'unlocked' : 'locked';
           const updateData: Record<string, any> = {
@@ -724,7 +785,7 @@ export function startCommandListener(
             const expiresAtMs = Date.now() + durationMin * 60 * 1000;
             updateData.last_unlocked_at = nowTimestamp();
             updateData.unlock_duration_min = durationMin;
-            updateData.hold_unlock_expires_at = admin.firestore.Timestamp.fromMillis(expiresAtMs);
+            updateData.hold_unlock_expires_at = firestoreTimestamp.fromMillis(expiresAtMs);
             updateData.is_held_unlocked = true;
             updateData.unlock_trigger = command.triggered_by || 'manual';
             updateData.unlocked_by_user_id = command.actor_uid || null;
@@ -746,7 +807,7 @@ export function startCommandListener(
       }
 
       logger.info(
-        `[CommandListener] Command ${commandId} executed successfully: ${resultMessage}`
+        `[CommandListener] Command ${commandId} executed (${finalStatus}): ${resultMessage}`
       );
     } catch (err) {
       finalStatus = 'failed';
@@ -770,135 +831,200 @@ export function startCommandListener(
       );
     }
 
-    // Step 4: Write audit log entry
-    await writeAuditLog(db, orgId, command, finalStatus, resultMessage, agentId);
+    if (!skipPostExecutionSideEffects) {
+      // Step 4: Write audit log entry
+      await writeAuditLog(db, orgId, command, finalStatus, resultMessage, agentId);
 
-    // Step 4b: Write to Activity Stream (access_logs)
-    if (command.action === 'unlock' || command.action === 'lock') {
-      try {
-        const isScheduled = command.triggered_by === 'scheduler' || Boolean(command.schedule_window_id);
-        const logId = `cmd-${command.id}-${Date.now()}`;
-        const targetDoorId = command.door_id || command.unifi_door_id || 'door';
-        const targetDoorLabel = command.door_label || 'Door';
-        const mappingName = (command as any).mapping_name || (command as any).source_label || (isScheduled ? 'Schedule' : 'Remote');
-        const actionLabel = command.action === 'unlock' ? 'unlock' : 'lock';
+      // Step 4b: Write to Activity Stream (access_logs)
+      if (command.action === 'unlock' || command.action === 'lock') {
+        try {
+          const isScheduled = command.triggered_by === 'scheduler' || Boolean(command.schedule_window_id);
+          const logId = `cmd-${command.id}-${Date.now()}`;
+          const targetDoorId = command.door_id || command.unifi_door_id || 'door';
+          const targetDoorLabel = command.door_label || 'Door';
+          const mappingName = (command as any).mapping_name || (command as any).source_label || (isScheduled ? 'Schedule' : 'Remote');
+          const actionLabel = command.action === 'unlock' ? 'unlock' : 'lock';
 
-        let displayMessage: string;
-        if (isScheduled) {
-          displayMessage = `Scheduled ${actionLabel} for "${targetDoorLabel}" via ${mappingName}`;
-        } else {
-          displayMessage = `Remote ${actionLabel} for "${targetDoorLabel}"`;
+          let displayMessage: string;
+          if (isScheduled) {
+            displayMessage = `Scheduled ${actionLabel} for "${targetDoorLabel}" via ${mappingName}`;
+          } else {
+            displayMessage = `Remote ${actionLabel} for "${targetDoorLabel}"`;
+          }
+
+          await db.collection(`organizations/${orgId}/access_logs`).doc(logId).set({
+            id: logId,
+            org_id: orgId,
+            timestamp: nowTimestamp().toDate().toISOString(),
+            event_type: command.action === 'unlock' ? 'door_unlock' : 'door_lock',
+            event_result: finalStatus === 'done' ? 'success' : 'failed',
+            door_id: targetDoorId,
+            door_label: targetDoorLabel,
+            user_id: isScheduled ? 'scheduler' : (command.actor_uid || 'remote_admin'),
+            user_name: isScheduled ? 'Scheduled Automation' : 'Remote Admin',
+            user_type: isScheduled ? 'scheduler' : 'admin',
+            access_method: isScheduled ? 'schedule' : 'remote',
+            access_method_label: isScheduled
+              ? (command.action === 'unlock' ? 'Scheduled Unlock' : 'Scheduled Lock')
+              : (command.action === 'unlock' ? 'Remote Unlock' : 'Remote Lock'),
+            display_message: displayMessage,
+            schedule_window_id: command.schedule_window_id || null,
+            mapping_id: (command as any).mapping_id || null,
+            mapping_name: (command as any).mapping_name || null,
+            source_label: (command as any).source_label || null,
+            source_type: (command as any).source_type || null,
+            time_type: (command as any).time_type || null,
+            synced_at: nowTimestamp(),
+          }, { merge: true });
+        } catch (logErr) {
+          logger.debug(`[CommandListener] Access log notice: ${logErr}`);
         }
-
-        await db.collection(`organizations/${orgId}/access_logs`).doc(logId).set({
-          id: logId,
-          org_id: orgId,
-          timestamp: nowTimestamp().toDate().toISOString(),
-          event_type: command.action === 'unlock' ? 'door_unlock' : 'door_lock',
-          event_result: finalStatus === 'done' ? 'success' : 'failed',
-          door_id: targetDoorId,
-          door_label: targetDoorLabel,
-          user_id: isScheduled ? 'scheduler' : (command.actor_uid || 'remote_admin'),
-          user_name: isScheduled ? 'Scheduled Automation' : 'Remote Admin',
-          user_type: isScheduled ? 'scheduler' : 'admin',
-          access_method: isScheduled ? 'schedule' : 'remote',
-          access_method_label: isScheduled
-            ? (command.action === 'unlock' ? 'Scheduled Unlock' : 'Scheduled Lock')
-            : (command.action === 'unlock' ? 'Remote Unlock' : 'Remote Lock'),
-          display_message: displayMessage,
-          schedule_window_id: command.schedule_window_id || null,
-          mapping_id: (command as any).mapping_id || null,
-          mapping_name: (command as any).mapping_name || null,
-          source_label: (command as any).source_label || null,
-          source_type: (command as any).source_type || null,
-          time_type: (command as any).time_type || null,
-          synced_at: nowTimestamp(),
-        }, { merge: true });
-      } catch (logErr) {
-        logger.debug(`[CommandListener] Access log notice: ${logErr}`);
       }
-    }
 
-    // Step 5: Update the associated schedule window if applicable
-    if (command.schedule_window_id) {
-      await updateScheduleWindow(
-        db,
-        orgId,
-        command.schedule_window_id,
-        command.action,
-        finalStatus
-      );
+      // Step 5: Update the associated schedule window if applicable
+      if (command.schedule_window_id) {
+        await updateScheduleWindow(
+          db,
+          orgId,
+          command.schedule_window_id,
+          command.action,
+          finalStatus
+        );
+      }
     }
 
     // Invoke optional callback
     onCommand?.(command);
   }
 
-  const query = commandsRef.where('status', '==', 'queued');
+  function evaluateQueuedDoc(doc: FirebaseFirestore.DocumentSnapshot, nowMs: number) {
+    const commandId = doc.id;
+    const rawData = doc.data();
+    if (!rawData || rawData.status !== 'queued') {
+      const timer = activeTimers.get(commandId);
+      if (timer) {
+        clearTimeout(timer);
+        activeTimers.delete(commandId);
+      }
+      return;
+    }
 
-  const unsubscribe = query.onSnapshot(
-    async (snapshot) => {
-      const nowMs = Date.now();
+    const executeAtMs = parseExecuteAtMillis(rawData.execute_at);
+    const delayMs = executeAtMs - nowMs;
 
-      for (const docChange of snapshot.docChanges()) {
-        const doc = docChange.doc;
-        const commandId = doc.id;
-
-        if (docChange.type === 'removed') {
-          const timer = activeTimers.get(commandId);
-          if (timer) {
-            clearTimeout(timer);
-            activeTimers.delete(commandId);
-          }
-          continue;
-        }
-
-        const rawData = doc.data();
-        if (rawData.status !== 'queued') {
-          const timer = activeTimers.get(commandId);
-          if (timer) {
-            clearTimeout(timer);
-            activeTimers.delete(commandId);
-          }
-          continue;
-        }
-
-        const executeAtMs = parseExecuteAtMillis(rawData.execute_at);
-        const delayMs = executeAtMs - nowMs;
-
-        // If due now or past due (or within 5 seconds in future)
-        if (delayMs <= 5000) {
-          const timer = activeTimers.get(commandId);
-          if (timer) {
-            clearTimeout(timer);
-            activeTimers.delete(commandId);
-          }
+    // If due now or past due (or within 5 seconds in future)
+    if (delayMs <= 5000) {
+      const timer = activeTimers.get(commandId);
+      if (timer) {
+        clearTimeout(timer);
+        activeTimers.delete(commandId);
+      }
+      void processCommand(doc);
+    } else if (delayMs < 24 * 60 * 60 * 1000) {
+      // Schedule execution if not already scheduled
+      if (!activeTimers.has(commandId)) {
+        logger.info(
+          `[CommandListener] Scheduling command ${commandId} in ${Math.round(delayMs / 1000)}s`
+        );
+        const timer = setTimeout(() => {
+          activeTimers.delete(commandId);
           void processCommand(doc);
-        } else if (delayMs < 24 * 60 * 60 * 1000) {
-          // Schedule execution if not already scheduled
-          if (!activeTimers.has(commandId)) {
-            logger.info(
-              `[CommandListener] Scheduling command ${commandId} in ${Math.round(delayMs / 1000)}s`
-            );
-            const timer = setTimeout(() => {
+        }, delayMs);
+        activeTimers.set(commandId, timer);
+      }
+    }
+  }
+
+  const query = commandsRef.where('status', '==', 'queued');
+  let stopped = false;
+  let unsubscribeSnapshot: (() => void) | null = null;
+  let reconnectTimer: NodeJS.Timeout | null = null;
+
+  function attachSnapshotListener() {
+    if (stopped) return;
+    if (unsubscribeSnapshot) {
+      try {
+        unsubscribeSnapshot();
+      } catch {}
+      unsubscribeSnapshot = null;
+    }
+
+    unsubscribeSnapshot = query.onSnapshot(
+      (snapshot) => {
+        const nowMs = Date.now();
+        for (const docChange of snapshot.docChanges()) {
+          const doc = docChange.doc;
+          const commandId = doc.id;
+
+          if (docChange.type === 'removed') {
+            const timer = activeTimers.get(commandId);
+            if (timer) {
+              clearTimeout(timer);
               activeTimers.delete(commandId);
-              void processCommand(doc);
-            }, delayMs);
-            activeTimers.set(commandId, timer);
+            }
+            continue;
           }
+
+          evaluateQueuedDoc(doc, nowMs);
+        }
+      },
+      (err) => {
+        logger.warn(`[CommandListener] Snapshot listener error (will re-attach in 5s): ${String(err)}`);
+        if (unsubscribeSnapshot) {
+          try {
+            unsubscribeSnapshot();
+          } catch {}
+          unsubscribeSnapshot = null;
+        }
+        if (!stopped && !reconnectTimer) {
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            attachSnapshotListener();
+          }, 5000);
+          if (reconnectTimer.unref) reconnectTimer.unref();
         }
       }
-    },
-    (err) => {
-      logger.error(`[CommandListener] Snapshot listener error: ${String(err)}`);
+    );
+  }
+
+  async function pollQueuedCommands() {
+    if (stopped) return;
+    try {
+      const snap = await query.get();
+      if (snap.empty) return;
+      const nowMs = Date.now();
+      for (const doc of snap.docs) {
+        evaluateQueuedDoc(doc, nowMs);
+      }
+    } catch (err) {
+      logger.debug(`[CommandListener] Periodic poll notice: ${String(err)}`);
     }
-  );
+  }
+
+  // Attach real-time listener and run periodic 15-second fallback poll
+  attachSnapshotListener();
+  void pollQueuedCommands();
+  const pollInterval = setInterval(() => {
+    void pollQueuedCommands();
+  }, 15000);
+  if (pollInterval.unref) pollInterval.unref();
 
   return () => {
+    stopped = true;
+    clearInterval(pollInterval);
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     for (const timer of activeTimers.values()) {
       clearTimeout(timer);
     }
     activeTimers.clear();
-    unsubscribe();
+    if (unsubscribeSnapshot) {
+      try {
+        unsubscribeSnapshot();
+      } catch {}
+      unsubscribeSnapshot = null;
+    }
   };
 }

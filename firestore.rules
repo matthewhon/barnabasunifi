@@ -59,10 +59,10 @@ service cloud.firestore {
       allow update: if isOrgAdmin(orgId);
       allow delete: if isSuperAdmin();
 
-      // Settings: org admins can read/write; members and paired agents read-only
+      // Settings: org admins can read/write; members and paired agents read-only (agents can write access_log_sync)
       match /settings/{doc} {
         allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
-        allow write: if isOrgAdmin(orgId);
+        allow write: if isOrgAdmin(orgId) || (isAgentForOrg(orgId) && doc == 'access_log_sync');
       }
 
       // Agent Tokens: org admins can manage connection tokens
@@ -76,27 +76,27 @@ service cloud.firestore {
         allow write: if isOrgAdmin(orgId);
       }
 
-      // Doors: synced from agent; members can read; only agent can write
+      // Doors: synced from agent; members and agents can read; admins and agents can write
       match /doors/{doorId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
         allow write: if isOrgAdmin(orgId) || isAgentForOrg(orgId);
       }
 
-      // Schedule Windows: members can read; functions write
+      // Schedule Windows: members and agents can read; admins, agents, and functions write
       match /schedule_windows/{windowId} {
-        allow read: if isOrgMember(orgId);
-        allow write: if isOrgAdmin(orgId);
-      }
-
-      // UniFi Schedules: synced from UniFi; members can read; admins and agents can write
-      match /unifi_schedules/{scheduleId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
         allow write: if isOrgAdmin(orgId) || isAgentForOrg(orgId);
       }
 
-      // Visitors: members can read; managers and agents can write
+      // UniFi Schedules: synced from UniFi; members and agents can read; admins and agents can write
+      match /unifi_schedules/{scheduleId} {
+        allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
+        allow write: if isOrgAdmin(orgId) || isAgentForOrg(orgId);
+      }
+
+      // Visitors: members and agents can read; managers and agents can write
       match /visitors/{visitorId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
         allow create, update, delete: if isOrgManager(orgId) || isAgentForOrg(orgId);
       }
 
@@ -106,32 +106,32 @@ service cloud.firestore {
         allow write: if isOrgAdmin(orgId);
       }
 
-      // Synced Users: members can read; admins and agents can write
+      // Synced Users: members and agents can read; admins and agents can write
       match /synced_users/{userId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
         allow write: if isOrgAdmin(orgId) || isAgentForOrg(orgId);
       }
 
-      // Access Policies & UniFi Users: members can read; managers, admins and agents can write
+      // Access Policies & UniFi Users: members and agents can read; managers, admins and agents can write
       match /access_policies/{policyId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
         allow write: if isOrgManager(orgId) || isAgentForOrg(orgId);
       }
       match /unifi_users/{userId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
         allow write: if isOrgManager(orgId) || isAgentForOrg(orgId);
       }
 
-      // Access Logs: members can read; admins, managers and agents can write
+      // Access Logs: members and agents can read; admins, managers and agents can write
       match /access_logs/{logId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
         allow write: if isOrgManager(orgId) || isAgentForOrg(orgId);
       }
 
-      // Door Commands: all members can read and create (manual overrides from UI)
-      // Only the agent can update (to mark done/failed)
+      // Door Commands: all members and agents can read; members can create (manual overrides from UI)
+      // Only the agent or admin can update (to mark done/failed)
       match /door_commands/{commandId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if isOrgMember(orgId) || isAgentForOrg(orgId);
         allow create: if isOrgMember(orgId);
         allow update: if isAgentForOrg(orgId) || isOrgAdmin(orgId);
         allow delete: if isOrgAdmin(orgId);
@@ -161,7 +161,7 @@ service cloud.firestore {
 
     match /agents/{agentId} {
       allow read: if isSignedIn() && (
-        isOrgMember(resource.data.org_id) || isSuperAdmin()
+        resource == null || isOrgMember(resource.data.org_id) || isAgentForOrg(resource.data.org_id) || isSuperAdmin()
       );
       // Agents register and update their own docs; org admins/managers can approve updates
       allow create: if isAgentForOrg(request.resource.data.org_id)

@@ -7,10 +7,9 @@
  * and on an interval to keep the cloud dashboard in sync with UniFi schedules.
  */
 
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient, UnifiSchedule } from '../unifi/access';
 import { logger } from '../logger';
-import * as admin from 'firebase-admin';
 
 /**
  * Fetch all schedules from UniFi Access and upsert into Firestore.
@@ -38,7 +37,7 @@ export async function syncSchedules(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 
   const batch = db.batch();
-  const now = admin.firestore.Timestamp.now();
+  const now = firestoreTimestamp.now();
   const validScheduleIds = new Set<string>();
 
   for (const schedule of schedules) {

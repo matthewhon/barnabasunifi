@@ -10,15 +10,57 @@ import * as admin from 'firebase-admin';
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/firestore';
 import 'firebase/compat/auth';
+import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from './logger';
+import { saveConfig } from './config';
 
 let _db: any = null;
 let _isInitialized = false;
+let _useClientSdk = false;
 
 const DEFAULT_API_KEY =
   process.env.FIREBASE_API_KEY || 'AIzaSyCBu6tWWWx50VqSkTUGEAYy6fShFGIpZRk';
+
+/**
+ * Exchange a persistent CONNECTION_TOKEN for a fresh Firebase Custom Token.
+ */
+export async function refreshCustomTokenFromConnectionToken(): Promise<string | null> {
+  const connectionToken = process.env.CONNECTION_TOKEN;
+  if (!connectionToken) return null;
+
+  try {
+    const base64Str = connectionToken.replace(/^UPCO_/, '').trim();
+    const raw = Buffer.from(base64Str, 'base64').toString('utf-8');
+    const parsed = JSON.parse(raw);
+    const endpoint =
+      parsed.endpoint ||
+      `https://us-central1-${parsed.projectId || 'barnabasunfi'}.cloudfunctions.net/registerAgentWithToken`;
+
+    logger.info(`[Firebase] Refreshing custom auth token via connection token from ${endpoint}…`);
+    const response = await axios.post(
+      endpoint,
+      {
+        token: connectionToken,
+        agentId: process.env.AGENT_ID || 'agent-main-campus',
+        label: process.env.AGENT_LABEL || 'Main Campus Agent',
+        unifiHost: process.env.UNIFI_HOST || '',
+        version: process.env.npm_package_version || '1.0.0',
+      },
+      { timeout: 15000 }
+    );
+
+    if (response.data?.ok && response.data?.customToken) {
+      const freshToken = String(response.data.customToken);
+      saveConfig({ AGENT_AUTH_TOKEN: freshToken });
+      return freshToken;
+    }
+  } catch (err: any) {
+    logger.warn(`[Firebase] Failed to refresh custom token from connection token: ${err.message}`);
+  }
+  return null;
+}
 
 /**
  * Initialize Firebase connection.
@@ -53,6 +95,7 @@ export async function initializeFirebase(
 
       _db = admin.firestore();
       _db.settings({ ignoreUndefinedProperties: true });
+      _useClientSdk = false;
       _isInitialized = true;
       logger.info(`✓ Firebase initialized via Service Account for project: ${projectId}`);
       return;
@@ -61,8 +104,12 @@ export async function initializeFirebase(
     }
   }
 
-  // Fallback: Initialize via Firebase Client SDK with AGENT_AUTH_TOKEN
-  const authToken = process.env.AGENT_AUTH_TOKEN;
+  // Fallback: Initialize via Firebase Client SDK with AGENT_AUTH_TOKEN (or refresh via CONNECTION_TOKEN)
+  let authToken = process.env.AGENT_AUTH_TOKEN;
+  if (!authToken && process.env.CONNECTION_TOKEN) {
+    authToken = (await refreshCustomTokenFromConnectionToken()) || undefined;
+  }
+
   if (authToken) {
     logger.info(`Connecting to Firebase using Agent Connection Token for project: ${projectId}…`);
     if (firebase.apps.length === 0) {
@@ -75,14 +122,20 @@ export async function initializeFirebase(
 
     try {
       await firebase.auth().signInWithCustomToken(authToken);
-      logger.info(`✓ Successfully authenticated agent with Firebase Auth via Connection Token.`);
-      _db = firebase.firestore();
-      _isInitialized = true;
-      return;
     } catch (err: any) {
-      logger.error(`Failed to authenticate with custom token: ${err.message}`);
-      throw new Error(`Agent token authentication failed: ${err.message}`);
+      logger.warn(`Stored custom token rejected (${err.message}). Attempting refresh via CONNECTION_TOKEN…`);
+      const refreshedToken = await refreshCustomTokenFromConnectionToken();
+      if (!refreshedToken) {
+        throw new Error(`Agent token authentication failed: ${err.message}`);
+      }
+      await firebase.auth().signInWithCustomToken(refreshedToken);
     }
+
+    logger.info(`✓ Successfully authenticated agent with Firebase Auth via Connection Token.`);
+    _db = firebase.firestore();
+    _useClientSdk = true;
+    _isInitialized = true;
+    return;
   }
 
   throw new Error(
@@ -99,6 +152,31 @@ export function getDb(): FirebaseFirestore.Firestore {
   }
   return _db;
 }
+
+/**
+ * Returns a Firestore Timestamp implementation compatible with the active SDK
+ * (firebase-admin vs firebase/compat client SDK).
+ */
+export const firestoreTimestamp = {
+  now(): FirebaseFirestore.Timestamp {
+    if (_useClientSdk) {
+      return (firebase.firestore.Timestamp as any).now();
+    }
+    return admin.firestore.Timestamp.now();
+  },
+  fromMillis(ms: number): FirebaseFirestore.Timestamp {
+    if (_useClientSdk) {
+      return (firebase.firestore.Timestamp as any).fromMillis(ms);
+    }
+    return admin.firestore.Timestamp.fromMillis(ms);
+  },
+  fromDate(date: Date): FirebaseFirestore.Timestamp {
+    if (_useClientSdk) {
+      return (firebase.firestore.Timestamp as any).fromDate(date);
+    }
+    return admin.firestore.Timestamp.fromDate(date);
+  },
+};
 
 export { admin };
 

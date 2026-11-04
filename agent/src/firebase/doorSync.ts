@@ -7,10 +7,9 @@
  * keep the cloud dashboard in sync with physical door states.
  */
 
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient, UnifiDoor } from '../unifi/access';
 import { logger } from '../logger';
-import * as admin from 'firebase-admin';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -85,7 +84,7 @@ export async function syncDoors(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 
   const batch = db.batch();
-  const now = admin.firestore.Timestamp.now();
+  const now = firestoreTimestamp.now();
   const validDoorIds = new Set<string>();
 
   for (const door of doors) {
@@ -97,7 +96,7 @@ export async function syncDoors(
 
     const normalizedState = normalizeDoorState(door.door_lock_relay_status);
     const holdExpiresAt = typeof door.hold_unlock_end_time === 'number'
-      ? admin.firestore.Timestamp.fromMillis(door.hold_unlock_end_time * 1000)
+      ? firestoreTimestamp.fromMillis(door.hold_unlock_end_time * 1000)
       : null;
 
     const record: Record<string, any> = {

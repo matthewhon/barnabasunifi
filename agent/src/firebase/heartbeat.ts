@@ -8,10 +8,10 @@
  * before the process exits.
  */
 
-import * as admin from 'firebase-admin';
 import * as os from 'os';
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { logger } from '../logger';
+import { getCacheStore } from '../storage/cacheStore';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,16 +66,22 @@ async function writeHeartbeat(
 ): Promise<void> {
   const db = getDb();
   const localIp = getLocalIp();
-  const payload: AgentHeartbeat = {
+  const cacheStore = getCacheStore();
+  const payload: Record<string, any> = {
     org_id: orgId,
     label: agentLabel,
     status,
-    last_heartbeat: admin.firestore.Timestamp.now(),
+    last_heartbeat: firestoreTimestamp.now(),
     version,
     capabilities: [...AGENT_CAPABILITIES],
     ...(localIp ? { local_ip: localIp } : {}),
     hostname: os.hostname(),
     platform: os.platform(),
+    offline_resilience: {
+      cached_windows: cacheStore.getScheduleWindows().length,
+      last_cache_sync: cacheStore.getCache().last_sync,
+      mode: 'autonomous_lan',
+    },
   };
 
   await db.doc(`agents/${agentId}`).set(payload, { merge: true });

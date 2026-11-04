@@ -6,10 +6,9 @@
  * into /organizations/{orgId}/visitors/{visitorId}.
  */
 
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient, UnifiVisitor } from '../unifi/access';
 import { logger } from '../logger';
-import * as admin from 'firebase-admin';
 
 /**
  * Fetch all visitors from UniFi Access and upsert into Firestore.
@@ -38,7 +37,7 @@ export async function syncVisitors(
   const existingDocs = existingSnap?.docs || [];
 
   const batch = db.batch();
-  const now = admin.firestore.Timestamp.now();
+  const now = firestoreTimestamp.now();
   const matchedDocIds = new Set<string>();
 
   for (const visitor of visitors) {

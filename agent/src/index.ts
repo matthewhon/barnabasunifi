@@ -12,7 +12,7 @@ import 'dotenv/config';
 
 import { getConfigurationStatus, saveConfig } from './config';
 import { logger, setLogLevel } from './logger';
-import { initializeFirebase, getDb } from './firebase';
+import { initializeFirebase, getDb, firestoreTimestamp } from './firebase';
 import { UnifiAccessClient } from './unifi/access';
 import { startHeartbeat } from './firebase/heartbeat';
 import { syncDoors, startDoorSyncInterval } from './firebase/doorSync';
@@ -29,7 +29,6 @@ import { LocalScheduler } from './scheduler/localScheduler';
 import { startScheduleWindowSync } from './firebase/scheduleWindowSync';
 import { reconcileOfflineActions } from './firebase/reconciliation';
 import axios from 'axios';
-import * as admin from 'firebase-admin';
 
 // ---------------------------------------------------------------------------
 // Lifecycle State
@@ -274,7 +273,7 @@ async function startBridgeWorker(): Promise<void> {
           label: config.agentLabel,
           version: config.version,
           status: 'online',
-          registered_at: admin.firestore.Timestamp.now(),
+          registered_at: firestoreTimestamp.now(),
           unifi_host: config.unifiHost,
           capabilities: ['unlock', 'lock', 'door_sync'],
           offline_resilience: {

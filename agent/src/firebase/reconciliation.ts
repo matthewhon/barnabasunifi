@@ -3,8 +3,7 @@
  * Reconciles offline door actions to Firestore once internet connectivity is restored.
  */
 
-import * as admin from 'firebase-admin';
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { logger } from '../logger';
 import { getCacheStore, OfflineActionRecord } from '../storage/cacheStore';
 
@@ -28,8 +27,8 @@ export async function reconcileOfflineActions(orgId: string, agentId: string): P
 
   for (const record of pendingActions) {
     try {
-      const executedAtTimestamp = admin.firestore.Timestamp.fromDate(new Date(record.executed_at));
-      const now = admin.firestore.Timestamp.now();
+      const executedAtTimestamp = firestoreTimestamp.fromDate(new Date(record.executed_at));
+      const now = firestoreTimestamp.now();
 
       // 1. Write Audit Log
       await db.collection(`organizations/${orgId}/audit_log`).add({
@@ -92,7 +91,7 @@ export async function reconcileOfflineActions(orgId: string, agentId: string): P
         doorUpdate.unlock_trigger = 'offline_scheduler';
         if (record.duration_min) {
           doorUpdate.unlock_duration_min = record.duration_min;
-          doorUpdate.hold_unlock_expires_at = admin.firestore.Timestamp.fromMillis(
+          doorUpdate.hold_unlock_expires_at = firestoreTimestamp.fromMillis(
             new Date(record.executed_at).getTime() + record.duration_min * 60 * 1000
           );
         }
@@ -124,19 +123,23 @@ export async function reconcileOfflineActions(orgId: string, agentId: string): P
       try {
         const matchingCommandsSnap = await db
           .collection(`organizations/${orgId}/door_commands`)
-          .where('door_id', '==', record.door_id)
-          .where('action', '==', record.action)
           .where('schedule_window_id', '==', record.schedule_window_id)
-          .where('status', 'in', ['pending', 'queued'])
           .get();
 
         for (const cmdDoc of matchingCommandsSnap.docs) {
-          await cmdDoc.ref.update({
-            status: 'done',
-            executed_at: executedAtTimestamp,
-            result_message: 'Executed locally via offline autonomous scheduler.',
-            agent_id: agentId,
-          });
+          const cmdData = cmdDoc.data();
+          if (
+            (cmdData.door_id === record.door_id || cmdData.unifi_door_id === record.door_id) &&
+            cmdData.action === record.action &&
+            (cmdData.status === 'pending' || cmdData.status === 'queued')
+          ) {
+            await cmdDoc.ref.update({
+              status: 'done',
+              executed_at: executedAtTimestamp,
+              result_message: 'Executed locally via offline autonomous scheduler.',
+              agent_id: agentId,
+            });
+          }
         }
       } catch (cmdErr) {
         logger.debug(`[Reconciliation] Notice updating matching commands: ${cmdErr}`);

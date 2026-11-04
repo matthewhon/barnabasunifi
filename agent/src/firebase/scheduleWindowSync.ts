@@ -4,8 +4,7 @@
  * to the local CacheStore for offline execution.
  */
 
-import * as admin from 'firebase-admin';
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { logger } from '../logger';
 import { getCacheStore, CachedScheduleWindow, CachedDoor } from '../storage/cacheStore';
 
@@ -40,8 +39,8 @@ export async function syncScheduleWindowsNow(orgId: string): Promise<number> {
   const cacheStore = getCacheStore();
   cacheStore.setOrgId(orgId);
 
+  // 1. Sync settings (independent try/catch so it never blocks schedule window sync)
   try {
-    // 1. Sync settings
     const settingsDoc = await db.doc(`organizations/${orgId}/settings/config`).get();
     if (settingsDoc.exists) {
       const data = settingsDoc.data() || {};
@@ -57,8 +56,13 @@ export async function syncScheduleWindowsNow(orgId: string): Promise<number> {
         unifi_api_key: unifiConfig.api_key || unifiConfig.developer_api_key,
       });
     }
+  } catch (err) {
+    logger.debug(`[ScheduleWindowSync] Settings sync notice: ${String(err)}`);
+  }
 
-    // 2. Sync doors
+  // 2. Sync doors (independent try/catch)
+  let cachedDoorsCount = cacheStore.getDoors().length;
+  try {
     const doorsSnap = await db.collection(`organizations/${orgId}/doors`).get();
     const cachedDoors: CachedDoor[] = doorsSnap.docs.map((doc) => {
       const d = doc.data();
@@ -71,15 +75,22 @@ export async function syncScheduleWindowsNow(orgId: string): Promise<number> {
       };
     });
     cacheStore.updateDoors(cachedDoors);
+    cachedDoorsCount = cachedDoors.length;
+  } catch (err) {
+    logger.debug(`[ScheduleWindowSync] Doors sync notice: ${String(err)}`);
+  }
 
-    // 3. Sync schedule windows for the next 14 days (and windows from the last 2 hours to avoid dropping currently active events)
-    const twoHoursAgo = admin.firestore.Timestamp.fromMillis(Date.now() - 2 * 60 * 60 * 1000);
-    const fourteenDaysAhead = admin.firestore.Timestamp.fromMillis(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  // 3. Sync schedule windows for the next 14 days (and windows from the last 2 hours to avoid dropping currently active events)
+  try {
+    const twoHoursAgoMs = Date.now() - 2 * 60 * 60 * 1000;
+    const fourteenDaysAheadMs = Date.now() + 14 * 24 * 60 * 60 * 1000;
+    const twoHoursAgo = firestoreTimestamp.fromMillis(twoHoursAgoMs);
 
+    // Query on single range field (lock_at >= twoHoursAgo) so no composite index is required,
+    // then filter unlock_at <= fourteenDaysAheadMs in memory.
     const windowsSnap = await db
       .collection(`organizations/${orgId}/schedule_windows`)
       .where('lock_at', '>=', twoHoursAgo)
-      .where('unlock_at', '<=', fourteenDaysAhead)
       .get();
 
     const cachedWindows: CachedScheduleWindow[] = [];
@@ -88,6 +99,12 @@ export async function syncScheduleWindowsNow(orgId: string): Promise<number> {
       if (!d) continue;
       const doorIds = Array.isArray(d.door_ids) ? (d.door_ids as string[]) : [];
       if (doorIds.length === 0) continue;
+
+      const unlockIso = toIsoString(d.unlock_at);
+      const unlockAtMs = new Date(unlockIso).getTime();
+      if (!isNaN(unlockAtMs) && unlockAtMs > fourteenDaysAheadMs) {
+        continue;
+      }
 
       let doorTimings: Record<string, any> | undefined;
       if (d.door_timings && typeof d.door_timings === 'object') {
@@ -115,7 +132,7 @@ export async function syncScheduleWindowsNow(orgId: string): Promise<number> {
         time_type: d.time_type || null,
         starts_at: toIsoString(d.starts_at),
         ends_at: toIsoString(d.ends_at),
-        unlock_at: toIsoString(d.unlock_at),
+        unlock_at: unlockIso,
         lock_at: toIsoString(d.lock_at),
         lock_timing_mode: d.lock_timing_mode,
         door_ids: doorIds,
@@ -126,8 +143,25 @@ export async function syncScheduleWindowsNow(orgId: string): Promise<number> {
     }
 
     cacheStore.updateScheduleWindows(cachedWindows);
+
+    // Report updated cache metrics to agent document in Firestore
+    const agentId = process.env.AGENT_ID || 'agent-main-campus';
+    await db
+      .doc(`agents/${agentId}`)
+      .set(
+        {
+          offline_resilience: {
+            cached_windows: cachedWindows.length,
+            last_cache_sync: cacheStore.getCache().last_sync,
+            mode: 'autonomous_lan',
+          },
+        },
+        { merge: true }
+      )
+      .catch(() => {});
+
     logger.info(
-      `[ScheduleWindowSync] Successfully synced ${cachedWindows.length} upcoming window(s) and ${cachedDoors.length} door(s) to local cache.`
+      `[ScheduleWindowSync] Successfully synced ${cachedWindows.length} upcoming window(s) and ${cachedDoorsCount} door(s) to local cache.`
     );
     return cachedWindows.length;
   } catch (err) {

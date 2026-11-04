@@ -16,8 +16,7 @@ import * as https from 'https';
 import * as http from 'http';
 import { execSync } from 'child_process';
 import * as os from 'os';
-import * as admin from 'firebase-admin';
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { logger } from '../logger';
 
 // ---------------------------------------------------------------------------
@@ -94,7 +93,10 @@ function isNewer(candidate: string, current: string): boolean {
 // Check for update
 // ---------------------------------------------------------------------------
 
-export async function checkForUpdate(agentId?: string): Promise<UpdateState> {
+export async function checkForUpdate(
+  agentId?: string,
+  onRestart?: () => Promise<void>
+): Promise<UpdateState> {
   try {
     const db = getDb();
     const snap = await db.doc('agent_releases/latest').get();
@@ -107,7 +109,7 @@ export async function checkForUpdate(agentId?: string): Promise<UpdateState> {
             update_available: false,
             latest_version: _state.currentVersion,
             current_version: _state.currentVersion,
-            update_checked_at: admin.firestore.Timestamp.now(),
+            update_checked_at: firestoreTimestamp.now(),
           },
           { merge: true }
         ).catch(() => {});
@@ -139,11 +141,26 @@ export async function checkForUpdate(agentId?: string): Promise<UpdateState> {
           latest_version: latestVersion,
           current_version: _state.currentVersion,
           update_changelog: changelog,
-          update_checked_at: admin.firestore.Timestamp.now(),
+          update_checked_at: firestoreTimestamp.now(),
           update_status: updateAvailable ? (_state.applying ? 'applying' : 'idle') : 'idle',
         },
         { merge: true }
       ).catch(() => {});
+
+      if (updateAvailable && !_state.applying && _state.downloadUrl) {
+        try {
+          const agentSnap = await db.doc(`agents/${agentId}`).get();
+          const agentData = agentSnap.exists ? agentSnap.data() : null;
+          if (agentData && (Boolean(agentData.auto_update) || agentData.update_approved_version === latestVersion)) {
+            logger.info(
+              `[UpdateChecker] 🚀 Auto-deploying approved update via poll: v${_state.currentVersion} → v${latestVersion}…`
+            );
+            void applyPendingUpdate(onRestart, agentId).catch((err: any) => {
+              logger.error(`[UpdateChecker] Auto-deploy failed: ${err.message}`);
+            });
+          }
+        } catch {}
+      }
     }
 
     if (updateAvailable) {
@@ -329,11 +346,11 @@ export function startUpdateChecker(
   );
 
   // Check immediately on startup
-  checkForUpdate(agentId).catch(() => {});
+  checkForUpdate(agentId, onRestart).catch(() => {});
 
   // Periodic poll interval
   const handle = setInterval(() => {
-    checkForUpdate(agentId).catch(() => {});
+    checkForUpdate(agentId, onRestart).catch(() => {});
   }, intervalMs);
 
   let unsubSnapshot: (() => void) | null = null;

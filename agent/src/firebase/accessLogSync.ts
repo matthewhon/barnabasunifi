@@ -7,10 +7,9 @@
  * /organizations/{orgId}/access_logs/{logId}
  */
 
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient, AccessLogEntry } from '../unifi/access';
 import { logger } from '../logger';
-import * as admin from 'firebase-admin';
 
 let _lastSyncedEpochSeconds = 0;
 
@@ -76,7 +75,7 @@ export async function syncAccessLogs(
   logger.info(`[AccessLogSync] Processing ${entries.length} log entry(s) for Firestore permanent archive…`);
 
   // 2. Commit logs to Firestore in safe chunks (max 400 operations per batch)
-  const now = admin.firestore.Timestamp.now();
+  const now = firestoreTimestamp.now();
   let latestEventEpoch = _lastSyncedEpochSeconds;
 
   // Track latest access per door to update door document

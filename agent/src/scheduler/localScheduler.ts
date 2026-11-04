@@ -8,11 +8,10 @@
  */
 
 import * as crypto from 'crypto';
-import * as admin from 'firebase-admin';
 import { UnifiAccessClient } from '../unifi/access';
 import { logger } from '../logger';
 import { getCacheStore, CacheStore, CachedScheduleWindow, OfflineActionRecord } from '../storage/cacheStore';
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 
 export interface NextScheduledItem {
   action: 'unlock' | 'lock';
@@ -272,7 +271,7 @@ export class LocalScheduler {
   ): Promise<void> {
     try {
       const db = getDb();
-      const now = admin.firestore.Timestamp.now();
+      const now = firestoreTimestamp.now();
 
       // 1. Audit Log
       await db.collection(`organizations/${this.orgId}/audit_log`).add({
@@ -336,7 +335,7 @@ export class LocalScheduler {
         doorUpdate.unlock_trigger = 'scheduler';
         if (durationMin) {
           doorUpdate.unlock_duration_min = durationMin;
-          doorUpdate.hold_unlock_expires_at = admin.firestore.Timestamp.fromMillis(Date.now() + durationMin * 60 * 1000);
+          doorUpdate.hold_unlock_expires_at = firestoreTimestamp.fromMillis(Date.now() + durationMin * 60 * 1000);
         }
       } else {
         doorUpdate.last_locked_at = now;
@@ -354,6 +353,31 @@ export class LocalScheduler {
         status: windowStatus,
         last_updated: now,
       });
+
+      // 5. Mark any matching pending/queued door_commands for this window + door + action as done
+      try {
+        const windowCmdsSnap = await db
+          .collection(`organizations/${this.orgId}/door_commands`)
+          .where('schedule_window_id', '==', window.id)
+          .get();
+        for (const cmdDoc of windowCmdsSnap.docs) {
+          const cmdData = cmdDoc.data();
+          if (
+            (cmdData.door_id === doorId || cmdData.unifi_door_id === doorId) &&
+            cmdData.action === action &&
+            (cmdData.status === 'pending' || cmdData.status === 'queued')
+          ) {
+            await cmdDoc.ref.update({
+              status,
+              executed_at: now,
+              result_message: resultMessage,
+              agent_id: this.agentId,
+            });
+          }
+        }
+      } catch (cmdErr) {
+        logger.debug(`[LocalScheduler] Notice updating matching door_commands: ${String(cmdErr)}`);
+      }
     } catch (err) {
       logger.warn(`[LocalScheduler] Online report notice: ${String(err)}`);
     }

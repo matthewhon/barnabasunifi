@@ -33,6 +33,14 @@
       ]
     },
     {
+      "collectionGroup": "schedule_windows",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lock_at", "order": "ASCENDING" },
+        { "fieldPath": "unlock_at", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "audit_log",
       "queryScope": "COLLECTION",
       "fields": [

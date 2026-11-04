@@ -314,11 +314,29 @@ function ActiveMappingCard({
   const matchingWindows = scheduleWindows
     .filter((w) => {
       if (w.source_type !== mapping.source_type) return false;
-      const isMatch =
-        (w.source_label && w.source_label.toLowerCase().includes(mapping.pco_resource_label.toLowerCase())) ||
-        (w as any).pco_service_type_id === mapping.pco_resource_id ||
-        (w as any).service_mapping_id === mapping.id;
+      if (!Array.isArray(w.door_ids) || w.door_ids.length === 0) return false;
+
+      const winMappingId = w.mapping_id || w.service_mapping_id || w.group_mapping_id;
+      let isMatch = false;
+      if (winMappingId) {
+        isMatch = winMappingId === mapping.id;
+      } else if (mapping.source_type === 'service') {
+        isMatch = w.pco_service_type_id === mapping.pco_resource_id;
+      } else {
+        isMatch = w.pco_group_id === mapping.pco_resource_id;
+      }
       if (!isMatch) return false;
+
+      if (
+        mapping.source_type === 'service' &&
+        mapping.time_types &&
+        mapping.time_types.length > 0 &&
+        w.time_type
+      ) {
+        const enabledTypes = mapping.time_types.map((t) => normalizePlanTimeType(t));
+        const winType = normalizePlanTimeType(w.time_type, w.time_type_name || undefined);
+        if (!enabledTypes.includes(winType)) return false;
+      }
 
       // Exclude windows that have already concluded in the past
       const lockTime = new Date(w.lock_at || w.ends_at).getTime();

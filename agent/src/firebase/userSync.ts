@@ -3,10 +3,9 @@
  * Syncs UniFi Access policies and local users into Firestore.
  */
 
-import { getDb } from '../firebase';
+import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient } from '../unifi/access';
 import { logger } from '../logger';
-import * as admin from 'firebase-admin';
 
 function cleanFirestoreRecord<T extends Record<string, any>>(obj: T): T {
   const clean = (val: any): any => {
@@ -50,7 +49,7 @@ export async function syncAccessPolicies(
   }
 
   const batch = db.batch();
-  const now = admin.firestore.Timestamp.now();
+  const now = firestoreTimestamp.now();
 
   for (const policy of policies) {
     if (!policy.id) continue;
@@ -126,7 +125,7 @@ export async function syncUsers(
   }
 
   const batch = db.batch();
-  const now = admin.firestore.Timestamp.now();
+  const now = firestoreTimestamp.now();
 
   for (const user of users) {
     if (!user.id) continue;
