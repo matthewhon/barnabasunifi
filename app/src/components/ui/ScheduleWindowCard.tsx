@@ -217,7 +217,18 @@ export default function ScheduleWindowCard({ window: win, compact = false }: Sch
           {win.door_labels.map((label, idx) => {
             const dId = win.door_ids[idx];
             const dTiming = win.door_timings?.[dId];
+            let unlockBadgeText: string | null = null;
             let lockBadgeText: string | null = null;
+            if (dTiming?.unlock_at) {
+              try {
+                const dUnlock = new Date(dTiming.unlock_at);
+                if (!isNaN(dUnlock.getTime())) {
+                  unlockBadgeText = format(dUnlock, 'h:mm a');
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
             if (dTiming?.lock_at) {
               try {
                 const dLock = new Date(dTiming.lock_at);
@@ -234,12 +245,18 @@ export default function ScheduleWindowCard({ window: win, compact = false }: Sch
                 key={`${label}-${idx}`}
                 className={`badge ${dTiming ? 'badge-info' : 'badge-neutral'}`}
                 style={{ fontSize: '0.6875rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
-                title={dTiming ? `Custom timing: Locks at ${lockBadgeText || 'custom time'}` : undefined}
+                title={
+                  dTiming
+                    ? `Unlock: ${unlockBadgeText || 'default'} → Lock: ${lockBadgeText || 'default'}`
+                    : undefined
+                }
               >
                 <span>{label}</span>
-                {lockBadgeText && (
-                  <span style={{ fontSize: '0.625rem', opacity: 0.85, fontWeight: 600 }}>
-                    · Locks {lockBadgeText}
+                {(unlockBadgeText || lockBadgeText) && (
+                  <span style={{ fontSize: '0.625rem', opacity: 0.9, fontWeight: 600 }}>
+                    · {unlockBadgeText ? `Unlock ${unlockBadgeText}` : ''}
+                    {unlockBadgeText && lockBadgeText ? ' → ' : ''}
+                    {lockBadgeText ? `Lock ${lockBadgeText}` : ''}
                   </span>
                 )}
               </span>

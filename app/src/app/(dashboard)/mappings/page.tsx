@@ -11,6 +11,7 @@ import {
   deleteMapping,
   subscribeToDoors,
   subscribeToScheduleWindows,
+  syncMappingTimingToScheduleWindows,
   getOrgSettings,
   updateOrgSettings,
   subscribeToAccessPolicyMappings,
@@ -274,41 +275,6 @@ function ActiveMappingCard({
   const effectiveLockMin = mapping.lock_offset_min ?? (effectiveLockMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
   const isCustomTiming = mapping.lock_timing_mode !== undefined || mapping.lock_offset_min !== undefined || mapping.unlock_offset_min !== undefined;
 
-  // Find doors matching this mapping with their specific timing rules
-  const mappedDoors = mapping.door_ids.map((dId) => {
-    const found = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
-    const cleanLabel = (found?.label || '').trim();
-    const timingOverride = mapping.door_timings?.[dId];
-    const isDoorCustom = Boolean(
-      timingOverride && (
-        timingOverride.lock_timing_mode !== undefined ||
-        timingOverride.lock_offset_min !== undefined ||
-        timingOverride.unlock_offset_min !== undefined
-      )
-    );
-    const doorLockMode = timingOverride?.lock_timing_mode ?? effectiveLockMode;
-    const doorUnlockMin = timingOverride?.unlock_offset_min ?? effectiveUnlockMin;
-    const doorLockMin = timingOverride?.lock_offset_min ?? (doorLockMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
-
-    return {
-      id: dId,
-      label: cleanLabel || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId),
-      state: found?.current_state ?? 'unknown',
-      isHeld: found?.is_held_unlocked ?? false,
-      position: found?.door_position_status,
-      campusName: found?.campus_name,
-      locationName: found?.location_name,
-      isHidden: isDoorHidden(found),
-      isDoorCustom,
-      doorLockMode,
-      doorUnlockMin,
-      doorLockMin,
-    };
-  });
-
-  const hasPerDoorCustomTiming = mappedDoors.some((d) => d.isDoorCustom);
-  const customDoorsCount = mappedDoors.filter((d) => d.isDoorCustom).length;
-
   // Find upcoming schedule windows linked to this mapping / service / group
   const now = Date.now();
   const matchingWindows = scheduleWindows
@@ -350,6 +316,111 @@ function ActiveMappingCard({
   const schedule = (pcoResource as PcoGroup)?.schedule;
   const upcomingPlanTitle = (pcoResource as PcoServiceType)?.upcoming_plan_title;
   const upcomingTimes = pcoResource?.upcoming_times ?? [];
+
+  // Fallback next active PCO time if scheduleWindow hasn't synced yet
+  const nextActivePcoTime = upcomingTimes
+    .filter((t) => {
+      if (mapping.source_type === 'service' && mapping.time_types && mapping.time_types.length > 0) {
+        const enabledTypes = mapping.time_types.map((tt) => normalizePlanTimeType(tt));
+        const normType = normalizePlanTimeType(t.time_type, t.name);
+        if (!enabledTypes.includes(normType)) return false;
+      }
+      const endMs = parseSafeDate(t.ends_at || t.starts_at)?.getTime() ?? 0;
+      return endMs + 2 * 60 * 60 * 1000 >= now;
+    })
+    .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime())[0];
+
+  const refStartDate = parseSafeDate(nextWindow?.starts_at || nextActivePcoTime?.starts_at);
+  const refEndDate =
+    parseSafeDate(nextWindow?.ends_at || nextActivePcoTime?.ends_at) ||
+    (refStartDate ? new Date(refStartDate.getTime() + 60 * 60 * 1000) : null);
+
+  // Find doors matching this mapping with their specific timing rules & computed next unlock/lock times
+  const mappedDoors = mapping.door_ids.map((dId, idx) => {
+    const found = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
+    const cleanLabel = (found?.label || mapping.door_labels?.[idx] || '').trim();
+    const timingOverride = mapping.door_timings?.[dId];
+    const isDoorCustom = Boolean(
+      timingOverride && (
+        timingOverride.lock_timing_mode !== undefined ||
+        timingOverride.lock_offset_min !== undefined ||
+        timingOverride.unlock_offset_min !== undefined
+      )
+    );
+    const doorLockMode = timingOverride?.lock_timing_mode ?? effectiveLockMode;
+    const doorUnlockMin = timingOverride?.unlock_offset_min ?? effectiveUnlockMin;
+    const doorLockMin =
+      timingOverride?.lock_offset_min ??
+      (doorLockMode === effectiveLockMode
+        ? effectiveLockMin
+        : doorLockMode === 'after_start'
+          ? (orgSettings?.lock_after_start_min ?? 15)
+          : (orgSettings?.lock_buffer_after_min ?? 15));
+
+    let nextUnlockIso = nextWindow?.door_timings?.[dId]?.unlock_at || '';
+    let nextLockIso = nextWindow?.door_timings?.[dId]?.lock_at || '';
+
+    if (refStartDate && refEndDate) {
+      const calcUnlock = new Date(refStartDate.getTime() - doorUnlockMin * 60 * 1000);
+      const calcLock =
+        doorLockMode === 'after_start'
+          ? new Date(refStartDate.getTime() + doorLockMin * 60 * 1000)
+          : new Date(refEndDate.getTime() + doorLockMin * 60 * 1000);
+      nextUnlockIso = calcUnlock.toISOString();
+      nextLockIso = calcLock.toISOString();
+    } else if (nextWindow && (!nextUnlockIso || !nextLockIso)) {
+      nextUnlockIso = nextWindow.unlock_at;
+      nextLockIso = nextWindow.lock_at;
+    }
+
+    return {
+      id: dId,
+      label: cleanLabel || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId),
+      state: found?.current_state ?? 'unknown',
+      isHeld: found?.is_held_unlocked ?? false,
+      position: found?.door_position_status,
+      campusName: found?.campus_name,
+      locationName: found?.location_name,
+      isHidden: isDoorHidden(found),
+      isDoorCustom,
+      doorLockMode,
+      doorUnlockMin,
+      doorLockMin,
+      nextUnlockIso,
+      nextLockIso,
+      nextUnlockTime: nextUnlockIso ? formatIsoTimeOnly(nextUnlockIso) : '',
+      nextLockTime: nextLockIso ? formatIsoTimeOnly(nextLockIso) : '',
+    };
+  });
+
+  const hasPerDoorCustomTiming = mappedDoors.some((d) => d.isDoorCustom);
+  const customDoorsCount = mappedDoors.filter((d) => d.isDoorCustom).length;
+  const hasDifferentDoorSchedules =
+    hasPerDoorCustomTiming ||
+    (mappedDoors.length > 1 &&
+      mappedDoors.some(
+        (d) =>
+          d.doorLockMode !== mappedDoors[0].doorLockMode ||
+          d.doorUnlockMin !== mappedDoors[0].doorUnlockMin ||
+          d.doorLockMin !== mappedDoors[0].doorLockMin,
+      ));
+
+  // Overall window earliest unlock & latest lock across all mapped doors
+  const windowEarliestUnlockIso = (() => {
+    const validMs = mappedDoors
+      .map((d) => (d.nextUnlockIso ? new Date(d.nextUnlockIso).getTime() : NaN))
+      .filter((ms) => !isNaN(ms));
+    if (validMs.length > 0) return new Date(Math.min(...validMs)).toISOString();
+    return nextWindow?.unlock_at || '';
+  })();
+
+  const windowLatestLockIso = (() => {
+    const validMs = mappedDoors
+      .map((d) => (d.nextLockIso ? new Date(d.nextLockIso).getTime() : NaN))
+      .filter((ms) => !isNaN(ms));
+    if (validMs.length > 0) return new Date(Math.max(...validMs)).toISOString();
+    return nextWindow?.lock_at || '';
+  })();
 
   return (
     <div
@@ -536,23 +607,27 @@ function ActiveMappingCard({
                     display: 'flex',
                     alignItems: 'center',
                     gap: '0.5rem',
-                    padding: '0.375rem 0.625rem',
+                    padding: '0.45rem 0.75rem',
                     background: 'var(--color-bg-elevated)',
                     border: `1px solid ${door.isDoorCustom ? 'rgba(36, 101, 245, 0.35)' : 'var(--color-border)'}`,
                     borderRadius: 'var(--radius-md)',
                     fontSize: '0.8125rem',
                   }}
                 >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
                         {door.label}
                       </span>
-                      {door.isDoorCustom && (
+                      {door.isDoorCustom ? (
                         <span className="badge badge-info" style={{ fontSize: '0.625rem', padding: '0.05rem 0.3rem' }}>
-                          Custom
+                          Custom Schedule
                         </span>
-                      )}
+                      ) : hasDifferentDoorSchedules ? (
+                        <span className="badge badge-neutral" style={{ fontSize: '0.625rem', padding: '0.05rem 0.3rem' }}>
+                          Default Schedule
+                        </span>
+                      ) : null}
                       {door.isHidden && (
                         <span
                           className="badge"
@@ -602,20 +677,50 @@ function ActiveMappingCard({
                       )}
                       <span
                         style={{
-                          fontSize: '0.625rem',
+                          fontSize: '0.6875rem',
                           color: door.isDoorCustom ? 'var(--color-accent)' : 'var(--color-text-muted)',
                           fontWeight: door.isDoorCustom ? 600 : 400,
                         }}
                       >
+                        🔓 Unlocks -{door.doorUnlockMin}m before →{' '}
                         {door.doorLockMode === 'after_start'
                           ? door.doorLockMin === 0
-                            ? `🔒 Locks at start (-${door.doorUnlockMin}m unlock)`
-                            : `🛡️ Locks +${door.doorLockMin}m after start (-${door.doorUnlockMin}m unlock)`
+                            ? '🔒 Locks at start'
+                            : `🛡️ Locks +${door.doorLockMin}m after start`
                           : door.doorLockMin === 0
-                          ? `🚪 Open entire service (-${door.doorUnlockMin}m unlock)`
-                          : `🕒 Locks +${door.doorLockMin}m after end (-${door.doorUnlockMin}m unlock)`}
+                            ? '🚪 Locks at end'
+                            : `🕒 Locks +${door.doorLockMin}m after end`}
                       </span>
                     </div>
+                    {door.nextUnlockTime && door.nextLockTime && (
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          fontSize: '0.725rem',
+                          padding: '0.15rem 0.45rem',
+                          borderRadius: '4px',
+                          background: door.isDoorCustom ? 'rgba(36, 101, 245, 0.08)' : 'var(--color-bg-surface)',
+                          border: `1px solid ${door.isDoorCustom ? 'rgba(36, 101, 245, 0.25)' : 'var(--color-border)'}`,
+                          width: 'fit-content',
+                          marginTop: '0.05rem',
+                        }}
+                      >
+                        <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>
+                          Unlock: {door.nextUnlockTime}
+                        </span>
+                        <span style={{ color: 'var(--color-text-muted)' }}>→</span>
+                        <span
+                          style={{
+                            color: door.doorLockMode === 'after_start' ? 'var(--color-accent)' : '#d97706',
+                            fontWeight: 600,
+                          }}
+                        >
+                          Lock: {door.nextLockTime}
+                        </span>
+                      </div>
+                    )}
                   </div>
                   {onEditTiming && (
                     <button
@@ -717,26 +822,54 @@ function ActiveMappingCard({
               <span style={{ fontWeight: 600, color: 'var(--color-text-muted)' }}>Default: </span>
               {effectiveLockMode === 'after_start' ? (
                 <>
-                  <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>🛡️ Security Mode:</span> Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after start · Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before
+                  <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>🛡️ Security Mode:</span> Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before · Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after start
                 </>
               ) : (
                 <>
-                  <span style={{ fontWeight: 600 }}>🕒 Standard Mode:</span> Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after end · Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before
+                  <span style={{ fontWeight: 600 }}>🕒 Standard Mode:</span> Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before · Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after end
                 </>
               )}
             </div>
-            {hasPerDoorCustomTiming && (
-              <div style={{ marginTop: '0.375rem', paddingTop: '0.375rem', borderTop: '1px dashed var(--color-border)', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+            {(hasPerDoorCustomTiming || hasDifferentDoorSchedules) && mappedDoors.length > 0 && (
+              <div style={{ marginTop: '0.45rem', paddingTop: '0.45rem', borderTop: '1px dashed var(--color-border)', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
                 <span style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                  Door-Specific Timing:
+                  Per-Door Unlock & Lock Schedule:
                 </span>
-                {mappedDoors.filter((d) => d.isDoorCustom).map((d) => (
-                  <div key={d.id} style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>• {d.label}:</span>
-                    {d.doorLockMode === 'after_start' ? (
-                      <span style={{ color: 'var(--color-success, #10b981)' }}>🛡️ Security Mode (Locks +{d.doorLockMin}m after start · Unlocks -{d.doorUnlockMin}m before)</span>
-                    ) : (
-                      <span>🕒 Standard Mode (Locks +{d.doorLockMin}m after end · Unlocks -{d.doorUnlockMin}m before)</span>
+                {mappedDoors.map((d) => (
+                  <div
+                    key={d.id}
+                    style={{
+                      fontSize: '0.75rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '0.5rem',
+                      flexWrap: 'wrap',
+                      padding: '0.2rem 0.4rem',
+                      borderRadius: '4px',
+                      background: d.isDoorCustom ? 'rgba(36, 101, 245, 0.06)' : 'transparent',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>• {d.label}:</span>
+                      {d.doorLockMode === 'after_start' ? (
+                        <span style={{ color: 'var(--color-success, #10b981)', fontSize: '0.725rem' }}>
+                          🛡️ Unlocks -{d.doorUnlockMin}m before → Locks +{d.doorLockMin}m after start
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--color-text-secondary)', fontSize: '0.725rem' }}>
+                          🕒 Unlocks -{d.doorUnlockMin}m before → Locks +{d.doorLockMin}m after end
+                        </span>
+                      )}
+                    </div>
+                    {d.nextUnlockTime && d.nextLockTime && (
+                      <span style={{ fontSize: '0.725rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        <span style={{ color: 'var(--color-success, #10b981)' }}>Unlock: {d.nextUnlockTime}</span>
+                        {' → '}
+                        <span style={{ color: d.doorLockMode === 'after_start' ? 'var(--color-accent)' : '#d97706' }}>
+                          Lock: {d.nextLockTime}
+                        </span>
+                      </span>
                     )}
                   </div>
                 ))}
@@ -750,46 +883,140 @@ function ActiveMappingCard({
       {nextWindow && (
         <div
           style={{
-            padding: '0.625rem 0.75rem',
+            padding: '0.75rem 0.875rem',
             borderRadius: 'var(--radius-md)',
-            background: new Date(nextWindow.unlock_at).getTime() <= now ? 'rgba(16, 185, 129, 0.08)' : 'rgba(36, 101, 245, 0.05)',
-            border: `1px solid ${new Date(nextWindow.unlock_at).getTime() <= now ? 'rgba(16, 185, 129, 0.3)' : 'rgba(36, 101, 245, 0.2)'}`,
+            background: new Date(windowEarliestUnlockIso || nextWindow.unlock_at).getTime() <= now ? 'rgba(16, 185, 129, 0.08)' : 'rgba(36, 101, 245, 0.05)',
+            border: `1px solid ${new Date(windowEarliestUnlockIso || nextWindow.unlock_at).getTime() <= now ? 'rgba(16, 185, 129, 0.3)' : 'rgba(36, 101, 245, 0.2)'}`,
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
+            flexDirection: 'column',
             gap: '0.5rem',
           }}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+              <span
+                style={{
+                  fontSize: '0.6875rem',
+                  fontWeight: 700,
+                  color: new Date(windowEarliestUnlockIso || nextWindow.unlock_at).getTime() <= now ? 'var(--color-success, #10b981)' : 'var(--color-accent)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                }}
+              >
+                {new Date(windowEarliestUnlockIso || nextWindow.unlock_at).getTime() <= now ? '🟢 Currently Active Window' : 'Next Scheduled Door Window'}
+              </span>
+              <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-primary)', fontWeight: 600 }}>
+                {nextWindow.source_label || mapping.pco_resource_label}
+              </span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                {formatIsoDateOnly(nextWindow.starts_at || windowEarliestUnlockIso || nextWindow.unlock_at)}
+                {nextWindow.starts_at && nextWindow.ends_at
+                  ? ` · Event: ${formatIsoTimeOnly(nextWindow.starts_at)} – ${formatIsoTimeOnly(nextWindow.ends_at)}`
+                  : ''}
+                {' · '}
+                {hasDifferentDoorSchedules ? 'Overall Window: ' : ''}
+                Unlock: {formatIsoTimeOnly(windowEarliestUnlockIso || nextWindow.unlock_at)} → Lock: {formatIsoTimeOnly(windowLatestLockIso || nextWindow.lock_at)}
+              </span>
+            </div>
+
             <span
-              style={{
-                fontSize: '0.6875rem',
-                fontWeight: 700,
-                color: new Date(nextWindow.unlock_at).getTime() <= now ? 'var(--color-success, #10b981)' : 'var(--color-accent)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-              }}
+              className={`badge ${
+                nextWindow.status === 'unlocked' ? 'badge-success' :
+                nextWindow.status === 'pending' ? 'badge-info' : 'badge-neutral'
+              }`}
+              style={{ fontSize: '0.6875rem', textTransform: 'capitalize' }}
             >
-              {new Date(nextWindow.unlock_at).getTime() <= now ? '🟢 Currently Active Window' : 'Next Scheduled Door Window'}
-            </span>
-            <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-primary)', fontWeight: 600 }}>
-              {nextWindow.source_label || mapping.pco_resource_label}
-            </span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-              {formatIsoDateOnly(nextWindow.starts_at || nextWindow.unlock_at)} · Unlock: {formatIsoTimeOnly(nextWindow.unlock_at)} → Lock: {formatIsoTimeOnly(nextWindow.lock_at)}
+              {nextWindow.status}
             </span>
           </div>
 
-          <span
-            className={`badge ${
-              nextWindow.status === 'unlocked' ? 'badge-success' :
-              nextWindow.status === 'pending' ? 'badge-info' : 'badge-neutral'
-            }`}
-            style={{ fontSize: '0.6875rem', textTransform: 'capitalize' }}
-          >
-            {nextWindow.status}
-          </span>
+          {/* Per-Door Unlock & Lock Breakdown in Next Scheduled Door Window */}
+          {mappedDoors.length > 0 && (
+            <div
+              style={{
+                paddingTop: '0.5rem',
+                borderTop: '1px dashed rgba(148, 163, 184, 0.3)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.35rem',
+              }}
+            >
+              <span
+                style={{
+                  fontSize: '0.6875rem',
+                  fontWeight: 600,
+                  color: 'var(--color-text-muted)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                }}
+              >
+                Door Unlock & Lock Schedule ({mappedDoors.length} {mappedDoors.length === 1 ? 'Door' : 'Doors'})
+              </span>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(16rem, 1fr))',
+                  gap: '0.375rem',
+                }}
+              >
+                {mappedDoors.map((d) => {
+                  const dUnlockMs = d.nextUnlockIso ? new Date(d.nextUnlockIso).getTime() : NaN;
+                  const dLockMs = d.nextLockIso ? new Date(d.nextLockIso).getTime() : NaN;
+                  const isDoorWindowActive = !isNaN(dUnlockMs) && !isNaN(dLockMs) && now >= dUnlockMs && now < dLockMs;
+
+                  return (
+                    <div
+                      key={d.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem',
+                        flexWrap: 'wrap',
+                        padding: '0.35rem 0.6rem',
+                        borderRadius: 'var(--radius-sm)',
+                        background: isDoorWindowActive
+                          ? 'rgba(16, 185, 129, 0.12)'
+                          : 'var(--color-bg-surface)',
+                        border: `1px solid ${
+                          isDoorWindowActive
+                            ? 'rgba(16, 185, 129, 0.35)'
+                            : d.isDoorCustom
+                              ? 'rgba(36, 101, 245, 0.3)'
+                              : 'var(--color-border)'
+                        }`,
+                        fontSize: '0.75rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                          🚪 {d.label}
+                        </span>
+                        {d.isDoorCustom && (
+                          <span className="badge badge-info" style={{ fontSize: '0.6rem', padding: '0.05rem 0.25rem' }}>
+                            Custom
+                          </span>
+                        )}
+                        <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
+                          ({d.doorLockMode === 'after_start' ? `-${d.doorUnlockMin}m / +${d.doorLockMin}m start` : `-${d.doorUnlockMin}m / +${d.doorLockMin}m end`})
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        <span style={{ color: 'var(--color-success, #10b981)' }}>
+                          🔓 Unlock: {d.nextUnlockTime || formatIsoTimeOnly(nextWindow.unlock_at)}
+                        </span>
+                        <span style={{ color: 'var(--color-text-muted)' }}>→</span>
+                        <span style={{ color: d.doorLockMode === 'after_start' ? 'var(--color-accent)' : '#d97706' }}>
+                          🔒 Lock: {d.nextLockTime || formatIsoTimeOnly(nextWindow.lock_at)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -3367,6 +3594,13 @@ export default function MappingsPage() {
       setSavingTiming(true);
       try {
         await updateMapping(orgId, mappingId, updates);
+        const existing = mappings.find((m) => m.id === mappingId);
+        if (existing) {
+          const updatedMapping: Mapping = { ...existing, ...updates };
+          await syncMappingTimingToScheduleWindows(orgId, updatedMapping, orgSettings, scheduleWindows).catch(
+            (err) => console.warn('Failed to immediately sync schedule windows:', err),
+          );
+        }
         setMappings((prev) =>
           prev.map((m) => (m.id === mappingId ? { ...m, ...updates } : m)),
         );
@@ -3389,7 +3623,7 @@ export default function MappingsPage() {
         setSavingTiming(false);
       }
     },
-    [orgId],
+    [orgId, mappings, orgSettings, scheduleWindows],
   );
 
   // Policy Mapping Handlers

@@ -770,6 +770,118 @@ export async function assignOneTimeScheduleWindowDoors(
   }
 }
 
+/**
+ * Immediately propagate updated mapping timing rules and per-door timings
+ * to active/upcoming schedule_windows in Firestore so the UI and local agent
+ * reflect the new door schedules without waiting for a full PCO sync.
+ */
+export async function syncMappingTimingToScheduleWindows(
+  orgId: string,
+  mapping: Mapping,
+  orgSettings: OrgSettings | null,
+  scheduleWindows: ScheduleWindow[],
+): Promise<void> {
+  const nowMs = Date.now();
+  const defaultUnlockOffsetMin = mapping.unlock_offset_min ?? orgSettings?.unlock_buffer_before_min ?? 15;
+  const defaultLockMode = mapping.lock_timing_mode ?? orgSettings?.lock_timing_mode ?? 'after_end';
+  const defaultLockOffsetMin =
+    mapping.lock_offset_min ??
+    (defaultLockMode === 'after_start'
+      ? (orgSettings?.lock_after_start_min ?? 15)
+      : (orgSettings?.lock_buffer_after_min ?? 15));
+
+  const matchingWindows = scheduleWindows.filter((w) => {
+    if (w.is_one_time || w.mapping_type === 'one_time') return false;
+    if (w.source_type !== mapping.source_type) return false;
+    const winMappingId = w.mapping_id || w.service_mapping_id || w.group_mapping_id;
+    const isMatch = winMappingId
+      ? winMappingId === mapping.id
+      : mapping.source_type === 'service'
+        ? w.pco_service_type_id === mapping.pco_resource_id
+        : w.pco_group_id === mapping.pco_resource_id;
+    if (!isMatch) return false;
+
+    const lockTime = parseSafeDate(w.lock_at || w.ends_at)?.getTime() ?? 0;
+    return lockTime >= nowMs;
+  });
+
+  if (matchingWindows.length === 0) return;
+
+  const batch = writeBatch(db);
+  for (const win of matchingWindows) {
+    const startsAt = parseSafeDate(win.starts_at);
+    if (!startsAt) continue;
+    const endsAt = parseSafeDate(win.ends_at) || new Date(startsAt.getTime() + 60 * 60 * 1000);
+
+    const doorIds = mapping.door_ids?.length ? mapping.door_ids : win.door_ids;
+    const computedDoorTimings: Record<
+      string,
+      {
+        unlock_at: Timestamp;
+        lock_at: Timestamp;
+        unlock_offset_min: number;
+        lock_offset_min: number;
+        lock_timing_mode: 'after_end' | 'after_start';
+      }
+    > = {};
+
+    let earliestUnlockMs = Infinity;
+    let latestLockMs = -Infinity;
+
+    for (const doorId of doorIds) {
+      const override = mapping.door_timings?.[doorId];
+      const dUnlockOffset = override?.unlock_offset_min ?? defaultUnlockOffsetMin;
+      const dLockMode = override?.lock_timing_mode ?? defaultLockMode;
+      const dLockOffset =
+        override?.lock_offset_min ??
+        (dLockMode === defaultLockMode
+          ? defaultLockOffsetMin
+          : dLockMode === 'after_start'
+            ? (orgSettings?.lock_after_start_min ?? 15)
+            : (orgSettings?.lock_buffer_after_min ?? 15));
+
+      const dUnlockAt = new Date(startsAt.getTime() - dUnlockOffset * 60 * 1000);
+      const dLockAt =
+        dLockMode === 'after_start'
+          ? new Date(startsAt.getTime() + dLockOffset * 60 * 1000)
+          : new Date(endsAt.getTime() + dLockOffset * 60 * 1000);
+
+      earliestUnlockMs = Math.min(earliestUnlockMs, dUnlockAt.getTime());
+      latestLockMs = Math.max(latestLockMs, dLockAt.getTime());
+
+      computedDoorTimings[doorId] = {
+        unlock_at: Timestamp.fromDate(dUnlockAt),
+        lock_at: Timestamp.fromDate(dLockAt),
+        unlock_offset_min: dUnlockOffset,
+        lock_offset_min: dLockOffset,
+        lock_timing_mode: dLockMode,
+      };
+    }
+
+    const baseUnlockAt = new Date(startsAt.getTime() - defaultUnlockOffsetMin * 60 * 1000);
+    const baseLockAt =
+      defaultLockMode === 'after_start'
+        ? new Date(startsAt.getTime() + defaultLockOffsetMin * 60 * 1000)
+        : new Date(endsAt.getTime() + defaultLockOffsetMin * 60 * 1000);
+
+    const finalUnlockAt = isFinite(earliestUnlockMs) ? new Date(earliestUnlockMs) : baseUnlockAt;
+    const finalLockAt = isFinite(latestLockMs) ? new Date(latestLockMs) : baseLockAt;
+
+    const windowRef = doc(db, 'organizations', orgId, 'schedule_windows', win.id);
+    batch.update(windowRef, {
+      unlock_at: Timestamp.fromDate(finalUnlockAt),
+      lock_at: Timestamp.fromDate(finalLockAt),
+      lock_timing_mode: defaultLockMode,
+      unlock_offset_min: defaultUnlockOffsetMin,
+      lock_offset_min: defaultLockOffsetMin,
+      door_timings: Object.keys(computedDoorTimings).length > 0 ? computedDoorTimings : deleteField(),
+      updated_at: serverTimestamp(),
+    });
+  }
+
+  await batch.commit();
+}
+
 export async function unassignOneTimeScheduleWindowDoors(
   orgId: string,
   windowId: string
