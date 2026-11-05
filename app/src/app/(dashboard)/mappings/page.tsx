@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
@@ -26,12 +26,8 @@ import type {
   Mapping,
   Door,
   MappingSourceType,
-  PlanTimeType,
-  LockTimingMode,
-  DoorTimingConfig,
   PcoServiceType,
   PcoGroup,
-  PcoTimeInfo,
   ScheduleWindow,
   OrgSettings,
   AccessPolicyMapping,
@@ -40,24 +36,19 @@ import type {
   UnifiSchedule,
   PcoList,
 } from '@/lib/types';
-import { isDoorHidden } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import AccessPolicyModal from '@/components/policies/AccessPolicyModal';
 import { UnmappedEventsTab } from '@/components/events/UnmappedEventsTab';
-import { safeFormat, safeFormatDistanceToNow, parseSafeDate } from '@/lib/date-utils';
-
-// ─── Icons ────────────────────────────────────────────────────────────────────
-
-function TrashIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-      <path d="M10 11v6M14 11v6" />
-      <path d="M9 6V4h6v2" />
-    </svg>
-  );
-}
+import { ActiveMappingCard } from '@/components/mappings/ActiveMappingCard';
+import { MappingModal, type MappingModalSavePayload } from '@/components/mappings/MappingModal';
+import {
+  PeopleListSyncTab,
+  AddPolicyMappingModal,
+} from '@/components/mappings/PeopleListSyncTab';
+import {
+  formatIsoTimeRange,
+  timeTypeBadgeStyle,
+} from '@/components/mappings/ProjectedUnlockTimesPreview';
 
 function PlusIcon() {
   return (
@@ -77,36 +68,6 @@ function ClockIcon() {
   );
 }
 
-function CalendarIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-      <line x1="16" y1="2" x2="16" y2="6" />
-      <line x1="8" y1="2" x2="8" y2="6" />
-      <line x1="3" y1="10" x2="21" y2="10" />
-    </svg>
-  );
-}
-
-function DoorIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 21v-16a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16" />
-      <line x1="2" y1="21" x2="22" y2="21" />
-      <circle cx="15.5" cy="11.5" r="1" />
-    </svg>
-  );
-}
-
-function TagIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-      <line x1="7" y1="7" x2="7.01" y2="7" />
-    </svg>
-  );
-}
-
 function RefreshIcon({ spinning = false }: { spinning?: boolean } = {}) {
   return (
     <svg
@@ -118,9 +79,7 @@ function RefreshIcon({ spinning = false }: { spinning?: boolean } = {}) {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      style={{
-        animation: spinning ? 'spin 1s linear infinite' : 'none',
-      }}
+      style={{ animation: spinning ? 'spin 1s linear infinite' : 'none' }}
     >
       <polyline points="23 4 23 10 17 10" />
       <polyline points="1 20 1 14 7 14" />
@@ -129,3188 +88,19 @@ function RefreshIcon({ spinning = false }: { spinning?: boolean } = {}) {
   );
 }
 
-// ─── Formatters ───────────────────────────────────────────────────────────────
-
-function formatIsoTimeRange(startsAtStr: string, endsAtStr?: string): string {
-  const startDate = parseSafeDate(startsAtStr);
-  if (!startDate) return '—';
-
-  const startFormatted = safeFormat(startDate, 'h:mm a');
-  const dateFormatted = safeFormat(startDate, 'EEE, MMM d');
-
-  if (!endsAtStr) {
-    return `${dateFormatted} · ${startFormatted}`;
-  }
-
-  const endDate = parseSafeDate(endsAtStr);
-  if (!endDate) {
-    return `${dateFormatted} · ${startFormatted}`;
-  }
-
-  const endFormatted = safeFormat(endDate, 'h:mm a');
-  return `${dateFormatted} · ${startFormatted} – ${endFormatted}`;
-}
-
-function formatIsoTimeOnly(isoStr: string): string {
-  const d = parseSafeDate(isoStr);
-  return d ? safeFormat(d, 'h:mm a') : '';
-}
-
-function formatIsoDateOnly(isoStr: string): string {
-  const d = parseSafeDate(isoStr);
-  return d ? safeFormat(d, 'EEE, MMM d, yyyy') : '';
-}
-
-function normalizePlanTimeType(rawType: unknown, name?: string): 'service' | 'rehearsal' | 'other' {
-  if (rawType !== undefined && rawType !== null) {
-    const s = String(rawType).toLowerCase().trim();
-    if (s === '0' || s === 'service' || s === 'service_time' || s.includes('service')) return 'service';
-    if (
-      s === '1' ||
-      s === 'rehearsal' ||
-      s === 'rehearsal_time' ||
-      s.includes('rehearsal') ||
-      s.includes('practice') ||
-      s.includes('sound check') ||
-      s.includes('soundcheck') ||
-      s.includes('warmup') ||
-      s.includes('warm-up')
-    ) {
-      return 'rehearsal';
-    }
-    if (s === '2' || s === 'other' || s === 'other_time' || s.includes('other')) return 'other';
-  }
-  if (name) {
-    const s = name.toLowerCase().trim();
-    if (
-      s.includes('rehearsal') ||
-      s.includes('practice') ||
-      s.includes('sound check') ||
-      s.includes('soundcheck') ||
-      s.includes('warmup') ||
-      s.includes('warm-up')
-    ) {
-      return 'rehearsal';
-    }
-    if (s.includes('service') || s.includes('worship')) return 'service';
-  }
-  return 'service';
-}
-
-function timeTypeBadgeStyle(timeType?: string): { bg: string; color: string; border: string } {
-  const t = (timeType || '').toLowerCase();
-  if (t === 'service') {
-    return {
-      bg: 'rgba(36, 101, 245, 0.12)',
-      color: 'var(--color-accent, #2465f5)',
-      border: 'rgba(36, 101, 245, 0.25)',
-    };
-  }
-  if (t === 'rehearsal') {
-    return {
-      bg: 'rgba(234, 179, 8, 0.12)',
-      color: '#ca8a04',
-      border: 'rgba(234, 179, 8, 0.25)',
-    };
-  }
-  if (t === 'event') {
-    return {
-      bg: 'rgba(168, 85, 247, 0.12)',
-      color: '#9333ea',
-      border: 'rgba(168, 85, 247, 0.25)',
-    };
-  }
-  return {
-    bg: 'var(--color-bg-elevated)',
-    color: 'var(--color-text-secondary)',
-    border: 'var(--color-border)',
-  };
-}
-
-// ─── Toggle ───────────────────────────────────────────────────────────────────
-
-function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
-  return (
-    <label className="toggle" style={{ cursor: disabled ? 'not-allowed' : 'pointer', margin: 0 }}>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => !disabled && onChange(e.target.checked)}
-        disabled={disabled}
-      />
-      <div className="toggle-track">
-        <div className="toggle-thumb" />
-      </div>
-    </label>
-  );
-}
-
-// ─── Active Mapping Card ──────────────────────────────────────────────────────
-
-interface ActiveMappingCardProps {
-  mapping: Mapping;
-  pcoResource?: PcoServiceType | PcoGroup;
-  doors: Door[];
-  scheduleWindows: ScheduleWindow[];
-  orgSettings: OrgSettings | null;
-  onToggle: (id: string, enabled: boolean) => Promise<void>;
-  onDelete: (id: string, label: string) => void;
-  onEditTiming?: (mapping: Mapping) => void;
-  toggling: boolean;
-}
-
-function ActiveMappingCard({
-  mapping,
-  pcoResource,
-  doors,
-  scheduleWindows,
-  orgSettings,
-  onToggle,
-  onDelete,
-  onEditTiming,
-  toggling,
-}: ActiveMappingCardProps) {
-  const effectiveLockMode = mapping.lock_timing_mode ?? orgSettings?.lock_timing_mode ?? 'after_end';
-  const effectiveUnlockMin = mapping.unlock_offset_min ?? orgSettings?.unlock_buffer_before_min ?? 15;
-  const effectiveLockMin = mapping.lock_offset_min ?? (effectiveLockMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
-  const isCustomTiming = mapping.lock_timing_mode !== undefined || mapping.lock_offset_min !== undefined || mapping.unlock_offset_min !== undefined;
-
-  // Find upcoming schedule windows linked to this mapping / service / group
-  const now = Date.now();
-  const matchingWindows = scheduleWindows
-    .filter((w) => {
-      if (w.source_type !== mapping.source_type) return false;
-      if (!Array.isArray(w.door_ids) || w.door_ids.length === 0) return false;
-
-      const winMappingId = w.mapping_id || w.service_mapping_id || w.group_mapping_id;
-      let isMatch = false;
-      if (winMappingId) {
-        isMatch = winMappingId === mapping.id;
-      } else if (mapping.source_type === 'service') {
-        isMatch = w.pco_service_type_id === mapping.pco_resource_id;
-      } else {
-        isMatch = w.pco_group_id === mapping.pco_resource_id;
-      }
-      if (!isMatch) return false;
-
-      if (
-        mapping.source_type === 'service' &&
-        mapping.time_types &&
-        mapping.time_types.length > 0 &&
-        w.time_type
-      ) {
-        const enabledTypes = mapping.time_types.map((t) => normalizePlanTimeType(t));
-        const winType = normalizePlanTimeType(w.time_type, w.time_type_name || undefined);
-        if (!enabledTypes.includes(winType)) return false;
-      }
-
-      // Exclude windows that have already concluded in the past
-      const lockTime = new Date(w.lock_at || w.ends_at).getTime();
-      return !isNaN(lockTime) && lockTime >= now;
-    })
-    .sort((a, b) => new Date(a.unlock_at).getTime() - new Date(b.unlock_at).getTime());
-
-  const nextWindow = matchingWindows[0];
-
-  const frequency = (pcoResource as PcoServiceType)?.frequency;
-  const schedule = (pcoResource as PcoGroup)?.schedule;
-  const upcomingPlanTitle = (pcoResource as PcoServiceType)?.upcoming_plan_title;
-  const upcomingTimes = pcoResource?.upcoming_times ?? [];
-
-  // Fallback next active PCO time if scheduleWindow hasn't synced yet
-  const nextActivePcoTime = upcomingTimes
-    .filter((t) => {
-      if (mapping.source_type === 'service' && mapping.time_types && mapping.time_types.length > 0) {
-        const enabledTypes = mapping.time_types.map((tt) => normalizePlanTimeType(tt));
-        const normType = normalizePlanTimeType(t.time_type, t.name);
-        if (!enabledTypes.includes(normType)) return false;
-      }
-      const endMs = parseSafeDate(t.ends_at || t.starts_at)?.getTime() ?? 0;
-      return endMs + 2 * 60 * 60 * 1000 >= now;
-    })
-    .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime())[0];
-
-  const refStartDate = parseSafeDate(nextWindow?.starts_at || nextActivePcoTime?.starts_at);
-  const refEndDate =
-    parseSafeDate(nextWindow?.ends_at || nextActivePcoTime?.ends_at) ||
-    (refStartDate ? new Date(refStartDate.getTime() + 60 * 60 * 1000) : null);
-
-  // Find doors matching this mapping with their specific timing rules & computed next unlock/lock times
-  const mappedDoors = mapping.door_ids.map((dId, idx) => {
-    const found = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
-    const cleanLabel = (found?.label || mapping.door_labels?.[idx] || '').trim();
-    const timingOverride = mapping.door_timings?.[dId];
-    const isDoorCustom = Boolean(
-      timingOverride && (
-        timingOverride.lock_timing_mode !== undefined ||
-        timingOverride.lock_offset_min !== undefined ||
-        timingOverride.unlock_offset_min !== undefined
-      )
-    );
-    const doorLockMode = timingOverride?.lock_timing_mode ?? effectiveLockMode;
-    const doorUnlockMin = timingOverride?.unlock_offset_min ?? effectiveUnlockMin;
-    const doorLockMin =
-      timingOverride?.lock_offset_min ??
-      (doorLockMode === effectiveLockMode
-        ? effectiveLockMin
-        : doorLockMode === 'after_start'
-          ? (orgSettings?.lock_after_start_min ?? 15)
-          : (orgSettings?.lock_buffer_after_min ?? 15));
-
-    let nextUnlockIso = nextWindow?.door_timings?.[dId]?.unlock_at || '';
-    let nextLockIso = nextWindow?.door_timings?.[dId]?.lock_at || '';
-
-    if (refStartDate && refEndDate) {
-      const calcUnlock = new Date(refStartDate.getTime() - doorUnlockMin * 60 * 1000);
-      const calcLock =
-        doorLockMode === 'after_start'
-          ? new Date(refStartDate.getTime() + doorLockMin * 60 * 1000)
-          : new Date(refEndDate.getTime() + doorLockMin * 60 * 1000);
-      nextUnlockIso = calcUnlock.toISOString();
-      nextLockIso = calcLock.toISOString();
-    } else if (nextWindow && (!nextUnlockIso || !nextLockIso)) {
-      nextUnlockIso = nextWindow.unlock_at;
-      nextLockIso = nextWindow.lock_at;
-    }
-
-    return {
-      id: dId,
-      label: cleanLabel || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId),
-      state: found?.current_state ?? 'unknown',
-      isHeld: found?.is_held_unlocked ?? false,
-      position: found?.door_position_status,
-      campusName: found?.campus_name,
-      locationName: found?.location_name,
-      isHidden: isDoorHidden(found),
-      isDoorCustom,
-      doorLockMode,
-      doorUnlockMin,
-      doorLockMin,
-      nextUnlockIso,
-      nextLockIso,
-      nextUnlockTime: nextUnlockIso ? formatIsoTimeOnly(nextUnlockIso) : '',
-      nextLockTime: nextLockIso ? formatIsoTimeOnly(nextLockIso) : '',
-    };
-  });
-
-  const hasPerDoorCustomTiming = mappedDoors.some((d) => d.isDoorCustom);
-  const customDoorsCount = mappedDoors.filter((d) => d.isDoorCustom).length;
-  const hasDifferentDoorSchedules =
-    hasPerDoorCustomTiming ||
-    (mappedDoors.length > 1 &&
-      mappedDoors.some(
-        (d) =>
-          d.doorLockMode !== mappedDoors[0].doorLockMode ||
-          d.doorUnlockMin !== mappedDoors[0].doorUnlockMin ||
-          d.doorLockMin !== mappedDoors[0].doorLockMin,
-      ));
-
-  // Overall window earliest unlock & latest lock across all mapped doors
-  const windowEarliestUnlockIso = (() => {
-    const validMs = mappedDoors
-      .map((d) => (d.nextUnlockIso ? new Date(d.nextUnlockIso).getTime() : NaN))
-      .filter((ms) => !isNaN(ms));
-    if (validMs.length > 0) return new Date(Math.min(...validMs)).toISOString();
-    return nextWindow?.unlock_at || '';
-  })();
-
-  const windowLatestLockIso = (() => {
-    const validMs = mappedDoors
-      .map((d) => (d.nextLockIso ? new Date(d.nextLockIso).getTime() : NaN))
-      .filter((ms) => !isNaN(ms));
-    if (validMs.length > 0) return new Date(Math.max(...validMs)).toISOString();
-    return nextWindow?.lock_at || '';
-  })();
-
-  return (
-    <div
-      className="card"
-      style={{
-        padding: '1.25rem',
-        marginBottom: '1rem',
-        border: '1px solid var(--color-border)',
-        borderRadius: 'var(--radius-lg)',
-        background: 'var(--color-bg-surface)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '1rem',
-        boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.05))',
-      }}
-    >
-      {/* 1. Header: Name, Types, Toggle & Delete */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '12rem', flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--color-text-primary)' }}>
-              {mapping.pco_resource_label}
-            </span>
-            <span
-              className={`badge ${mapping.source_type === 'service' ? 'badge-info' : 'badge-neutral'}`}
-              style={{ fontSize: '0.6875rem', textTransform: 'capitalize' }}
-            >
-              {mapping.source_type}
-            </span>
-            <span
-              className={`badge ${mapping.enabled ? 'badge-success' : 'badge-neutral'}`}
-              style={{ fontSize: '0.6875rem' }}
-            >
-              {mapping.enabled ? 'Active' : 'Disabled'}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--color-text-muted)', flexWrap: 'wrap', marginTop: '0.125rem' }}>
-            <span>Resource ID: <code style={{ fontSize: '0.75rem' }}>{mapping.pco_resource_id}</code></span>
-            <span>•</span>
-            <span>Mapping ID: <code style={{ fontSize: '0.75rem' }}>{mapping.id.slice(0, 8)}…</code></span>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', fontWeight: 500 }}>
-              {mapping.enabled ? 'Enabled' : 'Disabled'}
-            </span>
-            <Toggle
-              checked={mapping.enabled}
-              onChange={(v) => onToggle(mapping.id, v)}
-              disabled={toggling}
-            />
-          </div>
-
-          <button
-            className="btn btn-ghost btn-sm"
-            style={{ color: 'var(--color-danger, #ef4444)', padding: '0.4rem', borderRadius: 'var(--radius-md)' }}
-            onClick={() => onDelete(mapping.id, mapping.pco_resource_label)}
-            title="Delete mapping"
-          >
-            <TrashIcon />
-          </button>
-        </div>
-      </div>
-
-      {/* 2. Timing & Schedule Details */}
-      <div
-        style={{
-          background: 'var(--color-bg-elevated)',
-          border: '1px solid var(--color-border)',
-          borderRadius: 'var(--radius-md)',
-          padding: '0.875rem 1rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.625rem',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
-            <CalendarIcon />
-            <span>Planning Center Schedule & Times</span>
-          </div>
-
-          {(frequency || schedule) && (
-            <span className="badge badge-neutral" style={{ fontSize: '0.75rem', fontWeight: 500 }}>
-              {frequency ? `Frequency: ${frequency}` : `Schedule: ${schedule}`}
-            </span>
-          )}
-        </div>
-
-        {upcomingPlanTitle && (
-          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontWeight: 600 }}>Next Plan:</span>
-            <span>{upcomingPlanTitle}</span>
-          </div>
-        )}
-
-        {upcomingTimes.length > 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Upcoming Pulled Times ({upcomingTimes.length})
-            </span>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
-              {upcomingTimes
-                .slice()
-                .sort((a, b) => {
-                  const aNorm = normalizePlanTimeType(a.time_type, a.name);
-                  const bNorm = normalizePlanTimeType(b.time_type, b.name);
-                  const aEnabled = !mapping.time_types || mapping.time_types.length === 0 ||
-                    mapping.time_types.map((tt) => normalizePlanTimeType(tt)).includes(aNorm);
-                  const bEnabled = !mapping.time_types || mapping.time_types.length === 0 ||
-                    mapping.time_types.map((tt) => normalizePlanTimeType(tt)).includes(bNorm);
-                  if (aEnabled && !bEnabled) return -1;
-                  if (!aEnabled && bEnabled) return 1;
-                  return new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime();
-                })
-                .map((t) => {
-                  const normType = normalizePlanTimeType(t.time_type, t.name);
-                  const isEnabled = !mapping.time_types || mapping.time_types.length === 0 ||
-                    mapping.time_types.map((tt) => normalizePlanTimeType(tt)).includes(normType);
-                  const style = isEnabled ? timeTypeBadgeStyle(normType) : { bg: 'var(--color-bg-surface)', color: 'var(--color-text-muted)', border: 'var(--color-border)' };
-                  const timeLabel = formatIsoTimeRange(t.starts_at, t.ends_at);
-
-                  return (
-                    <span
-                      key={t.id}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.375rem',
-                        padding: '0.25rem 0.5rem',
-                        borderRadius: 'var(--radius-sm)',
-                        background: style.bg,
-                        color: style.color,
-                        border: `1px ${isEnabled ? 'solid' : 'dashed'} ${style.border}`,
-                        fontSize: '0.75rem',
-                        fontWeight: isEnabled ? 600 : 400,
-                        opacity: isEnabled ? 1 : 0.65,
-                      }}
-                      title={isEnabled ? 'Active trigger time for this mapping' : `Excluded from unlocking (mapping only triggers on: ${(mapping.time_types || []).join(', ')})`}
-                    >
-                      <ClockIcon />
-                      <span>{timeLabel}</span>
-                      <span style={{ opacity: 0.85, textTransform: 'capitalize', fontSize: '0.6875rem' }}>
-                        ({t.name ? `${t.name} · ` : ''}{normType}{!isEnabled ? ' — Excluded' : ' — Active'})
-                      </span>
-                    </span>
-                  );
-                })}
-            </div>
-          </div>
-        ) : (
-          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
-            No upcoming plan or event times currently published in Planning Center.
-          </div>
-        )}
-      </div>
-
-      {/* 3. Mapped UniFi Doors & Live Status */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
-            <DoorIcon />
-            <span>Mapped UniFi Doors ({mappedDoors.length})</span>
-          </div>
-        </div>
-
-        {mappedDoors.length === 0 ? (
-          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
-            No doors assigned to this mapping.
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-            {mappedDoors.map((door) => {
-              const isUnlocked = door.state === 'unlocked' || door.isHeld;
-              const isLocked = door.state === 'locked';
-
-              return (
-                <div
-                  key={door.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    padding: '0.45rem 0.75rem',
-                    background: 'var(--color-bg-elevated)',
-                    border: `1px solid ${door.isDoorCustom ? 'rgba(36, 101, 245, 0.35)' : 'var(--color-border)'}`,
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: '0.8125rem',
-                  }}
-                >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                        {door.label}
-                      </span>
-                      {door.isDoorCustom ? (
-                        <span className="badge badge-info" style={{ fontSize: '0.625rem', padding: '0.05rem 0.3rem' }}>
-                          Custom Schedule
-                        </span>
-                      ) : hasDifferentDoorSchedules ? (
-                        <span className="badge badge-neutral" style={{ fontSize: '0.625rem', padding: '0.05rem 0.3rem' }}>
-                          Default Schedule
-                        </span>
-                      ) : null}
-                      {door.isHidden && (
-                        <span
-                          className="badge"
-                          style={{
-                            fontSize: '0.625rem',
-                            padding: '0.05rem 0.3rem',
-                            background: 'rgba(239, 68, 68, 0.15)',
-                            color: 'var(--color-danger)',
-                            border: '1px solid rgba(239, 68, 68, 0.3)',
-                            fontWeight: 600,
-                          }}
-                        >
-                          Hidden
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
-                      {door.campusName && (
-                        <span
-                          style={{
-                            fontSize: '0.625rem',
-                            padding: '0.05rem 0.3rem',
-                            borderRadius: '4px',
-                            background: 'rgba(36, 101, 245, 0.1)',
-                            color: 'var(--color-accent, #2465f5)',
-                            border: '1px solid rgba(36, 101, 245, 0.2)',
-                            fontWeight: 500,
-                          }}
-                        >
-                          🏫 {door.campusName}
-                        </span>
-                      )}
-                      {door.locationName && (
-                        <span
-                          style={{
-                            fontSize: '0.625rem',
-                            padding: '0.05rem 0.3rem',
-                            borderRadius: '4px',
-                            background: 'rgba(168, 85, 247, 0.1)',
-                            color: '#9333ea',
-                            border: '1px solid rgba(168, 85, 247, 0.2)',
-                            fontWeight: 500,
-                          }}
-                        >
-                          📍 {door.locationName}
-                        </span>
-                      )}
-                      <span
-                        style={{
-                          fontSize: '0.6875rem',
-                          color: door.isDoorCustom ? 'var(--color-accent)' : 'var(--color-text-muted)',
-                          fontWeight: door.isDoorCustom ? 600 : 400,
-                        }}
-                      >
-                        🔓 Unlocks -{door.doorUnlockMin}m before →{' '}
-                        {door.doorLockMode === 'after_start'
-                          ? door.doorLockMin === 0
-                            ? '🔒 Locks at start'
-                            : `🛡️ Locks +${door.doorLockMin}m after start`
-                          : door.doorLockMin === 0
-                            ? '🚪 Locks at end'
-                            : `🕒 Locks +${door.doorLockMin}m after end`}
-                      </span>
-                    </div>
-                    {door.nextUnlockTime && door.nextLockTime && (
-                      <div
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.35rem',
-                          fontSize: '0.725rem',
-                          padding: '0.15rem 0.45rem',
-                          borderRadius: '4px',
-                          background: door.isDoorCustom ? 'rgba(36, 101, 245, 0.08)' : 'var(--color-bg-surface)',
-                          border: `1px solid ${door.isDoorCustom ? 'rgba(36, 101, 245, 0.25)' : 'var(--color-border)'}`,
-                          width: 'fit-content',
-                          marginTop: '0.05rem',
-                        }}
-                      >
-                        <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>
-                          Unlock: {door.nextUnlockTime}
-                        </span>
-                        <span style={{ color: 'var(--color-text-muted)' }}>→</span>
-                        <span
-                          style={{
-                            color: door.doorLockMode === 'after_start' ? 'var(--color-accent)' : '#d97706',
-                            fontWeight: 600,
-                          }}
-                        >
-                          Lock: {door.nextLockTime}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  {onEditTiming && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      style={{ padding: '0.15rem 0.35rem', height: 'auto', fontSize: '0.6875rem', opacity: 0.7 }}
-                      onClick={() => onEditTiming(mapping)}
-                      title={`Configure timing override for ${door.label}`}
-                    >
-                      ⚙️
-                    </button>
-                  )}
-                  <span
-                    className={`badge ${
-                      isUnlocked ? 'badge-success' : isLocked ? 'badge-danger' : 'badge-neutral'
-                    }`}
-                    style={{ fontSize: '0.6875rem', marginLeft: onEditTiming ? '0.25rem' : 'auto' }}
-                  >
-                    {door.isHeld ? 'Held Open' : door.state}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* 4. Trigger Configuration & Buffer Settings */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(14rem, 1fr))', gap: '0.75rem' }}>
-        {/* Time types trigger */}
-        <div
-          style={{
-            padding: '0.625rem 0.75rem',
-            background: 'var(--color-bg-elevated)',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--color-border)',
-          }}
-        >
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600, marginBottom: '0.25rem' }}>
-            Trigger Time Types
-          </div>
-          {mapping.source_type === 'service' ? (
-            <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-              {mapping.time_types && mapping.time_types.length > 0 ? (
-                mapping.time_types.map((tt) => (
-                  <span key={tt} className="badge badge-info" style={{ fontSize: '0.6875rem', textTransform: 'capitalize' }}>
-                    {tt}
-                  </span>
-                ))
-              ) : (
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>None selected</span>
-              )}
-            </div>
-          ) : (
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-primary)', fontWeight: 500 }}>
-              All Group Events
-            </span>
-          )}
-        </div>
-
-        {/* Buffers & Lock Rule applied */}
-        <div
-          style={{
-            padding: '0.625rem 0.75rem',
-            background: 'var(--color-bg-elevated)',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--color-border)',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            gap: '0.25rem',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
-                Door Locking Rule
-              </span>
-              {isCustomTiming && <span className="badge badge-info" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>Custom Default</span>}
-              {hasPerDoorCustomTiming && (
-                <span className="badge badge-primary" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem', background: 'rgba(168, 85, 247, 0.12)', color: '#9333ea', border: '1px solid rgba(168, 85, 247, 0.25)' }}>
-                  {customDoorsCount} Door Override{customDoorsCount !== 1 ? 's' : ''}
-                </span>
-              )}
-            </div>
-            {onEditTiming && (
-              <button
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', height: 'auto' }}
-                onClick={() => onEditTiming(mapping)}
-                title="Edit lock timing rule and per-door schedules for this mapping"
-              >
-                ⚙️ Edit Rules
-              </button>
-            )}
-          </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-primary)', lineHeight: 1.4 }}>
-            <div>
-              <span style={{ fontWeight: 600, color: 'var(--color-text-muted)' }}>Default: </span>
-              {effectiveLockMode === 'after_start' ? (
-                <>
-                  <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>🛡️ Security Mode:</span> Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before · Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after start
-                </>
-              ) : (
-                <>
-                  <span style={{ fontWeight: 600 }}>🕒 Standard Mode:</span> Unlocks <strong style={{ color: 'var(--color-accent)' }}>-{effectiveUnlockMin}m</strong> before · Locks <strong style={{ color: 'var(--color-accent)' }}>+{effectiveLockMin}m</strong> after end
-                </>
-              )}
-            </div>
-            {(hasPerDoorCustomTiming || hasDifferentDoorSchedules) && mappedDoors.length > 0 && (
-              <div style={{ marginTop: '0.45rem', paddingTop: '0.45rem', borderTop: '1px dashed var(--color-border)', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                <span style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                  Per-Door Unlock & Lock Schedule:
-                </span>
-                {mappedDoors.map((d) => (
-                  <div
-                    key={d.id}
-                    style={{
-                      fontSize: '0.75rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '0.5rem',
-                      flexWrap: 'wrap',
-                      padding: '0.2rem 0.4rem',
-                      borderRadius: '4px',
-                      background: d.isDoorCustom ? 'rgba(36, 101, 245, 0.06)' : 'transparent',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>• {d.label}:</span>
-                      {d.doorLockMode === 'after_start' ? (
-                        <span style={{ color: 'var(--color-success, #10b981)', fontSize: '0.725rem' }}>
-                          🛡️ Unlocks -{d.doorUnlockMin}m before → Locks +{d.doorLockMin}m after start
-                        </span>
-                      ) : (
-                        <span style={{ color: 'var(--color-text-secondary)', fontSize: '0.725rem' }}>
-                          🕒 Unlocks -{d.doorUnlockMin}m before → Locks +{d.doorLockMin}m after end
-                        </span>
-                      )}
-                    </div>
-                    {d.nextUnlockTime && d.nextLockTime && (
-                      <span style={{ fontSize: '0.725rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                        <span style={{ color: 'var(--color-success, #10b981)' }}>Unlock: {d.nextUnlockTime}</span>
-                        {' → '}
-                        <span style={{ color: d.doorLockMode === 'after_start' ? 'var(--color-accent)' : '#d97706' }}>
-                          Lock: {d.nextLockTime}
-                        </span>
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* 5. Live Next Scheduled Window */}
-      {nextWindow && (
-        <div
-          style={{
-            padding: '0.75rem 0.875rem',
-            borderRadius: 'var(--radius-md)',
-            background: new Date(windowEarliestUnlockIso || nextWindow.unlock_at).getTime() <= now ? 'rgba(16, 185, 129, 0.08)' : 'rgba(36, 101, 245, 0.05)',
-            border: `1px solid ${new Date(windowEarliestUnlockIso || nextWindow.unlock_at).getTime() <= now ? 'rgba(16, 185, 129, 0.3)' : 'rgba(36, 101, 245, 0.2)'}`,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.5rem',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-              <span
-                style={{
-                  fontSize: '0.6875rem',
-                  fontWeight: 700,
-                  color: new Date(windowEarliestUnlockIso || nextWindow.unlock_at).getTime() <= now ? 'var(--color-success, #10b981)' : 'var(--color-accent)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                }}
-              >
-                {new Date(windowEarliestUnlockIso || nextWindow.unlock_at).getTime() <= now ? '🟢 Currently Active Window' : 'Next Scheduled Door Window'}
-              </span>
-              <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-primary)', fontWeight: 600 }}>
-                {nextWindow.source_label || mapping.pco_resource_label}
-              </span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                {formatIsoDateOnly(nextWindow.starts_at || windowEarliestUnlockIso || nextWindow.unlock_at)}
-                {nextWindow.starts_at && nextWindow.ends_at
-                  ? ` · Event: ${formatIsoTimeOnly(nextWindow.starts_at)} – ${formatIsoTimeOnly(nextWindow.ends_at)}`
-                  : ''}
-                {' · '}
-                {hasDifferentDoorSchedules ? 'Overall Window: ' : ''}
-                Unlock: {formatIsoTimeOnly(windowEarliestUnlockIso || nextWindow.unlock_at)} → Lock: {formatIsoTimeOnly(windowLatestLockIso || nextWindow.lock_at)}
-              </span>
-            </div>
-
-            <span
-              className={`badge ${
-                nextWindow.status === 'unlocked' ? 'badge-success' :
-                nextWindow.status === 'pending' ? 'badge-info' : 'badge-neutral'
-              }`}
-              style={{ fontSize: '0.6875rem', textTransform: 'capitalize' }}
-            >
-              {nextWindow.status}
-            </span>
-          </div>
-
-          {/* Per-Door Unlock & Lock Breakdown in Next Scheduled Door Window */}
-          {mappedDoors.length > 0 && (
-            <div
-              style={{
-                paddingTop: '0.5rem',
-                borderTop: '1px dashed rgba(148, 163, 184, 0.3)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.35rem',
-              }}
-            >
-              <span
-                style={{
-                  fontSize: '0.6875rem',
-                  fontWeight: 600,
-                  color: 'var(--color-text-muted)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.04em',
-                }}
-              >
-                Door Unlock & Lock Schedule ({mappedDoors.length} {mappedDoors.length === 1 ? 'Door' : 'Doors'})
-              </span>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(16rem, 1fr))',
-                  gap: '0.375rem',
-                }}
-              >
-                {mappedDoors.map((d) => {
-                  const dUnlockMs = d.nextUnlockIso ? new Date(d.nextUnlockIso).getTime() : NaN;
-                  const dLockMs = d.nextLockIso ? new Date(d.nextLockIso).getTime() : NaN;
-                  const isDoorWindowActive = !isNaN(dUnlockMs) && !isNaN(dLockMs) && now >= dUnlockMs && now < dLockMs;
-
-                  return (
-                    <div
-                      key={d.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '0.5rem',
-                        flexWrap: 'wrap',
-                        padding: '0.35rem 0.6rem',
-                        borderRadius: 'var(--radius-sm)',
-                        background: isDoorWindowActive
-                          ? 'rgba(16, 185, 129, 0.12)'
-                          : 'var(--color-bg-surface)',
-                        border: `1px solid ${
-                          isDoorWindowActive
-                            ? 'rgba(16, 185, 129, 0.35)'
-                            : d.isDoorCustom
-                              ? 'rgba(36, 101, 245, 0.3)'
-                              : 'var(--color-border)'
-                        }`,
-                        fontSize: '0.75rem',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                          🚪 {d.label}
-                        </span>
-                        {d.isDoorCustom && (
-                          <span className="badge badge-info" style={{ fontSize: '0.6rem', padding: '0.05rem 0.25rem' }}>
-                            Custom
-                          </span>
-                        )}
-                        <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                          ({d.doorLockMode === 'after_start' ? `-${d.doorUnlockMin}m / +${d.doorLockMin}m start` : `-${d.doorUnlockMin}m / +${d.doorLockMin}m end`})
-                        </span>
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                        <span style={{ color: 'var(--color-success, #10b981)' }}>
-                          🔓 Unlock: {d.nextUnlockTime || formatIsoTimeOnly(nextWindow.unlock_at)}
-                        </span>
-                        <span style={{ color: 'var(--color-text-muted)' }}>→</span>
-                        <span style={{ color: d.doorLockMode === 'after_start' ? 'var(--color-accent)' : '#d97706' }}>
-                          🔒 Lock: {d.nextLockTime || formatIsoTimeOnly(nextWindow.lock_at)}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 6. Footer: Timestamps */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          fontSize: '0.6875rem',
-          color: 'var(--color-text-muted)',
-          borderTop: '1px solid var(--color-border)',
-          paddingTop: '0.625rem',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-        }}
-      >
-        <span>
-          Created: {mapping.created_at ? safeFormat(mapping.created_at, 'MMM d, yyyy · h:mm a') : '—'}
-        </span>
-        <span>
-          Updated: {mapping.updated_at ? safeFormatDistanceToNow(mapping.updated_at) : '—'}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// ─── Projected Door Unlock & Lock Preview ─────────────────────────────────────
-
-interface ProjectedUnlockTimesPreviewProps {
-  sourceType: 'service' | 'group';
-  selectedResource?: PcoServiceType | PcoGroup | null;
-  timeTypes?: PlanTimeType[];
-  selectedDoorIds: string[];
-  doors: Door[];
-  timingChoice: 'default' | 'after_start' | 'after_end';
-  customUnlockMin: number;
-  customLockMin: number;
-  doorTimings: Record<string, DoorTimingConfig>;
-  orgSettings: OrgSettings | null;
-}
-
-function ProjectedUnlockTimesPreview({
-  sourceType,
-  selectedResource,
-  timeTypes,
-  selectedDoorIds,
-  doors,
-  timingChoice,
-  customUnlockMin,
-  customLockMin,
-  doorTimings,
-  orgSettings,
-}: ProjectedUnlockTimesPreviewProps) {
-  const orgMode = orgSettings?.lock_timing_mode ?? 'after_end';
-  const orgUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
-  const orgLockAfterStart = orgSettings?.lock_after_start_min ?? 15;
-  const orgLockAfterEnd = orgSettings?.lock_buffer_after_min ?? 15;
-  const orgLock = orgMode === 'after_start' ? orgLockAfterStart : orgLockAfterEnd;
-
-  const effectiveDefaultMode = timingChoice !== 'default' ? timingChoice : orgMode;
-  const effectiveDefaultUnlock = timingChoice !== 'default' ? customUnlockMin : orgUnlock;
-  const effectiveDefaultLock = timingChoice !== 'default' ? customLockMin : orgLock;
-
-  const rawUpcomingTimes = selectedResource?.upcoming_times || [];
-  const filteredUpcomingTimes = rawUpcomingTimes
-    .filter((t) => {
-      if (sourceType !== 'service') return true;
-      if (!timeTypes || timeTypes.length === 0) return true;
-      const norm = normalizePlanTimeType(t.time_type, t.name);
-      return timeTypes.includes(norm);
-    })
-    .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
-
-  const displayTimes = filteredUpcomingTimes.slice(0, 3);
-  const remainingCount = filteredUpcomingTimes.length - displayTimes.length;
-
-  const computeSchedule = (startsAtStr: string, endsAtStr?: string) => {
-    const start = parseSafeDate(startsAtStr);
-    if (!start) return null;
-    const end = endsAtStr ? parseSafeDate(endsAtStr) : new Date(start.getTime() + 60 * 60 * 1000);
-    const effectiveEnd = end || new Date(start.getTime() + 60 * 60 * 1000);
-
-    const baseUnlock = new Date(start.getTime() - effectiveDefaultUnlock * 60 * 1000);
-    const baseLock = effectiveDefaultMode === 'after_start'
-      ? new Date(start.getTime() + effectiveDefaultLock * 60 * 1000)
-      : new Date(effectiveEnd.getTime() + effectiveDefaultLock * 60 * 1000);
-
-    const doorBreakdown = selectedDoorIds.map((dId) => {
-      const doorObj = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
-      const label = doorObj?.label || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId);
-      const override = doorTimings[dId];
-      const isCustom = Boolean(override);
-
-      const dUnlockOffset = override?.unlock_offset_min ?? effectiveDefaultUnlock;
-      const dLockMode = override?.lock_timing_mode ?? effectiveDefaultMode;
-      const dLockOffset = override?.lock_offset_min ?? (dLockMode === 'after_start' ? (effectiveDefaultMode === 'after_start' ? effectiveDefaultLock : orgLockAfterStart) : (effectiveDefaultMode === 'after_end' ? effectiveDefaultLock : orgLockAfterEnd));
-
-      const dUnlock = new Date(start.getTime() - dUnlockOffset * 60 * 1000);
-      const dLock = dLockMode === 'after_start'
-        ? new Date(start.getTime() + dLockOffset * 60 * 1000)
-        : new Date(effectiveEnd.getTime() + dLockOffset * 60 * 1000);
-
-      return {
-        doorId: dId,
-        label,
-        isCustom,
-        unlockTime: safeFormat(dUnlock, 'h:mm a'),
-        lockTime: safeFormat(dLock, 'h:mm a'),
-        unlockOffset: dUnlockOffset,
-        lockOffset: dLockOffset,
-        lockMode: dLockMode,
-      };
-    });
-
-    const baselineDoors = doorBreakdown.filter((d) => !d.isCustom);
-    const customDoors = doorBreakdown.filter((d) => d.isCustom);
-
-    return {
-      start,
-      end: effectiveEnd,
-      startDateFormatted: safeFormat(start, 'EEE, MMM d, yyyy'),
-      startTimeFormatted: safeFormat(start, 'h:mm a'),
-      endTimeFormatted: safeFormat(effectiveEnd, 'h:mm a'),
-      baseUnlockTime: safeFormat(baseUnlock, 'h:mm a'),
-      baseLockTime: safeFormat(baseLock, 'h:mm a'),
-      baselineDoors,
-      customDoors,
-    };
-  };
-
-  // Sample fallback projection for when no dates are in PCO yet
-  const sampleSchedule = (() => {
-    const nextDate = new Date();
-    nextDate.setDate(nextDate.getDate() + ((7 - nextDate.getDay()) % 7 || 7));
-    nextDate.setHours(10, 0, 0, 0);
-    const nextEndDate = new Date(nextDate.getTime() + 90 * 60 * 1000);
-    return computeSchedule(nextDate.toISOString(), nextEndDate.toISOString());
-  })();
-
-  return (
-    <div
-      style={{
-        padding: '0.875rem 1rem',
-        background: 'var(--color-bg-surface)',
-        borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--color-border)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '0.75rem',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.875rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
-          <ClockIcon />
-          <span>Projected Door Unlock & Lock Schedule</span>
-        </div>
-        <span
-          className="badge badge-info"
-          style={{ fontSize: '0.6875rem', padding: '0.1rem 0.4rem' }}
-        >
-          {displayTimes.length > 0 ? 'Live PCO Schedule' : 'Example Projection'}
-        </span>
-      </div>
-
-      <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', margin: 0, lineHeight: 1.4 }}>
-        Review the calculated unlock and lock times below. Door commands will automatically trigger according to these exact timestamps.
-      </p>
-
-      {displayTimes.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
-          {displayTimes.map((t) => {
-            const sched = computeSchedule(t.starts_at, t.ends_at);
-            if (!sched) return null;
-            const normType = normalizePlanTimeType(t.time_type, t.name);
-            const style = timeTypeBadgeStyle(normType);
-
-            return (
-              <div
-                key={t.id}
-                style={{
-                  padding: '0.75rem',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--color-bg-elevated)',
-                  border: '1px solid var(--color-border)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.5rem',
-                }}
-              >
-                {/* Time slot header */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.375rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--color-text-primary)' }}>
-                      📅 {sched.startDateFormatted}
-                    </span>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', fontWeight: 500 }}>
-                      · {t.name ? `${t.name}: ` : ''}{sched.startTimeFormatted} – {sched.endTimeFormatted}
-                    </span>
-                  </div>
-                  <span
-                    style={{
-                      fontSize: '0.6875rem',
-                      fontWeight: 600,
-                      padding: '0.1rem 0.35rem',
-                      borderRadius: 'var(--radius-sm, 4px)',
-                      background: style.bg,
-                      color: style.color,
-                      border: `1px solid ${style.border}`,
-                      textTransform: 'capitalize',
-                    }}
-                  >
-                    {normType}
-                  </span>
-                </div>
-
-                {/* Primary baseline timing cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(11rem, 1fr))', gap: '0.5rem' }}>
-                  {/* Unlock Box */}
-                  <div
-                    style={{
-                      padding: '0.5rem 0.75rem',
-                      borderRadius: 'var(--radius-sm)',
-                      background: 'rgba(16, 185, 129, 0.08)',
-                      border: '1px solid rgba(16, 185, 129, 0.25)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.125rem',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: '0.6875rem', fontWeight: 700, color: 'var(--color-success, #10b981)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        🔓 Unlocks At
-                      </span>
-                      <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                        -{effectiveDefaultUnlock}m before
-                      </span>
-                    </div>
-                    <div style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                      {sched.baseUnlockTime}
-                    </div>
-                    <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                      Event begins at {sched.startTimeFormatted}
-                    </span>
-                  </div>
-
-                  {/* Lock Box */}
-                  <div
-                    style={{
-                      padding: '0.5rem 0.75rem',
-                      borderRadius: 'var(--radius-sm)',
-                      background: effectiveDefaultMode === 'after_start' ? 'rgba(16, 185, 129, 0.05)' : 'rgba(245, 158, 11, 0.08)',
-                      border: `1px solid ${effectiveDefaultMode === 'after_start' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.25)'}`,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.125rem',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: '0.6875rem', fontWeight: 700, color: effectiveDefaultMode === 'after_start' ? 'var(--color-accent)' : '#d97706', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        🔒 Locks At
-                      </span>
-                      <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                        {effectiveDefaultMode === 'after_start' ? `+${effectiveDefaultLock}m after start` : `+${effectiveDefaultLock}m after end`}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                      {sched.baseLockTime}
-                    </div>
-                    <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                      {effectiveDefaultMode === 'after_start'
-                        ? `Security rule locks after ${sched.startTimeFormatted} start`
-                        : `Event concludes at ${sched.endTimeFormatted}`}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Door assignment note / overrides */}
-                {sched.customDoors.length > 0 ? (
-                  <div style={{ marginTop: '0.25rem', paddingTop: '0.375rem', borderTop: '1px dashed var(--color-border)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                    {sched.baselineDoors.length > 0 && (
-                      <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-secondary)' }}>
-                        <span style={{ fontWeight: 600 }}>Baseline Doors ({sched.baselineDoors.length}):</span>{' '}
-                        {sched.baselineDoors.map((d) => d.label).join(', ')} (unlock at {sched.baseUnlockTime} → lock at {sched.baseLockTime})
-                      </div>
-                    )}
-                    <div style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                      Custom Door Overrides:
-                    </div>
-                    {sched.customDoors.map((cd) => (
-                      <div key={cd.doorId} style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>• {cd.label}:</span>
-                        <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>🔓 Unlocks {cd.unlockTime}</span>
-                        <span>→</span>
-                        <span style={{ color: cd.lockMode === 'after_start' ? 'var(--color-accent)' : '#d97706', fontWeight: 600 }}>🔒 Locks {cd.lockTime}</span>
-                        <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                          ({cd.lockMode === 'after_start' ? `Security Mode: +${cd.lockOffset}m after start` : `Standard Mode: +${cd.lockOffset}m after end`})
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                    Applies to all selected doors: {sched.baselineDoors.map((d) => d.label).join(', ')}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {remainingCount > 0 && (
-            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textAlign: 'center', fontStyle: 'italic' }}>
-              + {remainingCount} more upcoming Planning Center time{remainingCount === 1 ? '' : 's'} will follow these exact buffer rules.
-            </div>
-          )}
-        </div>
-      ) : sampleSchedule ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <div
-            style={{
-              padding: '0.625rem 0.75rem',
-              borderRadius: 'var(--radius-sm)',
-              background: 'rgba(36, 101, 245, 0.06)',
-              border: '1px solid rgba(36, 101, 245, 0.2)',
-              fontSize: '0.75rem',
-              color: 'var(--color-text-secondary)',
-            }}
-          >
-            No upcoming plan times are currently published in Planning Center for this resource. Here is a projection based on a standard <strong>10:00 AM – 11:30 AM</strong> service:
-          </div>
-
-          <div
-            style={{
-              padding: '0.75rem',
-              borderRadius: 'var(--radius-md)',
-              background: 'var(--color-bg-elevated)',
-              border: '1px solid var(--color-border)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.5rem',
-            }}
-          >
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(11rem, 1fr))', gap: '0.5rem' }}>
-              {/* Unlock Box */}
-              <div
-                style={{
-                  padding: '0.5rem 0.75rem',
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'rgba(16, 185, 129, 0.08)',
-                  border: '1px solid rgba(16, 185, 129, 0.25)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.125rem',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '0.6875rem', fontWeight: 700, color: 'var(--color-success, #10b981)', textTransform: 'uppercase' }}>
-                    🔓 Unlocks At
-                  </span>
-                  <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                    -{effectiveDefaultUnlock}m before
-                  </span>
-                </div>
-                <div style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                  {sampleSchedule.baseUnlockTime}
-                </div>
-                <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                  10:00 AM start
-                </span>
-              </div>
-
-              {/* Lock Box */}
-              <div
-                style={{
-                  padding: '0.5rem 0.75rem',
-                  borderRadius: 'var(--radius-sm)',
-                  background: effectiveDefaultMode === 'after_start' ? 'rgba(16, 185, 129, 0.05)' : 'rgba(245, 158, 11, 0.08)',
-                  border: `1px solid ${effectiveDefaultMode === 'after_start' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.25)'}`,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.125rem',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '0.6875rem', fontWeight: 700, color: effectiveDefaultMode === 'after_start' ? 'var(--color-accent)' : '#d97706', textTransform: 'uppercase' }}>
-                    🔒 Locks At
-                  </span>
-                  <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                    {effectiveDefaultMode === 'after_start' ? `+${effectiveDefaultLock}m after start` : `+${effectiveDefaultLock}m after end`}
-                  </span>
-                </div>
-                <div style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                  {sampleSchedule.baseLockTime}
-                </div>
-                <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                  {effectiveDefaultMode === 'after_start' ? 'Locks 15m after 10:00 AM start' : '11:30 AM end'}
-                </span>
-              </div>
-            </div>
-
-            {sampleSchedule.customDoors.length > 0 && (
-              <div style={{ marginTop: '0.25rem', paddingTop: '0.375rem', borderTop: '1px dashed var(--color-border)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <div style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>
-                  Door-Specific Custom Overrides:
-                </div>
-                {sampleSchedule.customDoors.map((cd) => (
-                  <div key={cd.doorId} style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>• {cd.label}:</span>
-                    <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>🔓 Unlocks {cd.unlockTime}</span>
-                    <span>→</span>
-                    <span style={{ color: cd.lockMode === 'after_start' ? 'var(--color-accent)' : '#d97706', fontWeight: 600 }}>🔒 Locks {cd.lockTime}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-// ─── Edit Timing Modal ───────────────────────────────────────────────────────
-
-interface EditTimingModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  mapping: Mapping | null;
-  doors: Door[];
-  orgSettings: OrgSettings | null;
-  pcoResources?: Array<PcoServiceType | PcoGroup>;
-  onSave: (
-    mappingId: string,
-    updates: {
-      lock_timing_mode?: LockTimingMode;
-      lock_offset_min?: number;
-      unlock_offset_min?: number;
-      door_timings?: Record<string, DoorTimingConfig>;
-    },
-  ) => Promise<void>;
-  saving: boolean;
-}
-
-function EditTimingModal({
-  isOpen,
-  onClose,
-  mapping,
-  doors,
-  orgSettings,
-  pcoResources,
-  onSave,
-  saving,
-}: EditTimingModalProps) {
-  const [timingChoice, setTimingChoice] = useState<'default' | 'after_start' | 'after_end'>('default');
-  const [unlockMin, setUnlockMin] = useState(15);
-  const [lockMin, setLockMin] = useState(15);
-  const [doorTimings, setDoorTimings] = useState<Record<string, DoorTimingConfig>>({});
-
-  useEffect(() => {
-    if (!mapping) return;
-    if (mapping.lock_timing_mode) {
-      setTimingChoice(mapping.lock_timing_mode);
-    } else {
-      setTimingChoice('default');
-    }
-    setUnlockMin(mapping.unlock_offset_min ?? orgSettings?.unlock_buffer_before_min ?? 15);
-    if (mapping.lock_offset_min !== undefined) {
-      setLockMin(mapping.lock_offset_min);
-    } else {
-      const mode = mapping.lock_timing_mode ?? orgSettings?.lock_timing_mode ?? 'after_end';
-      setLockMin(mode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15));
-    }
-    // Deep clone existing door timings or initialize empty
-    setDoorTimings(mapping.door_timings ? JSON.parse(JSON.stringify(mapping.door_timings)) : {});
-  }, [mapping, orgSettings, isOpen]);
-
-  if (!mapping) return null;
-
-  const orgMode = orgSettings?.lock_timing_mode ?? 'after_end';
-  const orgUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
-  const orgLock = orgMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15);
-
-  const effectiveDefaultMode = timingChoice !== 'default' ? timingChoice : orgMode;
-  const effectiveDefaultUnlock = timingChoice !== 'default' ? unlockMin : orgUnlock;
-  const effectiveDefaultLock = timingChoice !== 'default' ? lockMin : orgLock;
-
-  function handleToggleDoorCustom(doorId: string, custom: boolean) {
-    setDoorTimings((prev) => {
-      const next = { ...prev };
-      if (!custom) {
-        delete next[doorId];
-      } else {
-        // Pre-populate with Security Mode (lock 15m after start) as recommended default for side doors
-        next[doorId] = {
-          lock_timing_mode: 'after_start',
-          lock_offset_min: 15,
-          unlock_offset_min: effectiveDefaultUnlock,
-        };
-      }
-      return next;
-    });
-  }
-
-  function handleUpdateDoorTiming(doorId: string, partial: Partial<DoorTimingConfig>) {
-    setDoorTimings((prev) => ({
-      ...prev,
-      [doorId]: {
-        ...(prev[doorId] || {
-          lock_timing_mode: 'after_start',
-          lock_offset_min: 15,
-          unlock_offset_min: effectiveDefaultUnlock,
-        }),
-        ...partial,
-      },
-    }));
-  }
-
-  async function handleSave() {
-    if (!mapping) return;
-
-    // Clean doorTimings: keep only doors currently assigned to mapping
-    const cleanedDoorTimings: Record<string, DoorTimingConfig> = {};
-    for (const dId of mapping.door_ids) {
-      if (doorTimings[dId]) {
-        cleanedDoorTimings[dId] = {
-          lock_timing_mode: doorTimings[dId].lock_timing_mode,
-          lock_offset_min: doorTimings[dId].lock_offset_min,
-          unlock_offset_min: doorTimings[dId].unlock_offset_min,
-        };
-      }
-    }
-
-    const updates: {
-      lock_timing_mode?: LockTimingMode;
-      lock_offset_min?: number;
-      unlock_offset_min?: number;
-      door_timings?: Record<string, DoorTimingConfig>;
-    } = {};
-
-    if (timingChoice === 'default') {
-      updates.lock_timing_mode = undefined;
-      updates.lock_offset_min = undefined;
-      updates.unlock_offset_min = undefined;
-    } else {
-      updates.lock_timing_mode = timingChoice;
-      updates.lock_offset_min = lockMin;
-      updates.unlock_offset_min = unlockMin;
-    }
-
-    updates.door_timings = Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined;
-
-    await onSave(mapping.id, updates);
-  }
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={`Edit Door Timing — ${mapping.pco_resource_label}`}
-      footer={
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', width: '100%' }}>
-          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>
-            Cancel
-          </button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : 'Save Timing Rules'}
-          </button>
-        </div>
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxHeight: '75vh', overflowY: 'auto', paddingRight: '0.25rem' }}>
-        {/* 1. Mapping Default Locking Rule */}
-        <div>
-          <label className="form-label" style={{ marginBottom: '0.375rem', display: 'block', fontWeight: 700, fontSize: '0.9375rem' }}>
-            1. Mapping Default Timing Rule
-          </label>
-          <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>
-            Choose the baseline timing rule for <strong>{mapping.pco_resource_label}</strong>. All doors mapped to this schedule follow this rule unless given a custom override below.
-          </p>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {/* Option 1: Org Default */}
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.75rem',
-                padding: '0.75rem',
-                borderRadius: 'var(--radius-md)',
-                cursor: 'pointer',
-                background: timingChoice === 'default' ? 'rgba(36,101,245,0.08)' : 'var(--color-bg-elevated)',
-                border: `1px solid ${timingChoice === 'default' ? 'var(--color-accent)' : 'var(--color-border)'}`,
-              }}
-            >
-              <input
-                type="radio"
-                name="editTimingChoice"
-                value="default"
-                checked={timingChoice === 'default'}
-                onChange={() => setTimingChoice('default')}
-                style={{ marginTop: '0.2rem' }}
-              />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                  Use Organization Default ({orgMode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'})
-                </span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                  {orgMode === 'after_start'
-                    ? `Locks +${orgLock} min after start · Unlocks -${orgUnlock} min before`
-                    : `Locks +${orgLock} min after end · Unlocks -${orgUnlock} min before`}
-                </span>
-              </div>
-            </label>
-
-            {/* Option 2: Security Mode (after start) */}
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.75rem',
-                padding: '0.75rem',
-                borderRadius: 'var(--radius-md)',
-                cursor: 'pointer',
-                background: timingChoice === 'after_start' ? 'rgba(36,101,245,0.08)' : 'var(--color-bg-elevated)',
-                border: `1px solid ${timingChoice === 'after_start' ? 'var(--color-accent)' : 'var(--color-border)'}`,
-              }}
-            >
-              <input
-                type="radio"
-                name="editTimingChoice"
-                value="after_start"
-                checked={timingChoice === 'after_start'}
-                onChange={() => setTimingChoice('after_start')}
-                style={{ marginTop: '0.2rem' }}
-              />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                  🛡️ Security Mode — Lock after service starts
-                </span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                  Doors unlock before start and automatically lock shortly after the service begins.
-                </span>
-              </div>
-            </label>
-
-            {/* Option 3: Standard Mode (after end) */}
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.75rem',
-                padding: '0.75rem',
-                borderRadius: 'var(--radius-md)',
-                cursor: 'pointer',
-                background: timingChoice === 'after_end' ? 'rgba(36,101,245,0.08)' : 'var(--color-bg-elevated)',
-                border: `1px solid ${timingChoice === 'after_end' ? 'var(--color-accent)' : 'var(--color-border)'}`,
-              }}
-            >
-              <input
-                type="radio"
-                name="editTimingChoice"
-                value="after_end"
-                checked={timingChoice === 'after_end'}
-                onChange={() => setTimingChoice('after_end')}
-                style={{ marginTop: '0.2rem' }}
-              />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                  🕒 Standard Mode — Lock after service ends
-                </span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                  Doors stay unlocked for the duration of the service and lock after it concludes.
-                </span>
-              </div>
-            </label>
-          </div>
-
-          {/* Sliders if custom default mode selected */}
-          {timingChoice !== 'default' && (
-            <div
-              style={{
-                marginTop: '0.75rem',
-                padding: '0.875rem 1rem',
-                background: 'var(--color-bg-elevated)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-md)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.875rem',
-              }}
-            >
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                  <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
-                    Unlock doors before start
-                  </label>
-                  <span style={{ fontWeight: 700, color: 'var(--color-accent)', fontSize: '0.8125rem' }}>
-                    {unlockMin} min before
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  className="form-range"
-                  min="0"
-                  max="60"
-                  step="5"
-                  value={unlockMin}
-                  onChange={(e) => setUnlockMin(Number(e.target.value))}
-                />
-              </div>
-
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                  <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
-                    {timingChoice === 'after_start' ? 'Lock doors after start' : 'Lock doors after end'}
-                  </label>
-                  <span style={{ fontWeight: 700, color: 'var(--color-accent)', fontSize: '0.8125rem' }}>
-                    {lockMin} min {timingChoice === 'after_start' ? 'after start' : 'after end'}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  className="form-range"
-                  min="0"
-                  max={timingChoice === 'after_start' ? '120' : '60'}
-                  step="5"
-                  value={lockMin}
-                  onChange={(e) => setLockMin(Number(e.target.value))}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 2. Per-Door Timing Configuration */}
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.375rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <label className="form-label" style={{ marginBottom: 0, display: 'block', fontWeight: 700, fontSize: '0.9375rem' }}>
-              2. Per-Door Timing Overrides (Optional)
-            </label>
-            {Object.keys(doorTimings).length > 0 && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem', color: 'var(--color-text-muted)' }}
-                onClick={() => setDoorTimings({})}
-              >
-                Reset All to Default
-              </button>
-            )}
-          </div>
-          <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>
-            Configure different lock and unlock times per door. For instance, keep the main entrance unlocked for the entire service while automatically locking side or back doors shortly after service begins.
-          </p>
-
-          {mapping.door_ids.length === 0 ? (
-            <div style={{ padding: '0.75rem', background: 'var(--color-bg-elevated)', borderRadius: 'var(--radius-md)', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
-              No doors mapped to this schedule.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              {mapping.door_ids.map((dId, idx) => {
-                const doorObj = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
-                const doorLabel = doorObj?.label || mapping.door_labels[idx] || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId);
-                const isCustom = doorTimings[dId] !== undefined;
-                const dTiming = doorTimings[dId] || {};
-                const dMode = dTiming.lock_timing_mode ?? 'after_start';
-                const dUnlock = dTiming.unlock_offset_min ?? effectiveDefaultUnlock;
-                const dLock = dTiming.lock_offset_min ?? 15;
-
-                return (
-                  <div
-                    key={dId}
-                    style={{
-                      padding: '0.875rem 1rem',
-                      background: 'var(--color-bg-elevated)',
-                      border: `1px solid ${isCustom ? 'rgba(36, 101, 245, 0.4)' : 'var(--color-border)'}`,
-                      borderRadius: 'var(--radius-md)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.75rem',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    {/* Header: Door Info & Toggle */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
-                          {doorLabel}
-                        </span>
-                        {doorObj?.campus_name && (
-                          <span
-                            style={{
-                              fontSize: '0.625rem',
-                              padding: '0.05rem 0.3rem',
-                              borderRadius: '4px',
-                              background: 'rgba(36, 101, 245, 0.1)',
-                              color: 'var(--color-accent, #2465f5)',
-                              border: '1px solid rgba(36, 101, 245, 0.2)',
-                              fontWeight: 500,
-                            }}
-                          >
-                            🏫 {doorObj.campus_name}
-                          </span>
-                        )}
-                        {doorObj?.location_name && (
-                          <span
-                            style={{
-                              fontSize: '0.625rem',
-                              padding: '0.05rem 0.3rem',
-                              borderRadius: '4px',
-                              background: 'rgba(168, 85, 247, 0.1)',
-                              color: '#9333ea',
-                              border: '1px solid rgba(168, 85, 247, 0.2)',
-                              fontWeight: 500,
-                            }}
-                          >
-                            📍 {doorObj.location_name}
-                          </span>
-                        )}
-                        <span
-                          className={`badge ${isCustom ? 'badge-info' : 'badge-neutral'}`}
-                          style={{ fontSize: '0.6875rem' }}
-                        >
-                          {isCustom ? 'Custom Override' : 'Mapping Default'}
-                        </span>
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        {isCustom ? (
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', color: 'var(--color-text-muted)' }}
-                            onClick={() => handleToggleDoorCustom(dId, false)}
-                          >
-                            ↩️ Reset to Default
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
-                            onClick={() => handleToggleDoorCustom(dId, true)}
-                          >
-                            ⚙️ Set Custom Timing
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* If Custom Override Active for this Door */}
-                    {isCustom ? (
-                      <div
-                        style={{
-                          padding: '0.75rem',
-                          background: 'var(--color-bg-surface)',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--color-border)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.75rem',
-                        }}
-                      >
-                        {/* Door mode selection */}
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                          <button
-                            type="button"
-                            className={`btn btn-sm ${dMode === 'after_start' ? 'btn-primary' : 'btn-secondary'}`}
-                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
-                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start' })}
-                          >
-                            🛡️ Security Mode (Lock after start)
-                          </button>
-                          <button
-                            type="button"
-                            className={`btn btn-sm ${dMode === 'after_end' ? 'btn-primary' : 'btn-secondary'}`}
-                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
-                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end' })}
-                          >
-                            🕒 Standard Mode (Lock after end)
-                          </button>
-                        </div>
-
-                        {/* Quick Presets */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Presets:</span>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.45rem', border: '1px solid var(--color-border)', background: 'rgba(36, 101, 245, 0.08)', color: 'var(--color-accent)' }}
-                            title="Keeps this door unlocked for the entire service (unlocks before, locks when service ends)"
-                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 0, unlock_offset_min: effectiveDefaultUnlock })}
-                          >
-                            🚪 Open entire service
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
-                            title="Unlocks before service and locks exactly when service starts"
-                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 0, unlock_offset_min: 15 })}
-                          >
-                            🔒 Lock at service start (0m)
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
-                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 10 })}
-                          >
-                            🔒 Lock 10m after start
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
-                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 15 })}
-                          >
-                            🔒 Lock 15m after start
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
-                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 30 })}
-                          >
-                            🔒 Lock 30m after start
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
-                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 15 })}
-                          >
-                            🕒 Lock 15m after end
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', border: '1px solid var(--color-border)' }}
-                            onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 0 })}
-                          >
-                            🕒 Lock at end (0m)
-                          </button>
-                        </div>
-
-                        {/* Sliders */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(11rem, 1fr))', gap: '0.75rem' }}>
-                          <div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.2rem' }}>
-                              <span>Unlock before start:</span>
-                              <strong style={{ color: 'var(--color-accent)' }}>{dUnlock}m</strong>
-                            </div>
-                            <input
-                              type="range"
-                              className="form-range"
-                              min="0"
-                              max="60"
-                              step="5"
-                              value={dUnlock}
-                              onChange={(e) => handleUpdateDoorTiming(dId, { unlock_offset_min: Number(e.target.value) })}
-                            />
-                          </div>
-
-                          <div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.2rem' }}>
-                              <span>{dMode === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
-                              <strong style={{ color: 'var(--color-accent)' }}>{dLock}m</strong>
-                            </div>
-                            <input
-                              type="range"
-                              className="form-range"
-                              min="0"
-                              max={dMode === 'after_start' ? '120' : '60'}
-                              step="5"
-                              value={dLock}
-                              onChange={(e) => handleUpdateDoorTiming(dId, { lock_offset_min: Number(e.target.value) })}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Summary badge */}
-                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                          <span>👉 <strong>{doorLabel}</strong> will unlock <strong>{dUnlock}m</strong> before start and lock <strong>+{dLock}m</strong> {dMode === 'after_start' ? 'after start' : 'after end'}.</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                        Currently inherits baseline rule: {effectiveDefaultMode === 'after_start' ? `🛡️ Locks +${effectiveDefaultLock}m after start` : `🕒 Locks +${effectiveDefaultLock}m after end`} · Unlocks -{effectiveDefaultUnlock}m before.
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* 3. Projected Door Unlock & Lock Schedule */}
-        <div>
-          <label className="form-label" style={{ marginBottom: '0.375rem', display: 'block', fontWeight: 700, fontSize: '0.9375rem' }}>
-            3. Projected Door Unlock & Lock Schedule
-          </label>
-          <ProjectedUnlockTimesPreview
-            sourceType={mapping.source_type}
-            selectedResource={pcoResources?.find((r) => r.id === mapping.pco_resource_id) || null}
-            timeTypes={mapping.time_types as PlanTimeType[] | undefined}
-            selectedDoorIds={mapping.door_ids}
-            doors={doors}
-            timingChoice={timingChoice}
-            customUnlockMin={unlockMin}
-            customLockMin={lockMin}
-            doorTimings={doorTimings}
-            orgSettings={orgSettings}
-          />
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-// ─── Add Access Policy Mapping Modal ──────────────────────────────────────────
-
-interface AddPolicyMappingModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  pcoLists: PcoList[];
-  pcoListsLoading: boolean;
-  accessPolicies: UnifiAccessPolicy[];
-  onSave: (data: {
-    pco_list_id: string;
-    pco_list_name: string;
-    unifi_policy_id: string;
-    unifi_policy_name: string;
-    enabled: boolean;
-  }) => Promise<void>;
-  saving: boolean;
-  onRefreshPolicies?: () => void;
-  onRefreshLists?: () => void;
-  onCreateNewPolicy?: () => void;
-}
-
-function AddPolicyMappingModal({
-  isOpen,
-  onClose,
-  pcoLists,
-  pcoListsLoading,
-  accessPolicies,
-  onSave,
-  saving,
-  onRefreshPolicies,
-  onRefreshLists,
-  onCreateNewPolicy,
-}: AddPolicyMappingModalProps) {
-  const [selectedListId, setSelectedListId] = useState('');
-  const [selectedPolicyId, setSelectedPolicyId] = useState('');
-  const [enabled, setEnabled] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  function reset() {
-    setSelectedListId('');
-    setSelectedPolicyId('');
-    setEnabled(true);
-    setError(null);
-  }
-
-  function handleClose() {
-    reset();
-    onClose();
-  }
-
-  const selectedList = pcoLists.find((l) => l.id === selectedListId);
-  const selectedPolicy = accessPolicies.find((p) => (p.unifi_policy_id || p.id) === selectedPolicyId);
-
-  async function handleSave() {
-    setError(null);
-    if (!selectedListId) {
-      setError('Please select a Planning Center List.');
-      return;
-    }
-    if (!selectedPolicyId) {
-      setError('Please select a UniFi Access Policy.');
-      return;
-    }
-
-    await onSave({
-      pco_list_id: selectedListId,
-      pco_list_name: selectedList?.name ?? selectedListId,
-      unifi_policy_id: selectedPolicyId,
-      unifi_policy_name: selectedPolicy?.name ?? selectedPolicyId,
-      enabled,
-    });
-    reset();
-  }
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={handleClose}
-      title="Add Planning Center List to Access Policy Mapping"
-      footer={
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <button className="btn btn-secondary" onClick={handleClose} disabled={saving}>
-            Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleSave}
-            disabled={saving || !selectedListId || !selectedPolicyId}
-          >
-            {saving ? 'Creating…' : 'Create Mapping'}
-          </button>
-        </div>
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-        {error && (
-          <div className="alert alert-danger" style={{ fontSize: '0.8125rem' }}>
-            {error}
-          </div>
-        )}
-
-        <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
-          Link a Planning Center List directly to a UniFi Access Policy. People currently in this list
-          will automatically receive the chosen access policy. When they leave the list, the policy is revoked.
-        </p>
-
-        {/* 1. Select Planning Center List */}
-        <div className="form-group">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
-            <label className="form-label" style={{ margin: 0, fontWeight: 600 }}>
-              1. Planning Center List
-            </label>
-            {onRefreshLists && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
-                onClick={onRefreshLists}
-                disabled={pcoListsLoading}
-              >
-                <RefreshIcon /> Refresh Lists
-              </button>
-            )}
-          </div>
-
-          {pcoListsLoading ? (
-            <div className="skeleton" style={{ height: '2.5rem', borderRadius: 'var(--radius-md)' }} />
-          ) : (
-            <select
-              className="form-select"
-              value={selectedListId}
-              onChange={(e) => setSelectedListId(e.target.value)}
-            >
-              <option value="">Select a Planning Center List…</option>
-              {pcoLists.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name} {l.category ? `(${l.category})` : ''} {l.total_people ? `· ${l.total_people} members` : ''}
-                </option>
-              ))}
-            </select>
-          )}
-          <span className="form-hint">
-            Only active members from this list will be synchronized.
-          </span>
-        </div>
-
-        {/* 2. Select UniFi Access Policy */}
-        <div className="form-group">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
-            <label className="form-label" style={{ margin: 0, fontWeight: 600 }}>
-              2. UniFi Access Policy
-            </label>
-            <div style={{ display: 'flex', gap: '0.35rem' }}>
-              {onCreateNewPolicy && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem', color: 'var(--color-primary)' }}
-                  onClick={() => {
-                    handleClose();
-                    onCreateNewPolicy();
-                  }}
-                >
-                  <PlusIcon /> New Policy
-                </button>
-              )}
-              {onRefreshPolicies && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
-                  onClick={onRefreshPolicies}
-                >
-                  <RefreshIcon /> Sync from UniFi
-                </button>
-              )}
-            </div>
-          </div>
-
-          {accessPolicies.length === 0 ? (
-            <div
-              style={{
-                padding: '0.875rem',
-                background: 'var(--color-bg-base)',
-                border: '1px dashed var(--color-border)',
-                borderRadius: 'var(--radius-md)',
-                fontSize: '0.8125rem',
-                color: 'var(--color-text-secondary)',
-              }}
-            >
-              No access policies discovered from UniFi yet. Ensure your local agent is connected and click &quot;Sync from UniFi&quot;.
-            </div>
-          ) : (
-            <select
-              className="form-select"
-              value={selectedPolicyId}
-              onChange={(e) => setSelectedPolicyId(e.target.value)}
-            >
-              <option value="">Select a UniFi Access Policy…</option>
-              {accessPolicies.map((p) => {
-                const polId = p.unifi_policy_id || p.id;
-                return (
-                  <option key={polId} value={polId}>
-                    {p.name} {p.door_ids && p.door_ids.length > 0 ? `(${p.door_ids.length} door(s))` : ''}
-                  </option>
-                );
-              })}
-            </select>
-          )}
-          <span className="form-hint">
-            The door schedules and permission rules configured on this policy in UniFi will apply to list members.
-          </span>
-        </div>
-
-        {/* 3. Enable Mapping */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0.875rem 1rem',
-            background: 'var(--color-bg-base)',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--color-border)',
-          }}
-        >
-          <div>
-            <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
-              Enable Mapping Immediately
-            </span>
-            <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-              Automatically include this list in periodic and manual user synchronizations.
-            </p>
-          </div>
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            style={{ width: '1.125rem', height: '1.125rem', cursor: 'pointer' }}
-          />
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-// ─── Add Mapping Modal ────────────────────────────────────────────────────────
-
-interface AddMappingModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  sourceType: MappingSourceType;
-  pcoResources: Array<PcoServiceType | PcoGroup>;
-  doors: Door[];
-  pcoError?: string | null;
-  orgSettings: OrgSettings | null;
-  onSave: (data: {
-    pco_resource_id: string;
-    pco_resource_label: string;
-    door_ids: string[];
-    door_labels: string[];
-    time_types: PlanTimeType[];
-    lock_timing_mode?: LockTimingMode;
-    lock_offset_min?: number;
-    unlock_offset_min?: number;
-    door_timings?: Record<string, DoorTimingConfig>;
-    enabled: boolean;
-  }) => Promise<void>;
-  saving: boolean;
-}
-
-function AddMappingModal({
-  isOpen,
-  onClose,
-  sourceType,
-  pcoResources,
-  doors,
-  pcoError,
-  orgSettings,
-  onSave,
-  saving,
-}: AddMappingModalProps) {
-  const [step, setStep] = useState(1);
-  const [selectedResourceId, setSelectedResourceId] = useState('');
-  const [selectedDoorIds, setSelectedDoorIds] = useState<string[]>([]);
-  const [timeTypes, setTimeTypes] = useState<PlanTimeType[]>(['service', 'rehearsal']);
-  const [timingChoice, setTimingChoice] = useState<'default' | 'after_start' | 'after_end'>('default');
-  const [customUnlockMin, setCustomUnlockMin] = useState(15);
-  const [customLockMin, setCustomLockMin] = useState(15);
-  const [doorTimings, setDoorTimings] = useState<Record<string, DoorTimingConfig>>({});
-  const [enabled, setEnabled] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [doorSearch, setDoorSearch] = useState('');
-  const [selectedCampusFilter, setSelectedCampusFilter] = useState<string>('all');
-
-  const isUuid = (str: string) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
-
-  const { role, isSuperAdmin } = useAuth();
-  const isAdmin = role === 'org_admin' || isSuperAdmin;
-
-  const validDoors = doors.filter((d) => {
-    const label = (d.label || '').trim();
-    if (!label) return false;
-    if (isUuid(label) && d.current_state === 'unknown') return false;
-    if (!isAdmin && isDoorHidden(d)) return false;
-    return true;
-  });
-
-  const campusOptions = React.useMemo(() => {
-    const set = new Set<string>();
-    validDoors.forEach((d) => {
-      if (d.campus_name) set.add(d.campus_name);
-    });
-    return Array.from(set).sort();
-  }, [validDoors]);
-
-  const filteredDoors = validDoors.filter((d) => {
-    if (selectedCampusFilter === 'unassigned') {
-      if (d.campus_name || d.campus_id) return false;
-    } else if (selectedCampusFilter !== 'all') {
-      if (d.campus_name !== selectedCampusFilter && d.campus_id !== selectedCampusFilter) return false;
-    }
-
-    if (!doorSearch.trim()) return true;
-    const q = doorSearch.toLowerCase();
-    return (
-      (d.label && d.label.toLowerCase().includes(q)) ||
-      (d.campus_name && d.campus_name.toLowerCase().includes(q)) ||
-      (d.location_name && d.location_name.toLowerCase().includes(q)) ||
-      (d.floor && d.floor.toLowerCase().includes(q)) ||
-      (d.building && d.building.toLowerCase().includes(q))
-    );
-  });
-
-  function reset() {
-    setStep(1);
-    setSelectedResourceId('');
-    setSelectedDoorIds([]);
-    setTimeTypes(['service', 'rehearsal']);
-    setTimingChoice('default');
-    setCustomUnlockMin(orgSettings?.unlock_buffer_before_min ?? 15);
-    setCustomLockMin(15);
-    setDoorTimings({});
-    setEnabled(true);
-    setDoorSearch('');
-    setSelectedCampusFilter('all');
-    setError(null);
-  }
-
-  function handleSelectAllDoors() {
-    setSelectedDoorIds(validDoors.map((d) => d.id));
-  }
-
-  function handleSelectCampusDoors(campusName: string) {
-    const campusDoorIds = validDoors
-      .filter((d) => (campusName === 'unassigned' ? !d.campus_name && !d.campus_id : d.campus_name === campusName || d.campus_id === campusName))
-      .map((d) => d.id);
-    setSelectedDoorIds((prev) => Array.from(new Set([...prev, ...campusDoorIds])));
-  }
-
-  function handleDeselectAllDoors() {
-    setSelectedDoorIds([]);
-  }
-
-  function handleClose() {
-    reset();
-    onClose();
-  }
-
-  function toggleDoor(id: string) {
-    setSelectedDoorIds((prev) =>
-      prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id],
-    );
-  }
-
-  function toggleTimeType(tt: PlanTimeType) {
-    setTimeTypes((prev) =>
-      prev.includes(tt) ? prev.filter((t) => t !== tt) : [...prev, tt],
-    );
-  }
-
-  const selectedResource = pcoResources.find((r) => r.id === selectedResourceId);
-
-  const orgMode = orgSettings?.lock_timing_mode ?? 'after_end';
-  const orgUnlock = orgSettings?.unlock_buffer_before_min ?? 15;
-  const orgLock = orgMode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15);
-
-  const effectiveDefaultUnlock = timingChoice !== 'default' ? customUnlockMin : orgUnlock;
-  const effectiveDefaultLock = timingChoice !== 'default' ? customLockMin : orgLock;
-  const effectiveDefaultMode = timingChoice !== 'default' ? timingChoice : orgMode;
-
-  function handleToggleDoorCustom(doorId: string, custom: boolean) {
-    setDoorTimings((prev) => {
-      const next = { ...prev };
-      if (!custom) {
-        delete next[doorId];
-      } else {
-        next[doorId] = {
-          lock_timing_mode: 'after_start',
-          lock_offset_min: 15,
-          unlock_offset_min: effectiveDefaultUnlock,
-        };
-      }
-      return next;
-    });
-  }
-
-  function handleUpdateDoorTiming(doorId: string, partial: Partial<DoorTimingConfig>) {
-    setDoorTimings((prev) => ({
-      ...prev,
-      [doorId]: {
-        ...(prev[doorId] || {
-          lock_timing_mode: 'after_start',
-          lock_offset_min: 15,
-          unlock_offset_min: effectiveDefaultUnlock,
-        }),
-        ...partial,
-      },
-    }));
-  }
-
-  async function handleSave() {
-    setError(null);
-    if (!selectedResourceId) { setError('Please select a PCO resource.'); return; }
-    if (selectedDoorIds.length === 0) { setError('Please select at least one door.'); return; }
-    if (sourceType === 'service' && timeTypes.length === 0) { setError('Please select at least one time type.'); return; }
-
-    const selectedDoors = validDoors.filter((d) => selectedDoorIds.includes(d.id));
-
-    // Clean doorTimings: keep only doors currently selected
-    const cleanedDoorTimings: Record<string, DoorTimingConfig> = {};
-    for (const dId of selectedDoorIds) {
-      if (doorTimings[dId]) {
-        cleanedDoorTimings[dId] = {
-          lock_timing_mode: doorTimings[dId].lock_timing_mode,
-          lock_offset_min: doorTimings[dId].lock_offset_min,
-          unlock_offset_min: doorTimings[dId].unlock_offset_min,
-        };
-      }
-    }
-
-    try {
-      await onSave({
-        pco_resource_id: selectedResourceId,
-        pco_resource_label: selectedResource?.name ?? selectedResourceId,
-        door_ids: selectedDoorIds,
-        door_labels: selectedDoors.map((d) => d.label),
-        time_types: sourceType === 'service' ? timeTypes : [],
-        lock_timing_mode: timingChoice === 'default' ? undefined : timingChoice,
-        lock_offset_min: timingChoice === 'default' ? undefined : customLockMin,
-        unlock_offset_min: timingChoice === 'default' ? undefined : customUnlockMin,
-        door_timings: Object.keys(cleanedDoorTimings).length > 0 ? cleanedDoorTimings : undefined,
-        enabled,
-      });
-      reset();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save mapping.');
-    }
-  }
-
-  const totalSteps = sourceType === 'service' ? 4 : 3;
-
-  const stepLabel = (s: number) => {
-    const labels: Record<number, string> = {
-      1: 'Select PCO Resource',
-      2: 'Select Doors',
-      3: sourceType === 'service' ? 'Trigger Time Types' : 'Review & Confirm',
-      4: 'Review & Confirm',
-    };
-    return labels[s] ?? `Step ${s}`;
-  };
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={handleClose}
-      title={`Add ${sourceType === 'service' ? 'Service' : 'Group'} Mapping`}
-      footer={
-        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-          <button
-            className="btn btn-secondary"
-            onClick={step === 1 ? handleClose : () => setStep((s) => s - 1)}
-            disabled={saving}
-          >
-            {step === 1 ? 'Cancel' : '← Back'}
-          </button>
-          {step < totalSteps ? (
-            <button
-              className="btn btn-primary"
-              onClick={() => setStep((s) => s + 1)}
-              disabled={
-                (step === 1 && !selectedResourceId) ||
-                (step === 2 && selectedDoorIds.length === 0)
-              }
-            >
-              Next →
-            </button>
-          ) : (
-            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving…' : 'Confirm & Save Mapping'}
-            </button>
-          )}
-        </div>
-      }
-    >
-      {/* Step indicator */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', alignItems: 'center' }}>
-        {Array.from({ length: totalSteps }, (_, i) => i + 1).map((s) => (
-          <React.Fragment key={s}>
-            <div
-              style={{
-                width: '1.5rem',
-                height: '1.5rem',
-                borderRadius: '50%',
-                background: s <= step ? 'var(--color-accent)' : 'var(--color-bg-elevated)',
-                border: `2px solid ${s <= step ? 'var(--color-accent)' : 'var(--color-border)'}`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '0.6875rem',
-                fontWeight: 700,
-                color: s <= step ? '#fff' : 'var(--color-text-muted)',
-                transition: 'all 0.2s ease',
-                flexShrink: 0,
-              }}
-            >
-              {s}
-            </div>
-            {s < totalSteps && (
-              <div
-                style={{
-                  flex: 1,
-                  height: '2px',
-                  background: s < step ? 'var(--color-accent)' : 'var(--color-border)',
-                  transition: 'background 0.2s ease',
-                }}
-              />
-            )}
-          </React.Fragment>
-        ))}
-      </div>
-
-      <div
-        style={{
-          fontSize: '0.75rem',
-          color: 'var(--color-text-muted)',
-          marginBottom: '1rem',
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
-          fontWeight: 600,
-        }}
-      >
-        Step {step}: {stepLabel(step)}
-      </div>
-
-      {error && (
-        <div className="alert alert-danger" style={{ marginBottom: '1rem' }}>
-          {error}
-        </div>
-      )}
-
-      {/* Step 1: PCO resource selection */}
-      {step === 1 && (
-        <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div>
-            <label className="form-label" style={{ marginBottom: '0.5rem', display: 'block' }}>
-              Choose {sourceType === 'service' ? 'Service Type' : 'Group'}
-            </label>
-            {pcoError ? (
-              <p style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.875rem' }}>
-                Failed to load {sourceType === 'service' ? 'service types' : 'groups'}: {pcoError}
-              </p>
-            ) : pcoResources.length === 0 ? (
-              <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-                No {sourceType === 'service' ? 'service types' : 'groups'} found. Ensure PCO is connected in Settings.
-              </p>
-            ) : (
-              <select
-                className="form-select"
-                value={selectedResourceId}
-                onChange={(e) => setSelectedResourceId(e.target.value)}
-              >
-                <option value="">Select a {sourceType === 'service' ? 'service type' : 'group'}…</option>
-                {pcoResources.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} {(r as PcoServiceType).frequency ? `(${(r as PcoServiceType).frequency})` : (r as PcoGroup).schedule ? `(${(r as PcoGroup).schedule})` : ''}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {/* Selected Resource Preview with Times */}
-          {selectedResource && (
-            <div
-              style={{
-                padding: '0.875rem',
-                background: 'var(--color-bg-elevated)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-md)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.5rem',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{selectedResource.name}</span>
-                {(selectedResource as PcoServiceType).frequency && (
-                  <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
-                    {(selectedResource as PcoServiceType).frequency}
-                  </span>
-                )}
-                {(selectedResource as PcoGroup).schedule && (
-                  <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
-                    {(selectedResource as PcoGroup).schedule}
-                  </span>
-                )}
-              </div>
-
-              {(selectedResource as PcoServiceType).upcoming_plan_title && (
-                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
-                  <strong>Upcoming Plan:</strong> {(selectedResource as PcoServiceType).upcoming_plan_title}
-                </div>
-              )}
-
-              {selectedResource.upcoming_times && selectedResource.upcoming_times.length > 0 ? (
-                <div>
-                  <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontWeight: 600, display: 'block', marginBottom: '0.25rem' }}>
-                    Pulled Service / Event Times:
-                  </span>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                    {selectedResource.upcoming_times.map((t) => {
-                      const style = timeTypeBadgeStyle(t.time_type);
-                      return (
-                        <span
-                          key={t.id}
-                          style={{
-                            fontSize: '0.6875rem',
-                            padding: '0.2rem 0.4rem',
-                            borderRadius: 'var(--radius-sm)',
-                            background: style.bg,
-                            color: style.color,
-                            border: `1px solid ${style.border}`,
-                          }}
-                        >
-                          {formatIsoTimeRange(t.starts_at, t.ends_at)} ({t.time_type || 'time'})
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                  No upcoming times scheduled yet in Planning Center.
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Step 2: Door selection */}
-      {step === 2 && (
-        <div>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '0.5rem',
-              flexWrap: 'wrap',
-              gap: '0.5rem',
-            }}
-          >
-            <label className="form-label" style={{ marginBottom: 0, display: 'block', fontWeight: 600 }}>
-              Select UniFi Doors ({selectedDoorIds.length} of {validDoors.length} selected)
-            </label>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              {campusOptions.length > 0 && selectedCampusFilter !== 'all' && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', height: 'auto', color: 'var(--color-accent)' }}
-                  onClick={() => handleSelectCampusDoors(selectedCampusFilter)}
-                  title={`Select all doors in ${selectedCampusFilter}`}
-                >
-                  Select All {selectedCampusFilter === 'unassigned' ? 'Unassigned' : selectedCampusFilter}
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', height: 'auto' }}
-                onClick={handleSelectAllDoors}
-              >
-                Select All
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', height: 'auto' }}
-                onClick={handleDeselectAllDoors}
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-
-          {/* Campus Filter Chips */}
-          {campusOptions.length > 0 && (
-            <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-              <button
-                type="button"
-                className={`btn btn-sm ${selectedCampusFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', height: 'auto' }}
-                onClick={() => setSelectedCampusFilter('all')}
-              >
-                All Campuses ({validDoors.length})
-              </button>
-              {campusOptions.map((c) => {
-                const count = validDoors.filter((d) => d.campus_name === c || d.campus_id === c).length;
-                return (
-                  <button
-                    key={c}
-                    type="button"
-                    className={`btn btn-sm ${selectedCampusFilter === c ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', height: 'auto' }}
-                    onClick={() => setSelectedCampusFilter(c)}
-                  >
-                    🏫 {c} ({count})
-                  </button>
-                );
-              })}
-              {validDoors.some((d) => !d.campus_name && !d.campus_id) && (
-                <button
-                  type="button"
-                  className={`btn btn-sm ${selectedCampusFilter === 'unassigned' ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', height: 'auto' }}
-                  onClick={() => setSelectedCampusFilter('unassigned')}
-                >
-                  Unassigned ({validDoors.filter((d) => !d.campus_name && !d.campus_id).length})
-                </button>
-              )}
-            </div>
-          )}
-
-          {validDoors.length > 6 && (
-            <input
-              type="text"
-              className="input"
-              placeholder="Filter doors by name, campus, location, building…"
-              value={doorSearch}
-              onChange={(e) => setDoorSearch(e.target.value)}
-              style={{ marginBottom: '0.5rem', fontSize: '0.8125rem', padding: '0.375rem 0.625rem' }}
-            />
-          )}
-
-          {validDoors.length === 0 ? (
-            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-              No doors available. Configure the local agent first.
-            </p>
-          ) : filteredDoors.length === 0 ? (
-            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', padding: '0.75rem', textAlign: 'center' }}>
-              No doors match the selected filter.
-            </p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '16rem', overflowY: 'auto' }}>
-              {filteredDoors.map((door) => (
-                <label
-                  key={door.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.625rem',
-                    padding: '0.625rem',
-                    borderRadius: 'var(--radius-md)',
-                    cursor: 'pointer',
-                    background: selectedDoorIds.includes(door.id)
-                      ? 'rgba(36,101,245,0.1)'
-                      : 'var(--color-bg-elevated)',
-                    border: `1px solid ${selectedDoorIds.includes(door.id) ? 'rgba(36,101,245,0.3)' : 'var(--color-border)'}`,
-                    transition: 'all 0.15s ease',
-                    fontSize: '0.875rem',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedDoorIds.includes(door.id)}
-                    onChange={() => toggleDoor(door.id)}
-                  />
-                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: '0.125rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-                      <span style={{ color: 'var(--color-text-primary)', fontWeight: selectedDoorIds.includes(door.id) ? 600 : 500 }}>
-                        {door.label}
-                      </span>
-                      {isDoorHidden(door) && (
-                        <span
-                          className="badge"
-                          style={{
-                            fontSize: '0.625rem',
-                            padding: '0.05rem 0.3rem',
-                            background: 'rgba(239, 68, 68, 0.15)',
-                            color: 'var(--color-danger)',
-                            border: '1px solid rgba(239, 68, 68, 0.3)',
-                            fontWeight: 600,
-                          }}
-                        >
-                          Hidden
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
-                      {door.campus_name && (
-                        <span
-                          style={{
-                            fontSize: '0.6875rem',
-                            padding: '0.1rem 0.35rem',
-                            borderRadius: 'var(--radius-sm, 4px)',
-                            background: 'rgba(36, 101, 245, 0.1)',
-                            color: 'var(--color-accent, #2465f5)',
-                            border: '1px solid rgba(36, 101, 245, 0.2)',
-                            fontWeight: 500,
-                          }}
-                        >
-                          🏫 {door.campus_name}
-                        </span>
-                      )}
-                      {door.location_name && (
-                        <span
-                          style={{
-                            fontSize: '0.6875rem',
-                            padding: '0.1rem 0.35rem',
-                            borderRadius: 'var(--radius-sm, 4px)',
-                            background: 'rgba(168, 85, 247, 0.1)',
-                            color: '#9333ea',
-                            border: '1px solid rgba(168, 85, 247, 0.2)',
-                            fontWeight: 500,
-                          }}
-                        >
-                          📍 {door.location_name}
-                        </span>
-                      )}
-                      {(door.building || door.floor) && (
-                        <span style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-                          {[door.building, door.floor].filter(Boolean).join(' · ')}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <span
-                    className={`badge ${
-                      door.current_state === 'locked' ? 'badge-danger' :
-                      door.current_state === 'unlocked' ? 'badge-success' :
-                      'badge-neutral'
-                    }`}
-                    style={{ marginLeft: 'auto', fontSize: '0.6875rem' }}
-                  >
-                    {door.current_state}
-                  </span>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Step 3: Time types (services only) */}
-      {step === 3 && sourceType === 'service' && (
-        <div>
-          <label className="form-label" style={{ marginBottom: '0.75rem', display: 'block' }}>
-            Which time types should trigger an unlock?
-          </label>
-          {(['service', 'rehearsal', 'other'] as PlanTimeType[]).map((tt) => (
-            <label
-              key={tt}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.625rem',
-                padding: '0.625rem',
-                marginBottom: '0.5rem',
-                borderRadius: 'var(--radius-md)',
-                cursor: 'pointer',
-                background: timeTypes.includes(tt)
-                  ? 'rgba(36,101,245,0.1)'
-                  : 'var(--color-bg-elevated)',
-                border: `1px solid ${timeTypes.includes(tt) ? 'rgba(36,101,245,0.3)' : 'var(--color-border)'}`,
-                transition: 'all 0.15s ease',
-                fontSize: '0.9375rem',
-                fontWeight: 500,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={timeTypes.includes(tt)}
-                onChange={() => toggleTimeType(tt)}
-              />
-              <span style={{ color: 'var(--color-text-primary)', textTransform: 'capitalize' }}>{tt}</span>
-            </label>
-          ))}
-        </div>
-      )}
-
-      {/* Final step: Timing Rules, Summary & Enable toggle */}
-      {((step === 4 && sourceType === 'service') || (step === 3 && sourceType === 'group')) && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {/* Timing Configuration Card */}
-          <div
-            style={{
-              padding: '0.875rem',
-              background: 'var(--color-bg-elevated)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--color-border)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.75rem',
-            }}
-          >
-            <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
-              Door Locking Rule
-            </label>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
-                <input
-                  type="radio"
-                  name="addTimingChoice"
-                  value="default"
-                  checked={timingChoice === 'default'}
-                  onChange={() => setTimingChoice('default')}
-                />
-                <span>
-                  Org Default ({orgMode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'} · {orgMode === 'after_start' ? `+${orgLock}m after start` : `+${orgLock}m after end`})
-                </span>
-              </label>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
-                <input
-                  type="radio"
-                  name="addTimingChoice"
-                  value="after_start"
-                  checked={timingChoice === 'after_start'}
-                  onChange={() => setTimingChoice('after_start')}
-                />
-                <span style={{ fontWeight: timingChoice === 'after_start' ? 600 : 400 }}>
-                  🛡️ Security Mode (Lock after service starts)
-                </span>
-              </label>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
-                <input
-                  type="radio"
-                  name="addTimingChoice"
-                  value="after_end"
-                  checked={timingChoice === 'after_end'}
-                  onChange={() => setTimingChoice('after_end')}
-                />
-                <span style={{ fontWeight: timingChoice === 'after_end' ? 600 : 400 }}>
-                  🕒 Standard Mode (Lock after service ends)
-                </span>
-              </label>
-            </div>
-
-            {timingChoice !== 'default' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid var(--color-border)' }}>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
-                    <span>Unlock before:</span>
-                    <strong style={{ color: 'var(--color-accent)' }}>{customUnlockMin}m</strong>
-                  </div>
-                  <input
-                    type="range"
-                    className="form-range"
-                    min="0"
-                    max="60"
-                    step="5"
-                    value={customUnlockMin}
-                    onChange={(e) => setCustomUnlockMin(Number(e.target.value))}
-                  />
-                </div>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
-                    <span>{timingChoice === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
-                    <strong style={{ color: 'var(--color-accent)' }}>{customLockMin}m</strong>
-                  </div>
-                  <input
-                    type="range"
-                    className="form-range"
-                    min="0"
-                    max={timingChoice === 'after_start' ? '120' : '60'}
-                    step="5"
-                    value={customLockMin}
-                    onChange={(e) => setCustomLockMin(Number(e.target.value))}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Optional Per-Door Timing Overrides */}
-          {selectedDoorIds.length > 0 && (
-            <div
-              style={{
-                padding: '0.875rem',
-                background: 'var(--color-bg-elevated)',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--color-border)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.75rem',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <label className="form-label" style={{ marginBottom: 0, fontWeight: 600, fontSize: '0.8125rem' }}>
-                  Per-Door Timing Overrides (Optional)
-                </label>
-                {Object.keys(doorTimings).length > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    style={{ fontSize: '0.6875rem', padding: '0.1rem 0.35rem', color: 'var(--color-text-muted)' }}
-                    onClick={() => setDoorTimings({})}
-                  >
-                    Reset All to Baseline
-                  </button>
-                )}
-              </div>
-              <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', margin: 0 }}>
-                Set custom timing rules for specific doors (e.g. lock side doors shortly after service starts while keeping main doors open).
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {selectedDoorIds.map((dId) => {
-                  const doorObj = doors.find((d) => d.id === dId || d.unifi_door_id === dId);
-                  const doorLabel = doorObj?.label || (dId.length > 8 ? `Door ${dId.slice(0, 8)}` : dId);
-                  const isCustom = doorTimings[dId] !== undefined;
-                  const dTiming = doorTimings[dId] || {};
-                  const dMode = dTiming.lock_timing_mode ?? 'after_start';
-                  const dUnlock = dTiming.unlock_offset_min ?? effectiveDefaultUnlock;
-                  const dLock = dTiming.lock_offset_min ?? 15;
-
-                  return (
-                    <div
-                      key={dId}
-                      style={{
-                        padding: '0.625rem 0.75rem',
-                        background: 'var(--color-bg-surface)',
-                        border: `1px solid ${isCustom ? 'rgba(36, 101, 245, 0.4)' : 'var(--color-border)'}`,
-                        borderRadius: 'var(--radius-sm)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.5rem',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--color-text-primary)' }}>
-                            {doorLabel}
-                          </span>
-                          <span
-                            className={`badge ${isCustom ? 'badge-info' : 'badge-neutral'}`}
-                            style={{ fontSize: '0.625rem', padding: '0.05rem 0.35rem' }}
-                          >
-                            {isCustom ? 'Custom Override' : 'Inherits Baseline'}
-                          </span>
-                        </div>
-
-                        {isCustom ? (
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem', color: 'var(--color-text-muted)' }}
-                            onClick={() => handleToggleDoorCustom(dId, false)}
-                          >
-                            ↩️ Reset
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            style={{ fontSize: '0.6875rem', padding: '0.15rem 0.4rem' }}
-                            onClick={() => handleToggleDoorCustom(dId, true)}
-                          >
-                            ⚙️ Customize Timing
-                          </button>
-                        )}
-                      </div>
-
-                      {isCustom && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingTop: '0.25rem' }}>
-                          <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
-                            <button
-                              type="button"
-                              className={`btn btn-sm ${dMode === 'after_start' ? 'btn-primary' : 'btn-secondary'}`}
-                              style={{ fontSize: '0.6875rem', padding: '0.2rem 0.5rem' }}
-                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start' })}
-                            >
-                              🛡️ Security Mode (after start)
-                            </button>
-                            <button
-                              type="button"
-                              className={`btn btn-sm ${dMode === 'after_end' ? 'btn-primary' : 'btn-secondary'}`}
-                              style={{ fontSize: '0.6875rem', padding: '0.2rem 0.5rem' }}
-                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end' })}
-                            >
-                              🕒 Standard Mode (after end)
-                            </button>
-                          </div>
-
-                          {/* Quick Presets */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
-                            <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Presets:</span>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)', background: 'rgba(36, 101, 245, 0.08)', color: 'var(--color-accent)' }}
-                              title="Keeps this door unlocked for the entire service"
-                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 0, unlock_offset_min: effectiveDefaultUnlock })}
-                            >
-                              🚪 Open entire service
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
-                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 0, unlock_offset_min: 15 })}
-                            >
-                              🔒 Lock at start (0m)
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
-                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_start', lock_offset_min: 15 })}
-                            >
-                              🔒 Lock 15m after start
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', border: '1px solid var(--color-border)' }}
-                              onClick={() => handleUpdateDoorTiming(dId, { lock_timing_mode: 'after_end', lock_offset_min: 15 })}
-                            >
-                              🕒 Lock 15m after end
-                            </button>
-                          </div>
-
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-                            <div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem', marginBottom: '0.15rem' }}>
-                                <span>Unlock before:</span>
-                                <strong style={{ color: 'var(--color-accent)' }}>{dUnlock}m</strong>
-                              </div>
-                              <input
-                                type="range"
-                                className="form-range"
-                                min="0"
-                                max="60"
-                                step="5"
-                                value={dUnlock}
-                                onChange={(e) => handleUpdateDoorTiming(dId, { unlock_offset_min: Number(e.target.value) })}
-                              />
-                            </div>
-                            <div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem', marginBottom: '0.15rem' }}>
-                                <span>{dMode === 'after_start' ? 'Lock after start:' : 'Lock after end:'}</span>
-                                <strong style={{ color: 'var(--color-accent)' }}>{dLock}m</strong>
-                              </div>
-                              <input
-                                type="range"
-                                className="form-range"
-                                min="0"
-                                max={dMode === 'after_start' ? '120' : '60'}
-                                step="5"
-                                value={dLock}
-                                onChange={(e) => handleUpdateDoorTiming(dId, { lock_offset_min: Number(e.target.value) })}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Live Projected Unlock & Lock Schedule */}
-          <ProjectedUnlockTimesPreview
-            sourceType={sourceType}
-            selectedResource={selectedResource}
-            timeTypes={timeTypes}
-            selectedDoorIds={selectedDoorIds}
-            doors={doors}
-            timingChoice={timingChoice}
-            customUnlockMin={customUnlockMin}
-            customLockMin={customLockMin}
-            doorTimings={doorTimings}
-            orgSettings={orgSettings}
-          />
-
-          <div
-            style={{
-              padding: '0.875rem',
-              background: 'var(--color-bg-elevated)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--color-border)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.5rem',
-              fontSize: '0.8125rem',
-            }}
-          >
-            <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>Mapping Summary</div>
-            <div>
-              <span style={{ color: 'var(--color-text-muted)' }}>Resource:</span>{' '}
-              <strong>{selectedResource?.name}</strong> ({sourceType})
-            </div>
-            <div>
-              <span style={{ color: 'var(--color-text-muted)' }}>Doors ({selectedDoorIds.length}):</span>{' '}
-              {doors.filter((d) => selectedDoorIds.includes(d.id)).map((d) => d.label).join(', ')}
-            </div>
-            {sourceType === 'service' && (
-              <div>
-                <span style={{ color: 'var(--color-text-muted)' }}>Time Types:</span>{' '}
-                {timeTypes.join(', ')}
-              </div>
-            )}
-            <div>
-              <span style={{ color: 'var(--color-text-muted)' }}>Locking Rule:</span>{' '}
-              {timingChoice === 'default'
-                ? `Default (${orgMode === 'after_start' ? `Locks +${orgLock}m after start` : `Locks +${orgLock}m after end`})`
-                : timingChoice === 'after_start'
-                ? `🛡️ Security Mode: Locks +${customLockMin}m after start · Unlocks -${customUnlockMin}m before`
-                : `🕒 Standard Mode: Locks +${customLockMin}m after end · Unlocks -${customUnlockMin}m before`}
-            </div>
-            {Object.keys(doorTimings).length > 0 && (
-              <div>
-                <span style={{ color: 'var(--color-text-muted)' }}>Door Timing Overrides:</span>{' '}
-                <span style={{ color: 'var(--color-accent)', fontWeight: 600 }}>
-                  {Object.keys(doorTimings).length} door{Object.keys(doorTimings).length === 1 ? '' : 's'} customized
-                </span>
-              </div>
-            )}
-          </div>
-
-          <div>
-            <label className="form-label" style={{ marginBottom: '0.75rem', display: 'block' }}>
-              Mapping Status
-            </label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <Toggle checked={enabled} onChange={setEnabled} />
-              <span style={{ fontSize: '0.9375rem', color: 'var(--color-text-primary)' }}>
-                {enabled ? 'Enabled — this mapping will automatically schedule door unlock commands' : 'Disabled — no door actions will be scheduled'}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
+type MainMappingTab = 'rules' | 'events' | 'people';
+type RuleSourceFilter = 'all' | 'service' | 'group';
 
 export default function MappingsPage() {
   const { orgId } = useAuth();
 
-  const [tab, setTab] = useState<MappingSourceType | 'user_policy' | 'unmapped' | 'mapped'>('service');
+  // Top-level workflow tabs
+  const [mainTab, setMainTab] = useState<MainMappingTab>('rules');
+  const [ruleSourceFilter, setRuleSourceFilter] = useState<RuleSourceFilter>('all');
+  const [eventsSubTab, setEventsSubTab] = useState<'unreviewed' | 'mapped' | 'dismissed' | 'all'>('unreviewed');
+  const [resourceFilterTab, setResourceFilterTab] = useState<'unmapped' | 'all'>('unmapped');
+
+  // Data state
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [policyMappings, setPolicyMappings] = useState<AccessPolicyMapping[]>([]);
   const [syncedUsers, setSyncedUsers] = useState<SyncedUser[]>([]);
@@ -3321,19 +111,28 @@ export default function MappingsPage() {
   const [doors, setDoors] = useState<Door[]>([]);
   const [scheduleWindows, setScheduleWindows] = useState<ScheduleWindow[]>([]);
   const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
-  const [pcoResources, setPcoResources] = useState<Array<PcoServiceType | PcoGroup>>([]);
+
+  // PCO resources (Service Types & Groups)
+  const [serviceResources, setServiceResources] = useState<PcoServiceType[]>([]);
+  const [groupResources, setGroupResources] = useState<PcoGroup[]>([]);
   const [pcoLoading, setPcoLoading] = useState(false);
   const [pcoError, setPcoError] = useState<string | null>(null);
   const [mappingsLoading, setMappingsLoading] = useState(true);
 
-  // Door mapping modals
-  const [modalOpen, setModalOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [toggling, setToggling] = useState<string | null>(null);
+  // Syncing state
+  const [syncingPcoSchedule, setSyncingPcoSchedule] = useState(false);
 
-  const [editTimingModalOpen, setEditTimingModalOpen] = useState(false);
+  // Door mapping create/edit modal state
+  const [mappingModalOpen, setMappingModalOpen] = useState(false);
   const [editingMapping, setEditingMapping] = useState<Mapping | null>(null);
-  const [savingTiming, setSavingTiming] = useState(false);
+  const [initialEditSection, setInitialEditSection] = useState<'doors' | 'timing'>('doors');
+  const [preselectedResource, setPreselectedResource] = useState<{
+    sourceType: MappingSourceType;
+    resourceId: string;
+    resourceLabel: string;
+  } | null>(null);
+  const [savingMapping, setSavingMapping] = useState(false);
+  const [toggling, setToggling] = useState<string | null>(null);
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -3350,36 +149,42 @@ export default function MappingsPage() {
   const [deletingPolicyLabel, setDeletingPolicyLabel] = useState('');
   const [deletingPolicy, setDeletingPolicy] = useState(false);
 
-  // Access Policy creation & management modals
+  // Access Policy creation modal
   const [schedules, setSchedules] = useState<UnifiSchedule[]>([]);
   const [accessPolicyModalOpen, setAccessPolicyModalOpen] = useState(false);
-  const [editingPolicy, setEditingPolicy] = useState<UnifiAccessPolicy | null>(null);
-  const [deleteAccessPolicyModalOpen, setDeleteAccessPolicyModalOpen] = useState(false);
-  const [deletingAccessPolicyId, setDeletingAccessPolicyId] = useState<string | null>(null);
-  const [deletingAccessPolicyName, setDeletingAccessPolicyName] = useState('');
-  const [deletingAccessPolicy, setDeletingAccessPolicy] = useState(false);
 
   const [syncingUsers, setSyncingUsers] = useState(false);
   const [syncingPolicies, setSyncingPolicies] = useState(false);
   const [enablingSync, setEnablingSync] = useState(false);
-  const [userSearchQuery, setUserSearchQuery] = useState('');
 
   const [feedback, setFeedback] = useState<{ text: string; ok: boolean } | null>(null);
 
   function showFeedback(text: string, ok: boolean) {
     setFeedback({ text, ok });
-    setTimeout(() => setFeedback(null), 4000);
+    setTimeout(() => setFeedback(null), 4500);
   }
 
-  // Handle URL query parameter for tab
+  // Handle URL query parameter for deep-linking (/mappings?tab=...)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
       const tabParam = urlParams.get('tab');
-      if (tabParam === 'unmapped' || tabParam === 'mapped') {
-        setTab('unmapped');
-      } else if (tabParam === 'service' || tabParam === 'group' || tabParam === 'user_policy') {
-        setTab(tabParam as any);
+      if (tabParam === 'unmapped') {
+        setMainTab('events');
+        setEventsSubTab('unreviewed');
+      } else if (tabParam === 'mapped') {
+        setMainTab('events');
+        setEventsSubTab('mapped');
+      } else if (tabParam === 'events') {
+        setMainTab('events');
+      } else if (tabParam === 'user_policy' || tabParam === 'people') {
+        setMainTab('people');
+      } else if (tabParam === 'service') {
+        setMainTab('rules');
+        setRuleSourceFilter('service');
+      } else if (tabParam === 'group') {
+        setMainTab('rules');
+        setRuleSourceFilter('group');
       }
     }
   }, []);
@@ -3394,51 +199,29 @@ export default function MappingsPage() {
     });
   }, [orgId]);
 
-  // Subscribe to live doors
+  // Real-time Firestore subscriptions
   useEffect(() => {
     if (!orgId) return;
-    const unsub = subscribeToDoors(orgId, (d) => setDoors(d));
-    return () => unsub();
+    const unsubDoors = subscribeToDoors(orgId, (d) => setDoors(d));
+    const unsubWindows = subscribeToScheduleWindows(orgId, (w) => setScheduleWindows(w));
+    const unsubPolicyMappings = subscribeToAccessPolicyMappings(orgId, (pm) => setPolicyMappings(pm));
+    const unsubSyncedUsers = subscribeToSyncedUsers(orgId, (su) => setSyncedUsers(su));
+    const unsubPolicies = subscribeToAccessPolicies(orgId, (ap) => setAccessPolicies(ap));
+    const unsubSchedules = subscribeToUnifiSchedules(orgId, (s) => setSchedules(s));
+
+    return () => {
+      unsubDoors();
+      unsubWindows();
+      unsubPolicyMappings();
+      unsubSyncedUsers();
+      unsubPolicies();
+      unsubSchedules();
+    };
   }, [orgId]);
 
-  // Subscribe to live schedule windows
-  useEffect(() => {
+  // Fetch both PCO Service Types & Groups so the unified Door Unlock Rules tab has complete data
+  const fetchAllPcoResources = useCallback(async () => {
     if (!orgId) return;
-    const unsub = subscribeToScheduleWindows(orgId, (w) => setScheduleWindows(w));
-    return () => unsub();
-  }, [orgId]);
-
-  // Subscribe to access policy mappings
-  useEffect(() => {
-    if (!orgId) return;
-    const unsub = subscribeToAccessPolicyMappings(orgId, (pm) => setPolicyMappings(pm));
-    return () => unsub();
-  }, [orgId]);
-
-  // Subscribe to synced users
-  useEffect(() => {
-    if (!orgId) return;
-    const unsub = subscribeToSyncedUsers(orgId, (su) => setSyncedUsers(su));
-    return () => unsub();
-  }, [orgId]);
-
-  // Subscribe to access policies
-  useEffect(() => {
-    if (!orgId) return;
-    const unsub = subscribeToAccessPolicies(orgId, (ap) => setAccessPolicies(ap));
-    return () => unsub();
-  }, [orgId]);
-
-  // Subscribe to UniFi schedules
-  useEffect(() => {
-    if (!orgId) return;
-    const unsub = subscribeToUnifiSchedules(orgId, (s) => setSchedules(s));
-    return () => unsub();
-  }, [orgId]);
-
-  // Load PCO resources when tab changes or orgId changes
-  const fetchPcoResources = useCallback(() => {
-    if (!orgId || tab === 'user_policy' || tab === 'unmapped' || tab === 'mapped') return;
     setPcoLoading(true);
     setPcoError(null);
     const getPcoResources = httpsCallable<
@@ -3446,20 +229,21 @@ export default function MappingsPage() {
       { items?: Array<PcoServiceType | PcoGroup>; resources?: Array<PcoServiceType | PcoGroup> }
     >(functions, 'getPcoResources');
 
-    getPcoResources({ orgId, type: tab as MappingSourceType })
-      .then((res) => {
-        setPcoResources(res.data.items ?? res.data.resources ?? []);
-        setPcoError(null);
-      })
-      .catch((err: any) => {
-        console.error('Failed to load PCO resources:', err);
-        setPcoError(err?.message || 'Failed to load Planning Center resources.');
-        setPcoResources([]);
-      })
-      .finally(() => setPcoLoading(false));
-  }, [orgId, tab]);
+    try {
+      const [srvRes, grpRes] = await Promise.all([
+        getPcoResources({ orgId, type: 'service' }),
+        getPcoResources({ orgId, type: 'group' }),
+      ]);
+      setServiceResources((srvRes.data.items ?? srvRes.data.resources ?? []) as PcoServiceType[]);
+      setGroupResources((grpRes.data.items ?? grpRes.data.resources ?? []) as PcoGroup[]);
+    } catch (err: any) {
+      console.error('Failed to load PCO resources:', err);
+      setPcoError(err?.message || 'Failed to load Planning Center resources.');
+    } finally {
+      setPcoLoading(false);
+    }
+  }, [orgId]);
 
-  // Fetch PCO lists for policy mapping
   const fetchPcoLists = useCallback(async () => {
     if (!orgId) return;
     setPcoListsLoading(true);
@@ -3478,33 +262,106 @@ export default function MappingsPage() {
   }, [orgId]);
 
   useEffect(() => {
-    if (tab === 'user_policy') {
-      fetchPcoLists();
-    } else {
-      fetchPcoResources();
+    if (!orgId) return;
+    fetchAllPcoResources();
+    fetchPcoLists();
+  }, [orgId, fetchAllPcoResources, fetchPcoLists]);
+
+  // Trigger PCO Schedule Sync
+  const handleTriggerPcoScheduleSync = useCallback(async () => {
+    if (!orgId) return;
+    setSyncingPcoSchedule(true);
+    try {
+      const triggerFn = httpsCallable<{ orgId: string }, any>(functions, 'triggerPcoSync');
+      await triggerFn({ orgId });
+      await fetchAllPcoResources();
+      showFeedback('Planning Center schedule & events synchronized.', true);
+    } catch (err: any) {
+      showFeedback(`Schedule sync failed: ${err?.message || 'Check Planning Center connection in Settings.'}`, false);
+    } finally {
+      setSyncingPcoSchedule(false);
     }
-  }, [tab, fetchPcoResources, fetchPcoLists]);
+  }, [orgId, fetchAllPcoResources]);
 
-  const filteredMappings = (tab !== 'user_policy' && tab !== 'unmapped' && tab !== 'mapped')
-    ? mappings.filter((m) => m.source_type === tab)
-    : [];
+  // Create or Update Mapping
+  const handleSaveMappingModal = useCallback(
+    async (data: MappingModalSavePayload, existingMappingId?: string) => {
+      if (!orgId) return;
+      setSavingMapping(true);
+      try {
+        if (existingMappingId) {
+          // Update existing mapping (doors, time_types, and timing rules)
+          await updateMapping(orgId, existingMappingId, data);
+          const existing = mappings.find((m) => m.id === existingMappingId);
+          const updatedMapping: Mapping = {
+            ...(existing || {
+              id: existingMappingId,
+              org_id: orgId,
+              created_at: new Date().toISOString(),
+            }),
+            ...data,
+            updated_at: new Date().toISOString(),
+          };
+          setMappings((prev) =>
+            prev.map((m) => (m.id === existingMappingId ? updatedMapping : m))
+          );
 
-  const handleToggle = useCallback(
+          await syncMappingTimingToScheduleWindows(
+            orgId,
+            updatedMapping,
+            orgSettings,
+            scheduleWindows
+          ).catch((err) => console.warn('Failed to immediately sync schedule windows:', err));
+
+          showFeedback(`Updated rule for "${data.pco_resource_label}".`, true);
+        } else {
+          // Create new mapping
+          const id = await createMapping(orgId, data);
+          const newMapping: Mapping = {
+            id,
+            org_id: orgId,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            ...data,
+          };
+          setMappings((prev) => [...prev, newMapping]);
+          showFeedback(`Created door rule for "${data.pco_resource_label}".`, true);
+        }
+
+        setMappingModalOpen(false);
+        setEditingMapping(null);
+        setPreselectedResource(null);
+
+        // Trigger background PCO sync so schedule windows & commands update immediately
+        const triggerFn = httpsCallable<{ orgId: string }, any>(functions, 'triggerPcoSync');
+        triggerFn({ orgId }).catch((syncErr) =>
+          console.warn('Background sync trigger after save mapping failed:', syncErr)
+        );
+      } catch (err: any) {
+        console.error('Failed to save mapping:', err);
+        showFeedback(`Failed to save rule: ${err?.message || 'Unknown error'}`, false);
+        throw err;
+      } finally {
+        setSavingMapping(false);
+      }
+    },
+    [orgId, mappings, orgSettings, scheduleWindows]
+  );
+
+  const handleToggleMapping = useCallback(
     async (id: string, enabled: boolean) => {
       if (!orgId) return;
       setToggling(id);
       try {
         await updateMapping(orgId, id, { enabled });
-        setMappings((prev) =>
-          prev.map((m) => (m.id === id ? { ...m, enabled } : m)),
-        );
+        setMappings((prev) => prev.map((m) => (m.id === id ? { ...m, enabled } : m)));
       } catch {
-        showFeedback('Failed to update mapping.', false);
+        showFeedback('Failed to update mapping status.', false);
       } finally {
         setToggling(null);
       }
     },
-    [orgId],
+    [orgId]
   );
 
   function openDeleteModal(id: string, label: string) {
@@ -3520,111 +377,13 @@ export default function MappingsPage() {
       await deleteMapping(orgId, deletingId);
       setMappings((prev) => prev.filter((m) => m.id !== deletingId));
       setDeleteModalOpen(false);
-      showFeedback('Mapping deleted.', true);
+      showFeedback('Door unlock rule deleted.', true);
     } catch {
-      showFeedback('Failed to delete mapping.', false);
+      showFeedback('Failed to delete rule.', false);
     } finally {
       setDeleting(false);
     }
   }, [orgId, deletingId]);
-
-  const handleSaveMapping = useCallback(
-    async (data: {
-      pco_resource_id: string;
-      pco_resource_label: string;
-      door_ids: string[];
-      door_labels: string[];
-      time_types: PlanTimeType[];
-      lock_timing_mode?: LockTimingMode;
-      lock_offset_min?: number;
-      unlock_offset_min?: number;
-      door_timings?: Record<string, DoorTimingConfig>;
-      enabled: boolean;
-    }) => {
-      if (!orgId || tab === 'user_policy' || tab === 'unmapped' || tab === 'mapped') return;
-      setSaving(true);
-      try {
-        const id = await createMapping(orgId, {
-          source_type: tab as MappingSourceType,
-          ...data,
-        });
-        const newMapping: Mapping = {
-          id,
-          org_id: orgId,
-          source_type: tab as MappingSourceType,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          ...data,
-        };
-        setMappings((prev) => [...prev, newMapping]);
-        setModalOpen(false);
-        showFeedback('Mapping created successfully.', true);
-
-        // Trigger PCO sync in the background so schedule windows & commands generate immediately
-        try {
-          const triggerFn = httpsCallable<{ orgId: string }, any>(functions, 'triggerPcoSync');
-          triggerFn({ orgId }).catch((syncErr) => {
-            console.warn('Background sync trigger after create mapping failed:', syncErr);
-          });
-        } catch (syncErr) {
-          console.warn('Background sync trigger after create mapping failed:', syncErr);
-        }
-      } catch (err: any) {
-        console.error('Failed to save mapping:', err);
-        showFeedback(`Failed to save mapping: ${err?.message || 'Unknown error'}`, false);
-        throw err;
-      } finally {
-        setSaving(false);
-      }
-    },
-    [orgId, tab],
-  );
-
-  const handleUpdateTiming = useCallback(
-    async (
-      mappingId: string,
-      updates: {
-        lock_timing_mode?: LockTimingMode;
-        lock_offset_min?: number;
-        unlock_offset_min?: number;
-        door_timings?: Record<string, DoorTimingConfig>;
-      },
-    ) => {
-      if (!orgId) return;
-      setSavingTiming(true);
-      try {
-        await updateMapping(orgId, mappingId, updates);
-        const existing = mappings.find((m) => m.id === mappingId);
-        if (existing) {
-          const updatedMapping: Mapping = { ...existing, ...updates };
-          await syncMappingTimingToScheduleWindows(orgId, updatedMapping, orgSettings, scheduleWindows).catch(
-            (err) => console.warn('Failed to immediately sync schedule windows:', err),
-          );
-        }
-        setMappings((prev) =>
-          prev.map((m) => (m.id === mappingId ? { ...m, ...updates } : m)),
-        );
-        setEditTimingModalOpen(false);
-        setEditingMapping(null);
-        showFeedback('Timing rule updated successfully.', true);
-
-        // Trigger PCO sync in background so schedule windows update immediately
-        try {
-          const triggerFn = httpsCallable<{ orgId: string }, any>(functions, 'triggerPcoSync');
-          triggerFn({ orgId }).catch((syncErr) => {
-            console.warn('Background sync trigger after timing update failed:', syncErr);
-          });
-        } catch (syncErr) {
-          console.warn('Background sync trigger after timing update failed:', syncErr);
-        }
-      } catch {
-        showFeedback('Failed to update timing rule.', false);
-      } finally {
-        setSavingTiming(false);
-      }
-    },
-    [orgId, mappings, orgSettings, scheduleWindows],
-  );
 
   // Policy Mapping Handlers
   const handleSavePolicyMapping = useCallback(
@@ -3640,9 +399,9 @@ export default function MappingsPage() {
       try {
         await createAccessPolicyMapping(orgId, data);
         setPolicyModalOpen(false);
-        showFeedback('Access policy mapping created.', true);
+        showFeedback('Access policy list mapping created.', true);
       } catch {
-        showFeedback('Failed to create access policy mapping.', false);
+        showFeedback('Failed to create list mapping.', false);
       } finally {
         setSavingPolicyMapping(false);
       }
@@ -3656,11 +415,9 @@ export default function MappingsPage() {
       setTogglingPolicyId(id);
       try {
         await updateAccessPolicyMapping(orgId, id, { enabled });
-        setPolicyMappings((prev) =>
-          prev.map((pm) => (pm.id === id ? { ...pm, enabled } : pm))
-        );
+        setPolicyMappings((prev) => prev.map((pm) => (pm.id === id ? { ...pm, enabled } : pm)));
       } catch {
-        showFeedback('Failed to update policy mapping.', false);
+        showFeedback('Failed to update list mapping.', false);
       } finally {
         setTogglingPolicyId(null);
       }
@@ -3680,9 +437,9 @@ export default function MappingsPage() {
     try {
       await deleteAccessPolicyMapping(orgId, deletingPolicyId);
       setDeletePolicyModalOpen(false);
-      showFeedback('Access policy mapping deleted.', true);
+      showFeedback('List mapping deleted.', true);
     } catch {
-      showFeedback('Failed to delete policy mapping.', false);
+      showFeedback('Failed to delete list mapping.', false);
     } finally {
       setDeletingPolicy(false);
     }
@@ -3695,11 +452,11 @@ export default function MappingsPage() {
       const triggerFn = httpsCallable<{ orgId: string }, any>(functions, 'triggerUserSync');
       const res = await triggerFn({ orgId });
       showFeedback(
-        `User Sync completed: ${res.data?.usersCreated ?? 0} created, ${res.data?.usersUpdated ?? 0} updated, ${res.data?.policiesRevoked ?? 0} policies revoked.`,
+        `People Sync completed: ${res.data?.usersCreated ?? 0} created, ${res.data?.usersUpdated ?? 0} updated, ${res.data?.policiesRevoked ?? 0} policies revoked.`,
         true
       );
     } catch (err: any) {
-      showFeedback(`User Sync failed: ${err.message}`, false);
+      showFeedback(`People Sync failed: ${err.message}`, false);
     } finally {
       setSyncingUsers(false);
     }
@@ -3711,9 +468,9 @@ export default function MappingsPage() {
     try {
       const syncFn = httpsCallable<{ orgId: string }, any>(functions, 'syncUnifiAccessPolicies');
       await syncFn({ orgId });
-      showFeedback('Access policies sync requested from local agent.', true);
+      showFeedback('Access policies sync requested from UniFi.', true);
     } catch (err: any) {
-      showFeedback(`Sync failed: ${err.message}`, false);
+      showFeedback(`Policy sync failed: ${err.message}`, false);
     } finally {
       setSyncingPolicies(false);
     }
@@ -3725,669 +482,562 @@ export default function MappingsPage() {
     try {
       await updateOrgSettings(orgId, { enable_user_sync: true });
       setOrgSettings((prev) => (prev ? { ...prev, enable_user_sync: true } : prev));
-      showFeedback('User & Access Policy Sync has been enabled for this organization.', true);
+      showFeedback('People & Access Policy Sync has been enabled.', true);
     } catch {
-      showFeedback('Failed to enable user sync.', false);
+      showFeedback('Failed to enable people sync.', false);
     } finally {
       setEnablingSync(false);
     }
   }, [orgId]);
 
-  const handleOpenCreatePolicy = useCallback(() => {
-    setEditingPolicy(null);
-    setAccessPolicyModalOpen(true);
-  }, []);
-
-  const handleOpenEditPolicy = useCallback((policy: UnifiAccessPolicy) => {
-    setEditingPolicy(policy);
-    setAccessPolicyModalOpen(true);
-  }, []);
-
-  const handleOpenDeleteAccessPolicy = useCallback((id: string, name: string) => {
-    setDeletingAccessPolicyId(id);
-    setDeletingAccessPolicyName(name);
-    setDeleteAccessPolicyModalOpen(true);
-  }, []);
-
-  const handleDeleteAccessPolicyConfirm = useCallback(async () => {
-    if (!orgId || !deletingAccessPolicyId) return;
-    setDeletingAccessPolicy(true);
-    try {
-      const fn = httpsCallable<{ orgId: string; policyId: string; unifiPolicyId?: string }>(
-        functions,
-        'deleteUnifiAccessPolicy'
-      );
-      await fn({ orgId, policyId: deletingAccessPolicyId });
-      setDeleteAccessPolicyModalOpen(false);
-      showFeedback('Access policy deletion requested.', true);
-    } catch (err: any) {
-      showFeedback(err?.message || 'Failed to delete access policy.', false);
-    } finally {
-      setDeletingAccessPolicy(false);
-    }
-  }, [orgId, deletingAccessPolicyId]);
-
-  // Filter synced users by query
-  const filteredUsers = syncedUsers.filter((u) => {
-    if (!userSearchQuery) return true;
-    const q = userSearchQuery.toLowerCase();
-    const nameMatch = u.full_name?.toLowerCase().includes(q) || `${u.first_name} ${u.last_name || ''}`.toLowerCase().includes(q);
-    const emailMatch = u.email?.toLowerCase().includes(q);
-    const listMatch = u.active_list_names?.some((l) => l.toLowerCase().includes(q));
-    const policyMatch = u.assigned_policy_names?.some((p) => p.toLowerCase().includes(q));
-    return nameMatch || emailMatch || listMatch || policyMatch;
-  });
-
-  // Compute unmapped count and one-time mapped count for badge display on the Unmapped Events tab
+  // Derived counts & filtered lists
   const now = new Date();
-  const unmappedCount = scheduleWindows.filter((w) => {
-    if (w.status === 'cancelled') return false;
-    const lockAt = w.lock_at ? new Date(w.lock_at) : null;
-    if (lockAt && lockAt < now) return false;
-    return (!w.door_ids || w.door_ids.length === 0) && w.review_status !== 'dismissed';
-  }).length;
+  const unmappedEventsCount = useMemo(
+    () =>
+      scheduleWindows.filter((w) => {
+        if (w.status === 'cancelled') return false;
+        const lockAt = w.lock_at ? new Date(w.lock_at) : null;
+        if (lockAt && lockAt < now) return false;
+        return (!w.door_ids || w.door_ids.length === 0) && w.review_status !== 'dismissed';
+      }).length,
+    [scheduleWindows]
+  );
 
-  const oneTimeMappedCount = scheduleWindows.filter((w) => {
-    if (w.status === 'cancelled') return false;
-    const lockAt = w.lock_at ? new Date(w.lock_at) : null;
-    if (lockAt && lockAt < now) return false;
-    return Boolean(
-      w.is_one_time ||
-      w.mapping_type === 'one_time' ||
-      (w.review_status === 'mapped' && (w.door_ids?.length ?? 0) > 0 && !w.mapping_id && !w.service_mapping_id && !w.group_mapping_id)
-    );
-  }).length;
+  const oneTimeMappedCount = useMemo(
+    () =>
+      scheduleWindows.filter((w) => {
+        if (w.status === 'cancelled') return false;
+        const lockAt = w.lock_at ? new Date(w.lock_at) : null;
+        if (lockAt && lockAt < now) return false;
+        return Boolean(
+          w.is_one_time ||
+            w.mapping_type === 'one_time' ||
+            (w.review_status === 'mapped' &&
+              (w.door_ids?.length ?? 0) > 0 &&
+              !w.mapping_id &&
+              !w.service_mapping_id &&
+              !w.group_mapping_id)
+        );
+      }).length,
+    [scheduleWindows]
+  );
+
+  const filteredMappings = useMemo(() => {
+    if (ruleSourceFilter === 'all') return mappings;
+    return mappings.filter((m) => m.source_type === ruleSourceFilter);
+  }, [mappings, ruleSourceFilter]);
+
+  const allPcoCatalog = useMemo(() => {
+    const srv = serviceResources.map((r) => ({ ...r, sourceType: 'service' as MappingSourceType }));
+    const grp = groupResources.map((r) => ({ ...r, sourceType: 'group' as MappingSourceType }));
+    const combined = [...srv, ...grp];
+    if (ruleSourceFilter === 'service') return srv;
+    if (ruleSourceFilter === 'group') return grp;
+    return combined;
+  }, [serviceResources, groupResources, ruleSourceFilter]);
+
+  const displayedCatalog = useMemo(() => {
+    if (resourceFilterTab === 'unmapped') {
+      return allPcoCatalog.filter((r) => !mappings.some((m) => m.pco_resource_id === r.id));
+    }
+    return allPcoCatalog;
+  }, [allPcoCatalog, mappings, resourceFilterTab]);
+
+  const unmappedCatalogCount = useMemo(
+    () => allPcoCatalog.filter((r) => !mappings.some((m) => m.pco_resource_id === r.id)).length,
+    [allPcoCatalog, mappings]
+  );
+
+  const isPcoConnected = Boolean(orgSettings?.pco_oauth?.access_token);
 
   return (
     <div>
-      {/* Header */}
-      <div className="page-header">
-        <h1 className="page-title">Mappings</h1>
-        {tab === 'user_policy' ? (
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handleTriggerUserSync}
-              disabled={syncingUsers}
-              title="Reconcile Planning Center list members with UniFi Access Users"
+      {/* 1. Unified Page Header & Sync Status Bar */}
+      <div
+        className="page-header"
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '1rem',
+          marginBottom: '1.25rem',
+        }}
+      >
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', flexWrap: 'wrap' }}>
+            <h1 className="page-title" style={{ margin: 0 }}>
+              Mappings &amp; Sync
+            </h1>
+            <span
+              className={`badge ${isPcoConnected ? 'badge-success' : 'badge-warning'}`}
+              style={{ fontSize: '0.7rem' }}
             >
-              <RefreshIcon spinning={syncingUsers} /> {syncingUsers ? 'Reconciling…' : 'Sync Users Now'}
+              {isPcoConnected
+                ? `✓ PCO Connected${orgSettings?.pco_oauth?.pco_org_name ? ` (${orgSettings.pco_oauth.pco_org_name})` : ''}`
+                : '⚠️ PCO Not Connected'}
+            </span>
+          </div>
+          <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', marginTop: '0.25rem', marginBottom: 0 }}>
+            Automate door unlocks from Planning Center Services &amp; Groups, review one-off events, and sync People Lists to UniFi Access Policies.
+          </p>
+        </div>
+
+        {/* Context-Aware Primary Actions */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={handleTriggerPcoScheduleSync}
+            disabled={syncingPcoSchedule}
+            title="Pull latest service plans and group events from Planning Center"
+          >
+            <RefreshIcon spinning={syncingPcoSchedule} />
+            {syncingPcoSchedule ? 'Syncing PCO…' : 'Sync PCO Schedule'}
+          </button>
+
+          {mainTab === 'rules' && (
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                setEditingMapping(null);
+                setPreselectedResource(null);
+                setMappingModalOpen(true);
+              }}
+            >
+              <PlusIcon />
+              Add Door Rule
             </button>
+          )}
+
+          {mainTab === 'people' && (
             <button className="btn btn-primary btn-sm" onClick={() => setPolicyModalOpen(true)}>
               <PlusIcon />
-              Add List Mapping
+              Map PCO List
             </button>
-          </div>
-        ) : (tab === 'unmapped' || tab === 'mapped') ? null : (
-          <button className="btn btn-primary btn-sm" onClick={() => setModalOpen(true)}>
-            <PlusIcon />
-            Add Mapping
-          </button>
-        )}
+          )}
+        </div>
       </div>
 
       {feedback && (
-        <div className={`alert ${feedback.ok ? 'alert-success' : 'alert-danger'}`} style={{ marginBottom: '1.5rem' }}>
+        <div className={`alert ${feedback.ok ? 'alert-success' : 'alert-danger'}`} style={{ marginBottom: '1.25rem' }}>
           {feedback.text}
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="tabs">
+      {/* 2. Three Purpose-Driven Workflow Tabs */}
+      <div className="tabs" style={{ marginBottom: '1.5rem' }}>
         <button
-          className={`tab ${tab === 'service' ? 'active' : ''}`}
-          onClick={() => setTab('service')}
+          className={`tab ${mainTab === 'rules' ? 'active' : ''}`}
+          onClick={() => setMainTab('rules')}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
         >
-          Services
+          <span>🚪 Door Unlock Rules</span>
+          <span
+            className="badge badge-neutral"
+            style={{ fontSize: '0.6875rem', padding: '0.05rem 0.45rem', borderRadius: '1rem' }}
+          >
+            {mappings.length}
+          </span>
         </button>
+
         <button
-          className={`tab ${tab === 'group' ? 'active' : ''}`}
-          onClick={() => setTab('group')}
+          className={`tab ${mainTab === 'events' ? 'active' : ''}`}
+          onClick={() => setMainTab('events')}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
         >
-          Groups
-        </button>
-        <button
-          className={`tab ${tab === 'user_policy' ? 'active' : ''}`}
-          onClick={() => setTab('user_policy')}
-        >
-          Lists & Users
-        </button>
-        <button
-          className={`tab ${tab === 'unmapped' ? 'active' : ''}`}
-          onClick={() => setTab('unmapped')}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}
-        >
-          Unmapped Events
-          {unmappedCount > 0 && (
+          <span>📅 Event Review Queue</span>
+          {unmappedEventsCount > 0 ? (
             <span
               className="badge badge-warning"
-              style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem', borderRadius: '1rem', fontWeight: 700 }}
-              title={`${unmappedCount} unmapped events needing review`}
+              style={{ fontSize: '0.6875rem', padding: '0.05rem 0.45rem', borderRadius: '1rem', fontWeight: 700 }}
+              title={`${unmappedEventsCount} upcoming unmapped events need review`}
             >
-              {unmappedCount}
+              {unmappedEventsCount} Needs Review
             </span>
-          )}
-        </button>
-        <button
-          className={`tab ${tab === 'mapped' ? 'active' : ''}`}
-          onClick={() => setTab('mapped')}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}
-        >
-          Mapped Events
-          {oneTimeMappedCount > 0 && (
+          ) : oneTimeMappedCount > 0 ? (
             <span
               className="badge badge-success"
-              style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem', borderRadius: '1rem', fontWeight: 700 }}
-              title={`${oneTimeMappedCount} one-time mapped events`}
+              style={{ fontSize: '0.6875rem', padding: '0.05rem 0.45rem', borderRadius: '1rem' }}
             >
-              {oneTimeMappedCount}
+              {oneTimeMappedCount} One-Time
             </span>
-          )}
+          ) : null}
+        </button>
+
+        <button
+          className={`tab ${mainTab === 'people' ? 'active' : ''}`}
+          onClick={() => setMainTab('people')}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+        >
+          <span>👥 People &amp; List Access</span>
+          <span
+            className="badge badge-neutral"
+            style={{ fontSize: '0.6875rem', padding: '0.05rem 0.45rem', borderRadius: '1rem' }}
+          >
+            {policyMappings.length}
+          </span>
         </button>
       </div>
 
-      {/* ─── TAB: Unmapped Events ─── */}
-      {tab === 'unmapped' && (
-        <UnmappedEventsTab defaultTab="unreviewed" />
-      )}
-
-      {/* ─── TAB: Mapped Events ─── */}
-      {tab === 'mapped' && (
-        <UnmappedEventsTab defaultTab="mapped" />
-      )}
-
-      {/* ─── TAB: Lists & Users ─── */}
-      {tab === 'user_policy' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          {/* Feature Disabled Banner */}
-          {!orgSettings?.enable_user_sync && (
-            <div
-              style={{
-                padding: '1rem 1.25rem',
-                background: 'rgba(234, 179, 8, 0.1)',
-                border: '1px solid rgba(234, 179, 8, 0.3)',
-                borderRadius: 'var(--radius-lg)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '1rem',
-                flexWrap: 'wrap',
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 600, color: 'var(--color-warning, #ca8a04)', fontSize: '0.9375rem' }}>
-                  User & Access Policy Sync is Currently Paused
-                </div>
-                <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginTop: '0.2rem' }}>
-                  Turn on the feature to automatically provision UniFi users and sync door policies based on active list mappings.
-                </div>
-              </div>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={handleEnableUserSyncFromBanner}
-                disabled={enablingSync}
-              >
-                {enablingSync ? 'Enabling…' : 'Enable Feature Now'}
-              </button>
-            </div>
-          )}
-
-          {/* Info Banner pointing to Schedule page */}
+      {/* ─── TAB 1: DOOR UNLOCK RULES (Services & Groups) ─────────────────── */}
+      {mainTab === 'rules' && (
+        <div>
+          {/* Filter Bar: All vs Services vs Groups + Org Default Info */}
           <div
             style={{
-              padding: '0.875rem 1.25rem',
-              background: 'var(--color-bg-elevated)',
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-lg)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
               flexWrap: 'wrap',
               gap: '0.75rem',
+              marginBottom: '1rem',
             }}
           >
-            <div style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
-              🔒 <strong>UniFi Access Policies & Schedules:</strong> Access policies define door permissions and weekly schedules for users and mapped lists.
-            </div>
-            <a
-              href="/schedule?tab=policies"
-              className="btn btn-secondary btn-sm"
-              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
-            >
-              Manage Access Policies in Schedules →
-            </a>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.9fr', gap: '1.5rem', alignItems: 'start' }}>
-            {/* Left: Active List Mappings */}
-            <div className="card" style={{ padding: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                  Active List Mappings ({policyMappings.length})
-                </span>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
-                  onClick={fetchPcoLists}
-                  disabled={pcoListsLoading}
-                >
-                  <RefreshIcon />
-                </button>
-              </div>
-
-              {policyMappings.length === 0 ? (
-                <div className="empty-state" style={{ padding: '1.5rem 0' }}>
-                  <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
-                    No list mappings configured
-                  </p>
-                  <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
-                    Click &quot;Add List Mapping&quot; to connect a Planning Center list with a UniFi access policy.
-                  </p>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  {policyMappings.map((pm) => (
-                    <div
-                      key={pm.id}
-                      style={{
-                        padding: '0.875rem',
-                        borderRadius: 'var(--radius-md)',
-                        background: 'var(--color-bg-elevated)',
-                        border: '1px solid var(--color-border)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.5rem',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
-                            {pm.pco_list_name}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.15rem' }}>
-                            Policy: <strong style={{ color: 'var(--color-primary)' }}>{pm.unifi_policy_name}</strong>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <label
-                            style={{
-                              position: 'relative',
-                              display: 'inline-block',
-                              width: '2.25rem',
-                              height: '1.25rem',
-                              cursor: togglingPolicyId === pm.id ? 'not-allowed' : 'pointer',
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={pm.enabled}
-                              disabled={togglingPolicyId === pm.id}
-                              onChange={(e) => handleTogglePolicyMapping(pm.id, e.target.checked)}
-                              style={{ opacity: 0, width: 0, height: 0 }}
-                            />
-                            <span
-                              style={{
-                                position: 'absolute',
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                backgroundColor: pm.enabled ? 'var(--color-primary)' : 'var(--color-border)',
-                                borderRadius: '1.25rem',
-                                transition: 'background-color 0.2s',
-                              }}
-                            >
-                              <span
-                                style={{
-                                  position: 'absolute',
-                                  height: '0.95rem',
-                                  width: '0.95rem',
-                                  left: pm.enabled ? '1.15rem' : '0.15rem',
-                                  bottom: '0.15rem',
-                                  backgroundColor: 'white',
-                                  borderRadius: '50%',
-                                  transition: 'left 0.2s',
-                                }}
-                              />
-                            </span>
-                          </label>
-
-                          <button
-                            className="btn btn-ghost btn-sm"
-                            style={{ color: 'var(--color-danger)', padding: '0.2rem' }}
-                            onClick={() => openDeletePolicyModal(pm.id, pm.pco_list_name)}
-                          >
-                            <TrashIcon />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Right: Synced Users Table */}
-            <div className="card" style={{ padding: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                  Synced Users ({syncedUsers.length})
-                </span>
-
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="Filter users by name, email, list…"
-                  value={userSearchQuery}
-                  onChange={(e) => setUserSearchQuery(e.target.value)}
-                  style={{ maxWidth: '16rem', fontSize: '0.8125rem', padding: '0.35rem 0.65rem' }}
-                />
-              </div>
-
-              {filteredUsers.length === 0 ? (
-                <div className="empty-state" style={{ padding: '2rem 0' }}>
-                  <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
-                    {syncedUsers.length === 0 ? 'No users synced yet' : 'No users match filter'}
-                  </p>
-                  <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
-                    {syncedUsers.length === 0
-                      ? 'Add a list mapping and click "Sync Users Now" to reconcile memberships.'
-                      : 'Try clearing your search filter.'}
-                  </p>
-                </div>
-              ) : (
-                <div style={{ overflowX: 'auto' }}>
-                  <table className="table" style={{ width: '100%', fontSize: '0.8125rem' }}>
-                    <thead>
-                      <tr>
-                        <th>User</th>
-                        <th>Contact</th>
-                        <th>Active PCO Lists</th>
-                        <th>Assigned UniFi Policies</th>
-                        <th>Status</th>
-                        <th>Last Synced</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredUsers.map((u) => {
-                        const hasPolicies = u.assigned_policy_ids && u.assigned_policy_ids.length > 0;
-                        return (
-                          <tr key={u.id}>
-                            <td>
-                              <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                                {u.full_name || `${u.first_name} ${u.last_name || ''}`.trim()}
-                              </div>
-                            </td>
-                            <td>
-                              <div style={{ color: 'var(--color-text-secondary)' }}>{u.email || '—'}</div>
-                              {u.phone_number && (
-                                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>{u.phone_number}</div>
-                              )}
-                            </td>
-                            <td>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                                {u.active_list_names && u.active_list_names.length > 0 ? (
-                                  u.active_list_names.map((ln, i) => (
-                                    <span key={i} className="badge badge-info" style={{ fontSize: '0.6875rem' }}>
-                                      {ln}
-                                    </span>
-                                  ))
-                                ) : (
-                                  <span style={{ color: 'var(--color-text-muted)' }}>None</span>
-                                )}
-                              </div>
-                            </td>
-                            <td>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                                {u.assigned_policy_names && u.assigned_policy_names.length > 0 ? (
-                                  u.assigned_policy_names.map((pn, i) => (
-                                    <span key={i} className="badge badge-success" style={{ fontSize: '0.6875rem' }}>
-                                      {pn}
-                                    </span>
-                                  ))
-                                ) : (
-                                  <span style={{ color: 'var(--color-text-muted)' }}>None (Revoked)</span>
-                                )}
-                              </div>
-                            </td>
-                            <td>
-                              {hasPolicies ? (
-                                <span className="badge badge-success" style={{ fontSize: '0.6875rem' }}>
-                                  Active ({u.assigned_policy_ids.length})
-                                </span>
-                              ) : (
-                                <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
-                                  No Policy
-                                </span>
-                              )}
-                            </td>
-                            <td style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
-                              {u.last_synced_at ? safeFormatDistanceToNow(parseSafeDate(u.last_synced_at)) : '—'}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ─── TABS: Services / Groups ─── */}
-      {tab !== 'user_policy' && tab !== 'unmapped' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.9fr', gap: '1.5rem', alignItems: 'start' }}>
-          {/* Left panel: PCO resources & Pulled Times */}
-          <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.875rem' }}>
-              <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                {tab === 'service' ? 'PCO Service Types & Times' : 'PCO Groups & Schedules'}
-              </span>
+            <div style={{ display: 'flex', gap: '0.375rem', background: 'var(--color-bg-surface)', padding: '0.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}>
               <button
-                className="btn btn-ghost btn-sm"
-                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                onClick={fetchPcoResources}
-                disabled={pcoLoading}
-                title="Refresh resources from Planning Center"
+                className={`btn btn-sm ${ruleSourceFilter === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ fontSize: '0.8125rem', padding: '0.3rem 0.75rem' }}
+                onClick={() => setRuleSourceFilter('all')}
               >
-                <RefreshIcon />
+                All Rules ({mappings.length})
+              </button>
+              <button
+                className={`btn btn-sm ${ruleSourceFilter === 'service' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ fontSize: '0.8125rem', padding: '0.3rem 0.75rem' }}
+                onClick={() => setRuleSourceFilter('service')}
+              >
+                ⛪ Services ({mappings.filter((m) => m.source_type === 'service').length})
+              </button>
+              <button
+                className={`btn btn-sm ${ruleSourceFilter === 'group' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ fontSize: '0.8125rem', padding: '0.3rem 0.75rem' }}
+                onClick={() => setRuleSourceFilter('group')}
+              >
+                👥 Groups ({mappings.filter((m) => m.source_type === 'group').length})
               </button>
             </div>
 
-            {pcoLoading ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="skeleton" style={{ height: '5rem', borderRadius: 'var(--radius-md)' }} />
-                ))}
-              </div>
-            ) : pcoError ? (
-              <div style={{ padding: '1rem', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-md)' }}>
-                <p style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.8125rem', marginBottom: '0.75rem', fontWeight: 500 }}>
-                  {pcoError}
-                </p>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
-                  onClick={fetchPcoResources}
-                >
-                  Retry
-                </button>
-              </div>
-            ) : pcoResources.length === 0 ? (
-              <div className="empty-state" style={{ padding: '1.5rem 0' }}>
-                <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
-                  No {tab === 'service' ? 'service types' : 'groups'} found
-                </p>
-                <p style={{ fontSize: '0.8125rem' }}>
-                  Ensure Planning Center is connected in Settings.
-                </p>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {pcoResources.map((r) => {
-                  const isMapped = mappings.some((m) => m.pco_resource_id === r.id);
-                  const upcomingTimes = r.upcoming_times ?? [];
-                  const freq = (r as PcoServiceType).frequency;
-                  const sched = (r as PcoGroup).schedule;
-                  const planTitle = (r as PcoServiceType).upcoming_plan_title;
+            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>
+                Org Default Timing:{' '}
+                <strong style={{ color: 'var(--color-text-secondary)' }}>
+                  {orgSettings?.lock_timing_mode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'} (-
+                  {orgSettings?.unlock_buffer_before_min ?? 15}m / +
+                  {orgSettings?.lock_timing_mode === 'after_start'
+                    ? (orgSettings?.lock_after_start_min ?? 15)
+                    : (orgSettings?.lock_buffer_after_min ?? 15)}
+                  m)
+                </strong>
+              </span>
+              <a href="/settings" style={{ color: 'var(--color-accent)', textDecoration: 'none', fontWeight: 500 }}>
+                Change
+              </a>
+            </div>
+          </div>
 
-                  return (
-                    <div
-                      key={r.id}
-                      style={{
-                        padding: '0.75rem',
-                        borderRadius: 'var(--radius-md)',
-                        background: 'var(--color-bg-elevated)',
-                        border: '1px solid var(--color-border)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.5rem',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
-                        <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
-                          {r.name}
-                        </span>
-                        {isMapped ? (
-                          <span className="badge badge-success" style={{ fontSize: '0.6875rem' }}>
-                            Mapped
-                          </span>
-                        ) : (
-                          <span className="badge badge-neutral" style={{ fontSize: '0.6875rem' }}>
-                            Unmapped
-                          </span>
-                        )}
-                      </div>
+          <div
+            className="mappings-split-grid"
+            style={{ display: 'grid', gridTemplateColumns: '1.85fr 1.15fr', gap: '1.5rem', alignItems: 'start' }}
+          >
+            {/* Left Primary Column: Active Door Unlock Rules */}
+            <div>
+              <div
+                style={{
+                  fontWeight: 600,
+                  color: 'var(--color-text-primary)',
+                  marginBottom: '0.75rem',
+                  fontSize: '0.875rem',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <span>Active Door Unlock Rules ({filteredMappings.length})</span>
+              </div>
 
-                      {(freq || sched) && (
-                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-                          <ClockIcon />
-                          <span>{freq ? `Frequency: ${freq}` : `Schedule: ${sched}`}</span>
+              {mappingsLoading ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {[1, 2].map((i) => (
+                    <div key={i} className="card skeleton" style={{ height: '9rem', borderRadius: 'var(--radius-lg)' }} />
+                  ))}
+                </div>
+              ) : filteredMappings.length === 0 ? (
+                <div className="card empty-state" style={{ padding: '3rem 1.5rem' }}>
+                  <p className="empty-state-title">No door unlock rules configured yet</p>
+                  <p style={{ fontSize: '0.875rem', maxWidth: '26rem', margin: '0.35rem auto 1rem' }}>
+                    Select a Planning Center Service Type or Group from the catalog on the right, or click &quot;Add Door Rule&quot; to automate door unlocks.
+                  </p>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      setEditingMapping(null);
+                      setPreselectedResource(null);
+                      setMappingModalOpen(true);
+                    }}
+                  >
+                    <PlusIcon /> Add Door Rule
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  {filteredMappings.map((m) => {
+                    const matchedResource =
+                      m.source_type === 'service'
+                        ? serviceResources.find((r) => r.id === m.pco_resource_id)
+                        : groupResources.find((r) => r.id === m.pco_resource_id);
+
+                    return (
+                      <ActiveMappingCard
+                        key={m.id}
+                        mapping={m}
+                        pcoResource={matchedResource}
+                        doors={doors}
+                        scheduleWindows={scheduleWindows}
+                        orgSettings={orgSettings}
+                        onToggle={handleToggleMapping}
+                        onDelete={openDeleteModal}
+                        onEditMapping={(mappingToEdit, section = 'doors') => {
+                          setEditingMapping(mappingToEdit);
+                          setInitialEditSection(section);
+                          setPreselectedResource(null);
+                          setMappingModalOpen(true);
+                        }}
+                        toggling={toggling === m.id}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Right Column: PCO Catalog with 1-Click "Map Doors" */}
+            <div className="card" style={{ padding: '1.25rem', position: 'sticky', top: '4.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                  Planning Center Catalog
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${resourceFilterTab === 'unmapped' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ fontSize: '0.725rem', padding: '0.2rem 0.5rem', height: 'auto' }}
+                    onClick={() => setResourceFilterTab('unmapped')}
+                  >
+                    Unmapped ({unmappedCatalogCount})
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${resourceFilterTab === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ fontSize: '0.725rem', padding: '0.2rem 0.5rem', height: 'auto' }}
+                    onClick={() => setResourceFilterTab('all')}
+                  >
+                    All ({allPcoCatalog.length})
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem' }}
+                    onClick={fetchAllPcoResources}
+                    disabled={pcoLoading}
+                    title="Refresh resources from Planning Center"
+                  >
+                    <RefreshIcon spinning={pcoLoading} />
+                  </button>
+                </div>
+              </div>
+
+              <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: 0, marginBottom: '0.875rem' }}>
+                Click <strong>Map Doors</strong> on any Planning Center Service Type or Group below to create an automated unlock rule.
+              </p>
+
+              {pcoLoading ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="skeleton" style={{ height: '4.25rem', borderRadius: 'var(--radius-md)' }} />
+                  ))}
+                </div>
+              ) : pcoError ? (
+                <div style={{ padding: '1rem', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-md)' }}>
+                  <p style={{ color: 'var(--color-danger, #ef4444)', fontSize: '0.8125rem', marginBottom: '0.75rem', fontWeight: 500 }}>
+                    {pcoError}
+                  </p>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
+                    onClick={fetchAllPcoResources}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : displayedCatalog.length === 0 ? (
+                <div className="empty-state" style={{ padding: '1.5rem 0' }}>
+                  <p className="empty-state-title" style={{ fontSize: '0.875rem' }}>
+                    {resourceFilterTab === 'unmapped'
+                      ? 'All PCO resources are mapped! 🎉'
+                      : 'No PCO resources found'}
+                  </p>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                    {resourceFilterTab === 'unmapped'
+                      ? 'Switch to "All" to view already-mapped Service Types and Groups.'
+                      : 'Ensure Planning Center is connected in Settings.'}
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem', maxHeight: '38rem', overflowY: 'auto', paddingRight: '0.15rem' }}>
+                  {displayedCatalog.map((r) => {
+                    const existingRule = mappings.find((m) => m.pco_resource_id === r.id);
+                    const upcomingTimes = r.upcoming_times ?? [];
+                    const freq = (r as PcoServiceType).frequency;
+                    const sched = (r as PcoGroup).schedule;
+
+                    return (
+                      <div
+                        key={`${r.sourceType}-${r.id}`}
+                        style={{
+                          padding: '0.75rem',
+                          borderRadius: 'var(--radius-md)',
+                          background: 'var(--color-bg-elevated)',
+                          border: '1px solid var(--color-border)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.45rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+                              <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--color-text-primary)' }}>
+                                {r.name}
+                              </span>
+                              <span className={`badge ${r.sourceType === 'service' ? 'badge-info' : 'badge-neutral'}`} style={{ fontSize: '0.625rem' }}>
+                                {r.sourceType === 'service' ? 'Service' : 'Group'}
+                              </span>
+                            </div>
+                            {(freq || sched) && (
+                              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.15rem' }}>
+                                <ClockIcon />
+                                <span>{freq || sched}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {existingRule ? (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', height: 'auto', color: 'var(--color-success)' }}
+                              onClick={() => {
+                                setEditingMapping(existingRule);
+                                setInitialEditSection('doors');
+                                setPreselectedResource(null);
+                                setMappingModalOpen(true);
+                              }}
+                            >
+                              ✓ Mapped (Edit)
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              style={{ fontSize: '0.725rem', padding: '0.25rem 0.6rem', height: 'auto', whiteSpace: 'nowrap' }}
+                              onClick={() => {
+                                setEditingMapping(null);
+                                setPreselectedResource({
+                                  sourceType: r.sourceType,
+                                  resourceId: r.id,
+                                  resourceLabel: r.name,
+                                });
+                                setMappingModalOpen(true);
+                              }}
+                            >
+                              Map Doors →
+                            </button>
+                          )}
                         </div>
-                      )}
 
-                      {planTitle && (
-                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                          Plan: {planTitle}
-                        </div>
-                      )}
-
-                      {upcomingTimes.length > 0 ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: '0.125rem' }}>
-                          <span style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>
-                            Times:
-                          </span>
+                        {upcomingTimes.length > 0 && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                            {upcomingTimes.map((t) => {
+                            {upcomingTimes.slice(0, 2).map((t) => {
                               const style = timeTypeBadgeStyle(t.time_type);
                               return (
                                 <span
                                   key={t.id}
                                   style={{
-                                    fontSize: '0.6875rem',
-                                    padding: '0.15rem 0.4rem',
+                                    fontSize: '0.65rem',
+                                    padding: '0.1rem 0.35rem',
                                     borderRadius: 'var(--radius-sm)',
                                     background: style.bg,
                                     color: style.color,
                                     border: `1px solid ${style.border}`,
-                                    fontWeight: 500,
                                   }}
                                 >
-                                  {formatIsoTimeRange(t.starts_at, t.ends_at)} {t.time_type ? `(${t.time_type})` : ''}
+                                  {formatIsoTimeRange(t.starts_at, t.ends_at)}
                                 </span>
                               );
                             })}
+                            {upcomingTimes.length > 2 && (
+                              <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', alignSelf: 'center' }}>
+                                +{upcomingTimes.length - 2} more
+                              </span>
+                            )}
                           </div>
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
-                          No upcoming times scheduled
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Right panel: Active Mappings with Full Details */}
-          <div>
-            <div
-              style={{
-                fontWeight: 600,
-                color: 'var(--color-text-primary)',
-                marginBottom: '0.875rem',
-                fontSize: '0.875rem',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-              }}
-            >
-              <span>Active Mappings ({filteredMappings.length})</span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 'normal' }}>
-                Org Defaults: {orgSettings?.lock_timing_mode === 'after_start' ? '🛡️ Security Mode' : '🕒 Standard Mode'} (-{orgSettings?.unlock_buffer_before_min ?? 15}m / +{orgSettings?.lock_timing_mode === 'after_start' ? (orgSettings?.lock_after_start_min ?? 15) : (orgSettings?.lock_buffer_after_min ?? 15)}m)
-              </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-
-            {mappingsLoading ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                {[1, 2].map((i) => (
-                  <div key={i} className="card skeleton" style={{ height: '10rem', borderRadius: 'var(--radius-lg)' }} />
-                ))}
-              </div>
-            ) : filteredMappings.length === 0 ? (
-              <div className="card empty-state">
-                <p className="empty-state-title">
-                  No {tab === 'service' ? 'service' : 'group'} mappings yet
-                </p>
-                <p style={{ fontSize: '0.875rem' }}>
-                  Click &quot;Add Mapping&quot; to link a Planning Center {tab === 'service' ? 'service type' : 'group'} with UniFi doors.
-                </p>
-              </div>
-            ) : (
-              <div>
-                {filteredMappings.map((m) => {
-                  const matchedResource = pcoResources.find((r) => r.id === m.pco_resource_id);
-
-                  return (
-                    <ActiveMappingCard
-                      key={m.id}
-                      mapping={m}
-                      pcoResource={matchedResource}
-                      doors={doors}
-                      scheduleWindows={scheduleWindows}
-                      orgSettings={orgSettings}
-                      onToggle={handleToggle}
-                      onDelete={openDeleteModal}
-                      onEditTiming={(mappingToEdit) => {
-                        setEditingMapping(mappingToEdit);
-                        setEditTimingModalOpen(true);
-                      }}
-                      toggling={toggling === m.id}
-                    />
-                  );
-                })}
-              </div>
-            )}
           </div>
         </div>
       )}
 
-      {/* Add Mapping Modal */}
-      <AddMappingModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        sourceType={(tab === 'user_policy' || tab === 'unmapped' || tab === 'mapped') ? 'service' : tab}
-        pcoResources={pcoResources}
+      {/* ─── TAB 2: EVENT REVIEW QUEUE (Needs Review & One-Time Mapped) ───── */}
+      {mainTab === 'events' && (
+        <UnmappedEventsTab defaultTab={eventsSubTab} embedded={true} />
+      )}
+
+      {/* ─── TAB 3: PEOPLE & LIST ACCESS (PCO Lists → UniFi Policies) ─────── */}
+      {mainTab === 'people' && (
+        <PeopleListSyncTab
+          orgSettings={orgSettings}
+          policyMappings={policyMappings}
+          syncedUsers={syncedUsers}
+          accessPolicies={accessPolicies}
+          pcoListsLoading={pcoListsLoading}
+          syncingUsers={syncingUsers}
+          syncingPolicies={syncingPolicies}
+          enablingSync={enablingSync}
+          togglingPolicyId={togglingPolicyId}
+          onEnableUserSync={handleEnableUserSyncFromBanner}
+          onTriggerUserSync={handleTriggerUserSync}
+          onSyncPolicies={handleSyncPolicies}
+          onOpenAddListMapping={() => setPolicyModalOpen(true)}
+          onOpenCreatePolicy={() => setAccessPolicyModalOpen(true)}
+          onRefreshLists={fetchPcoLists}
+          onTogglePolicyMapping={handleTogglePolicyMapping}
+          onDeletePolicyMapping={openDeletePolicyModal}
+        />
+      )}
+
+      {/* Unified Create & Edit Mapping Modal */}
+      <MappingModal
+        isOpen={mappingModalOpen}
+        onClose={() => {
+          setMappingModalOpen(false);
+          setEditingMapping(null);
+          setPreselectedResource(null);
+        }}
+        editingMapping={editingMapping}
+        initialEditSection={initialEditSection}
+        preselectedResource={preselectedResource}
+        defaultSourceType={ruleSourceFilter === 'group' ? 'group' : 'service'}
+        serviceResources={serviceResources}
+        groupResources={groupResources}
         doors={doors}
         pcoError={pcoError}
         orgSettings={orgSettings}
-        onSave={handleSaveMapping}
-        saving={saving}
+        onSave={handleSaveMappingModal}
+        saving={savingMapping}
       />
 
       {/* Add Policy Mapping Modal */}
@@ -4401,18 +1051,15 @@ export default function MappingsPage() {
         saving={savingPolicyMapping}
         onRefreshPolicies={handleSyncPolicies}
         onRefreshLists={fetchPcoLists}
-        onCreateNewPolicy={handleOpenCreatePolicy}
+        onCreateNewPolicy={() => setAccessPolicyModalOpen(true)}
       />
 
-      {/* Access Policy Modal (Create / Edit) */}
+      {/* Access Policy Modal (Create) */}
       <AccessPolicyModal
         isOpen={accessPolicyModalOpen}
-        onClose={() => {
-          setAccessPolicyModalOpen(false);
-          setEditingPolicy(null);
-        }}
+        onClose={() => setAccessPolicyModalOpen(false)}
         orgId={orgId || ''}
-        policy={editingPolicy}
+        policy={null}
         doors={doors}
         schedules={schedules}
         onSaved={() => {
@@ -4420,43 +1067,28 @@ export default function MappingsPage() {
         }}
       />
 
-      {/* Edit Timing Modal */}
-      <EditTimingModal
-        isOpen={editTimingModalOpen}
-        onClose={() => {
-          setEditTimingModalOpen(false);
-          setEditingMapping(null);
-        }}
-        mapping={editingMapping}
-        doors={doors}
-        orgSettings={orgSettings}
-        pcoResources={pcoResources}
-        onSave={handleUpdateTiming}
-        saving={savingTiming}
-      />
-
       {/* Delete Door Mapping Confirmation */}
       <Modal
         isOpen={deleteModalOpen}
         onClose={() => !deleting && setDeleteModalOpen(false)}
-        title="Delete Mapping"
+        title="Delete Door Unlock Rule"
         footer={
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
             <button className="btn btn-secondary" onClick={() => setDeleteModalOpen(false)} disabled={deleting}>
               Cancel
             </button>
             <button className="btn btn-danger" onClick={handleDeleteConfirm} disabled={deleting}>
-              {deleting ? 'Deleting…' : 'Delete'}
+              {deleting ? 'Deleting…' : 'Delete Rule'}
             </button>
           </div>
         }
       >
         <p style={{ color: 'var(--color-text-secondary)' }}>
-          Are you sure you want to delete the mapping for{' '}
+          Are you sure you want to delete the door unlock rule for{' '}
           <strong style={{ color: 'var(--color-text-primary)' }}>{deletingLabel}</strong>?
         </p>
         <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginTop: '0.75rem' }}>
-          This will not delete existing schedule windows, but no new automated windows or door commands will be created for this resource.
+          Existing schedule windows will remain, but no new automated door unlock windows will be created for this resource.
         </p>
       </Modal>
 
@@ -4464,7 +1096,7 @@ export default function MappingsPage() {
       <Modal
         isOpen={deletePolicyModalOpen}
         onClose={() => !deletingPolicy && setDeletePolicyModalOpen(false)}
-        title="Delete Access Policy Mapping"
+        title="Delete List Mapping"
         footer={
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
             <button className="btn btn-secondary" onClick={() => setDeletePolicyModalOpen(false)} disabled={deletingPolicy}>
@@ -4485,34 +1117,9 @@ export default function MappingsPage() {
         </p>
       </Modal>
 
-      {/* Delete Access Policy Confirmation */}
-      <Modal
-        isOpen={deleteAccessPolicyModalOpen}
-        onClose={() => !deletingAccessPolicy && setDeleteAccessPolicyModalOpen(false)}
-        title="Delete UniFi Access Policy"
-        footer={
-          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-            <button className="btn btn-secondary" onClick={() => setDeleteAccessPolicyModalOpen(false)} disabled={deletingAccessPolicy}>
-              Cancel
-            </button>
-            <button className="btn btn-danger" onClick={handleDeleteAccessPolicyConfirm} disabled={deletingAccessPolicy}>
-              {deletingAccessPolicy ? 'Deleting…' : 'Delete Policy'}
-            </button>
-          </div>
-        }
-      >
-        <p style={{ color: 'var(--color-text-secondary)' }}>
-          Are you sure you want to delete access policy{' '}
-          <strong style={{ color: 'var(--color-text-primary)' }}>{deletingAccessPolicyName}</strong> from UniFi Access?
-        </p>
-        <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginTop: '0.75rem' }}>
-          This will remove the policy from UniFi Access and clear it from any mapped lists or users.
-        </p>
-      </Modal>
-
       <style>{`
-        @media (max-width: 900px) {
-          div[style*="grid-template-columns: 1.1fr 1.9fr"] {
+        @media (max-width: 960px) {
+          .mappings-split-grid {
             grid-template-columns: 1fr !important;
           }
         }
@@ -4520,4 +1127,3 @@ export default function MappingsPage() {
     </div>
   );
 }
-

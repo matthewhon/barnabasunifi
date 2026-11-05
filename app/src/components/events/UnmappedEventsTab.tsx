@@ -144,9 +144,10 @@ function isUrgent(startsAtIso: string | unknown): boolean {
 
 export interface UnmappedEventsTabProps {
   defaultTab?: 'unreviewed' | 'mapped' | 'dismissed' | 'all';
+  embedded?: boolean;
 }
 
-export function UnmappedEventsTab({ defaultTab = 'unreviewed' }: UnmappedEventsTabProps = {}) {
+export function UnmappedEventsTab({ defaultTab = 'unreviewed', embedded = false }: UnmappedEventsTabProps = {}) {
   const { orgId, profile, role, isSuperAdmin } = useAuth();
   const { showToast } = useToast();
   const isManager = role === 'org_admin' || role === 'manager' || isSuperAdmin;
@@ -570,44 +571,46 @@ export function UnmappedEventsTab({ defaultTab = 'unreviewed' }: UnmappedEventsT
 
   return (
     <>
-      {/* Header */}
-      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
-        <div>
-          <h2 style={{ fontSize: '1.125rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.625rem', margin: 0 }}>
-            {tab === 'mapped' ? 'Mapped Upcoming Events' : 'Unmapped Upcoming Events'}
-            {tab === 'mapped' ? (
-              oneTimeMappedWindows.length > 0 && (
-                <span className="badge badge-success" style={{ fontSize: '0.8125rem', padding: '0.2rem 0.6rem' }}>
-                  {oneTimeMappedWindows.length} Mapped
-                </span>
-              )
-            ) : (
-              unreviewedWindows.length > 0 && (
-                <span className="badge badge-warning" style={{ fontSize: '0.8125rem', padding: '0.2rem 0.6rem' }}>
-                  {unreviewedWindows.length} Needs Review
-                </span>
-              )
-            )}
-          </h2>
-          <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
-            {tab === 'mapped'
-              ? 'View and manage upcoming Planning Center events with door schedules assigned.'
-              : 'Review upcoming Planning Center plans and group events that do not have door schedule access mapped.'}
-          </p>
-        </div>
+      {/* Header (only when standalone, not embedded inside MappingsPage) */}
+      {!embedded && (
+        <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
+          <div>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.625rem', margin: 0 }}>
+              {tab === 'mapped' ? 'Mapped Upcoming Events' : 'Unmapped Upcoming Events'}
+              {tab === 'mapped' ? (
+                oneTimeMappedWindows.length > 0 && (
+                  <span className="badge badge-success" style={{ fontSize: '0.8125rem', padding: '0.2rem 0.6rem' }}>
+                    {oneTimeMappedWindows.length} Mapped
+                  </span>
+                )
+              ) : (
+                unreviewedWindows.length > 0 && (
+                  <span className="badge badge-warning" style={{ fontSize: '0.8125rem', padding: '0.2rem 0.6rem' }}>
+                    {unreviewedWindows.length} Needs Review
+                  </span>
+                )
+              )}
+            </h2>
+            <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
+              {tab === 'mapped'
+                ? 'View and manage upcoming Planning Center events with door schedules assigned.'
+                : 'Review upcoming Planning Center plans and group events that do not have door schedule access mapped.'}
+            </p>
+          </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={handleSyncNow}
-            disabled={syncing}
-            title="Fetch latest events from Planning Center"
-          >
-            <RefreshIcon spinning={syncing} />
-            {syncing ? 'Syncing...' : 'Sync PCO Events'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleSyncNow}
+              disabled={syncing}
+              title="Fetch latest events from Planning Center"
+            >
+              <RefreshIcon spinning={syncing} />
+              {syncing ? 'Syncing...' : 'Sync PCO Events'}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(14rem, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>

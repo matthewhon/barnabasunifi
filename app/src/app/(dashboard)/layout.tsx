@@ -308,7 +308,26 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       title: 'Planning Center',
       items: [
         { href: '/schedule', label: 'Schedules & Windows', icon: <CalendarIcon /> },
-        { href: '/mappings', label: 'Mappings & Sync', icon: <LinkIcon /> },
+        {
+          href: '/mappings',
+          label: 'Mappings & Sync',
+          icon: <LinkIcon />,
+          badge:
+            unmappedCount > 0 ? (
+              <span
+                className="badge badge-warning"
+                style={{
+                  fontSize: '0.6875rem',
+                  padding: '0.05rem 0.45rem',
+                  borderRadius: '1rem',
+                  fontWeight: 700,
+                }}
+                title={`${unmappedCount} upcoming unmapped event(s) need door review`}
+              >
+                {unmappedCount}
+              </span>
+            ) : undefined,
+        },
       ],
     },
     {

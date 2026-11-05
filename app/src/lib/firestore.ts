@@ -869,6 +869,8 @@ export async function syncMappingTimingToScheduleWindows(
 
     const windowRef = doc(db, 'organizations', orgId, 'schedule_windows', win.id);
     batch.update(windowRef, {
+      door_ids: doorIds,
+      door_labels: mapping.door_labels?.length ? mapping.door_labels : win.door_labels,
       unlock_at: Timestamp.fromDate(finalUnlockAt),
       lock_at: Timestamp.fromDate(finalLockAt),
       lock_timing_mode: defaultLockMode,
