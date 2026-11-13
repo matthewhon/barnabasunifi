@@ -6,6 +6,8 @@ import { readFileSync } from 'fs';
 const pkg = JSON.parse(readFileSync(path.join(__dirname, 'package.json'), 'utf-8'));
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
+  outputFileTracingRoot: path.join(__dirname, '..'),
   env: {
     NEXT_PUBLIC_APP_VERSION: pkg.version,
   },
