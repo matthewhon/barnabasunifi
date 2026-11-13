@@ -220,6 +220,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [signingOut, setSigningOut] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [provisionTimedOut, setProvisionTimedOut] = useState(false);
+  const [redirectingToMobile, setRedirectingToMobile] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
   const awaitingOrg = !loading && !!user && !orgId && !isSuperAdmin;
@@ -246,6 +247,40 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.push('/login');
     }
   }, [loading, user, router]);
+
+  // Screen-size detection: automatically show mobile version on small viewports
+  useEffect(() => {
+    if (loading || !user) return;
+    const mq = window.matchMedia('(max-width: 767px)');
+
+    const maybeRedirectToMobile = (matches: boolean) => {
+      if (!matches) {
+        setRedirectingToMobile(false);
+        return;
+      }
+      if (sessionStorage.getItem('view_preference') === 'desktop') {
+        setRedirectingToMobile(false);
+        return;
+      }
+
+      setRedirectingToMobile(true);
+      const target =
+        pathname === '/visitors'
+          ? '/m/visitors'
+          : pathname === '/schedule'
+          ? '/m/schedules'
+          : '/m';
+      router.replace(target);
+    };
+
+    maybeRedirectToMobile(mq.matches);
+
+    const handleChange = (e: MediaQueryListEvent) => {
+      maybeRedirectToMobile(e.matches);
+    };
+    mq.addEventListener('change', handleChange);
+    return () => mq.removeEventListener('change', handleChange);
+  }, [loading, user, pathname, router]);
 
   // Bound the "provisioning" wait — otherwise a failed createOrganization call
   // leaves the user on a spinner that never resolves.
@@ -362,7 +397,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     });
   }
 
-  if (loading) {
+  if (loading || redirectingToMobile) {
     return (
       <div
         style={{
@@ -783,6 +818,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               href="/m"
               className="btn btn-ghost btn-sm"
               title="Open Mobile View"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  sessionStorage.removeItem('view_preference');
+                }
+              }}
               style={{
                 padding: '0.375rem 0.625rem',
                 fontSize: '0.75rem',

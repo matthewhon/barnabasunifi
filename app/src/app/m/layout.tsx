@@ -125,18 +125,16 @@ export default function MobileLayout({ children }: { children: React.ReactNode }
               >
                 {org?.name ?? 'UniFi Access'}
               </div>
-              {role && (
-                <div
-                  style={{
-                    fontSize: '0.6875rem',
-                    color: 'var(--color-text-secondary)',
-                    textTransform: 'capitalize',
-                    lineHeight: 1.1,
-                  }}
-                >
-                  {role.replace('_', ' ')}
-                </div>
-              )}
+              <div
+                style={{
+                  fontSize: '0.6875rem',
+                  color: 'var(--color-text-secondary)',
+                  textTransform: 'capitalize',
+                  lineHeight: 1.1,
+                }}
+              >
+                {role ? `${role.replace('_', ' ')} · ` : ''}Mobile v{process.env.NEXT_PUBLIC_APP_VERSION || '1.2.0'}
+              </div>
             </div>
           </div>
 
@@ -144,6 +142,11 @@ export default function MobileLayout({ children }: { children: React.ReactNode }
             <Link
               href="/"
               title="Switch to full desktop dashboard"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  sessionStorage.setItem('view_preference', 'desktop');
+                }
+              }}
               style={{
                 minHeight: '2.25rem',
                 padding: '0 0.625rem',

@@ -47,6 +47,12 @@ export default function LoginPage() {
     if (raw && raw.startsWith('/') && !raw.startsWith('//')) {
       return raw;
     }
+    if (
+      window.matchMedia('(max-width: 767px)').matches &&
+      sessionStorage.getItem('view_preference') !== 'desktop'
+    ) {
+      return '/m';
+    }
     return '/';
   }
 
