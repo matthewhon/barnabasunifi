@@ -10,7 +10,7 @@
     "shell": "firebase functions:shell",
     "deploy": "firebase deploy --only functions"
   },
-  "engines": { "node": "20" },
+  "engines": { "node": "22" },
   "main": "lib/index.js",
   "dependencies": {
     "firebase-admin": "^12.0.0",
