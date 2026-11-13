@@ -41,6 +41,15 @@ export default function LoginPage() {
     return 'An unexpected error occurred. Please try again.';
   }
 
+  function getSafeRedirectTarget(): string {
+    if (typeof window === 'undefined') return '/';
+    const raw = new URLSearchParams(window.location.search).get('redirect');
+    if (raw && raw.startsWith('/') && !raw.startsWith('//')) {
+      return raw;
+    }
+    return '/';
+  }
+
   async function handleEmailLogin(e: React.FormEvent) {
     e.preventDefault();
     if (!email.trim() || !password) return;
@@ -50,7 +59,7 @@ export default function LoginPage() {
 
     try {
       await signInWithEmail(email.trim(), password);
-      router.push('/');
+      router.push(getSafeRedirectTarget());
     } catch (err: unknown) {
       setError(getErrorMessage(err));
     } finally {
@@ -64,7 +73,7 @@ export default function LoginPage() {
 
     try {
       await signInWithGoogle();
-      router.push('/');
+      router.push(getSafeRedirectTarget());
     } catch (err: unknown) {
       const code = (err && typeof err === 'object' ? (err as { code?: string }).code : '') ?? '';
       if (code !== 'auth/popup-closed-by-user') {

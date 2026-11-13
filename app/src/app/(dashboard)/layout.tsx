@@ -779,6 +779,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
           {/* User + sign out (top bar, visible on mobile) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Link
+              href="/m"
+              className="btn btn-ghost btn-sm"
+              title="Open Mobile View"
+              style={{
+                padding: '0.375rem 0.625rem',
+                fontSize: '0.75rem',
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-text-secondary)',
+                textDecoration: 'none',
+              }}
+            >
+              Mobile
+            </Link>
             <div
               style={{
                 width: '1.875rem',

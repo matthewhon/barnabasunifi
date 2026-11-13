@@ -768,3 +768,125 @@ code:not(pre code) {
   border-color: rgba(239, 68, 68, 0.3);
   color: #fca5a5;
 }
+
+/* ─── Native Modal Dialog & Mobile Sheet ─────────────────────────────────────── */
+
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: rgba(5, 7, 12, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.mobile-sheet-dialog {
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  width: 100%;
+  max-width: 34rem;
+  max-height: 90dvh;
+  margin: auto auto 0 auto;
+  border-radius: 1.25rem 1.25rem 0 0;
+  padding: 0;
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+}
+
+.mobile-sheet-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 640px) {
+  .mobile-sheet-dialog {
+    margin: auto;
+    border-radius: 1.25rem;
+  }
+}
+
+/* ─── Mobile Web App Controls ────────────────────────────────────────────────── */
+
+.mobile-shell {
+  min-height: 100dvh;
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-input {
+  width: 100%;
+  min-height: 48px;
+  font-size: 1rem;
+  line-height: 1.4;
+  padding: 0.6875rem 0.875rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.mobile-input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  border-color: var(--color-accent);
+}
+
+.mobile-input:user-invalid {
+  border-color: var(--color-danger);
+}
+
+.mobile-touch-btn {
+  min-height: 48px;
+  border-radius: var(--radius-lg);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0 1rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), transform var(--transition-fast), opacity var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-touch-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.mobile-touch-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mobile-pill {
+  min-height: 38px;
+  padding: 0.375rem 0.875rem;
+  border-radius: var(--radius-full);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  transition: all var(--transition-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-pill[aria-pressed='true'],
+.mobile-pill.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #ffffff;
+}
