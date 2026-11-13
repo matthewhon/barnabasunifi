@@ -14,6 +14,8 @@ interface InviteUserRequest {
 interface InviteUserResponse {
   success: true;
   uid: string;
+  isNewUser: boolean;
+  setupLink: string;
 }
 
 /**
@@ -38,22 +40,20 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
     }
 
     const callerClaims = request.auth.token;
-
-    // Verify caller is an org_admin
-    if (callerClaims.role !== 'org_admin') {
-      throw new HttpsError(
-        'permission-denied',
-        'Only org admins can invite users.'
-      );
-    }
-
     const { email, role, orgId } = request.data;
 
-    // Verify the caller is an admin of the org they are inviting to
-    if (callerClaims.orgId !== orgId) {
+    if (!orgId || typeof orgId !== 'string') {
+      throw new HttpsError('invalid-argument', 'orgId is required.');
+    }
+
+    const isSuperAdmin = callerClaims.role === 'super_admin';
+    const isOrgAdmin = callerClaims.orgId === orgId && callerClaims.role === 'org_admin';
+
+    // Verify caller is an org_admin for this org or a super_admin
+    if (!isSuperAdmin && !isOrgAdmin) {
       throw new HttpsError(
         'permission-denied',
-        'You can only invite users to your own organization.'
+        'Only org admins or super admins can invite users.'
       );
     }
 
@@ -73,6 +73,7 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
     const auth = getAuth();
 
     let uid: string;
+    let isNewUser = false;
 
     // Try to find the user by email; create if not found
     try {
@@ -97,6 +98,7 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
         emailVerified: false,
       });
       uid = newUser.uid;
+      isNewUser = true;
     }
 
     // Set custom claims on the invited user
@@ -116,6 +118,8 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
       { merge: true }
     );
 
-    return { success: true, uid };
+    const setupLink = await auth.generatePasswordResetLink(email);
+
+    return { success: true, uid, isNewUser, setupLink };
   }
 );

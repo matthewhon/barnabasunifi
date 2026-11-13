@@ -92,6 +92,8 @@ export default function UsersPage() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<UserRole>('viewer');
   const [inviting, setInviting] = useState(false);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [inviteIsNewUser, setInviteIsNewUser] = useState(true);
 
   // Remove modal
   const [removeModalOpen, setRemoveModalOpen] = useState(false);
@@ -132,28 +134,36 @@ export default function UsersPage() {
     fetchOrgUsers();
   }, [fetchOrgUsers]);
 
+  const closeInviteModal = useCallback(() => {
+    if (inviting) return;
+    setInviteOpen(false);
+    setInviteEmail('');
+    setInviteRole('viewer');
+    setInviteLink(null);
+  }, [inviting]);
+
   const handleInvite = useCallback(async () => {
     if (!orgId || !inviteEmail.trim()) return;
     setInviting(true);
+    setInviteLink(null);
     try {
       const inviteUser = httpsCallable<
         { orgId: string; email: string; role: UserRole },
-        { success: boolean }
+        { success: boolean; uid: string; isNewUser: boolean; setupLink: string }
       >(functions, 'inviteUser');
-      await inviteUser({ orgId, email: inviteEmail.trim(), role: inviteRole });
+      const res = await inviteUser({ orgId, email: inviteEmail.trim(), role: inviteRole });
 
       writeAuditLog(orgId, {
         action: 'user_invited',
         message: `Invited user ${inviteEmail.trim()} as ${inviteRole}`,
       }).catch((e) => console.warn('Audit log error:', e));
 
-      showToast(`Invitation sent to ${inviteEmail.trim()}.`, 'success');
-      setInviteOpen(false);
-      setInviteEmail('');
-      setInviteRole('viewer');
+      setInviteIsNewUser(res.data.isNewUser);
+      setInviteLink(res.data.setupLink);
+      showToast(`User ${inviteEmail.trim()} added. Share the setup link with them.`, 'success');
       fetchOrgUsers();
     } catch (err: unknown) {
-      const msg = (err as { message?: string }).message ?? 'Failed to send invitation.';
+      const msg = (err as { message?: string }).message ?? 'Failed to invite user.';
       showToast(msg, 'error');
     } finally {
       setInviting(false);
@@ -419,52 +429,82 @@ export default function UsersPage() {
       {/* Invite Modal */}
       <Modal
         isOpen={inviteOpen}
-        onClose={() => !inviting && setInviteOpen(false)}
+        onClose={closeInviteModal}
         title="Invite User"
         footer={
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-            <button className="btn btn-secondary" onClick={() => setInviteOpen(false)} disabled={inviting}>
-              Cancel
+            <button className="btn btn-secondary" onClick={closeInviteModal} disabled={inviting}>
+              {inviteLink ? 'Close' : 'Cancel'}
             </button>
-            <button
-              className="btn btn-primary"
-              onClick={handleInvite}
-              disabled={inviting || !inviteEmail.trim()}
-            >
-              {inviting ? 'Sending…' : 'Send Invitation'}
-            </button>
+            {!inviteLink && (
+              <button
+                className="btn btn-primary"
+                onClick={handleInvite}
+                disabled={inviting || !inviteEmail.trim()}
+              >
+                {inviting ? 'Inviting…' : 'Create Invite Link'}
+              </button>
+            )}
           </div>
         }
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div className="form-group">
-            <label className="form-label">Email Address</label>
-            <input
-              type="email"
-              className="form-input"
-              placeholder="colleague@church.org"
-              value={inviteEmail}
-              onChange={(e) => setInviteEmail(e.target.value)}
-              autoFocus
-              disabled={inviting}
-            />
+        {inviteLink ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <p style={{ fontSize: '0.875rem', color: 'var(--color-success)', fontWeight: 500 }}>
+              {inviteIsNewUser
+                ? `Account created for ${inviteEmail.trim()}! Copy and send this link so they can set their password:`
+                : `${inviteEmail.trim()} was added to the organization! They can sign in with their existing account, or use this link to reset their password:`}
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <input
+                type="text"
+                readOnly
+                className="form-input"
+                value={inviteLink}
+                style={{ fontSize: '0.8125rem', fontFamily: 'monospace' }}
+              />
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  navigator.clipboard.writeText(inviteLink);
+                  showToast('Copied to clipboard!', 'success');
+                }}
+              >
+                Copy
+              </button>
+            </div>
           </div>
-          <div className="form-group">
-            <label className="form-label">Role</label>
-            <select
-              className="form-select"
-              value={inviteRole}
-              onChange={(e) => setInviteRole(e.target.value as UserRole)}
-              disabled={inviting}
-            >
-              {ROLES.map((r) => (
-                <option key={r.value} value={r.value}>
-                  {r.label} — {r.description}
-                </option>
-              ))}
-            </select>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div className="form-group">
+              <label className="form-label">Email Address</label>
+              <input
+                type="email"
+                className="form-input"
+                placeholder="colleague@church.org"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                autoFocus
+                disabled={inviting}
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Role</label>
+              <select
+                className="form-select"
+                value={inviteRole}
+                onChange={(e) => setInviteRole(e.target.value as UserRole)}
+                disabled={inviting}
+              >
+                {ROLES.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label} — {r.description}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-        </div>
+        )}
       </Modal>
 
       {/* Reset Password Modal */}

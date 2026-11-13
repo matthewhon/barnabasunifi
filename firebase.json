@@ -2,7 +2,8 @@
   "apphosting": [
     {
       "backendId": "barnabasunifi",
-      "rootDir": "app"
+      "rootDir": "app",
+      "alwaysDeployFromSource": true
     }
   ],
   "functions": [
