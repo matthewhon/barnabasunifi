@@ -18,7 +18,7 @@ import type {
   UnifiSchedule,
 } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
-import { getDoorUnlockStatus } from '@/lib/door-status-utils';
+import { formatDoorShortName, getDoorUnlockStatus } from '@/lib/door-status-utils';
 import { useToast } from '@/components/ui/Toast';
 import MobileDialog from '@/components/mobile/MobileDialog';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
@@ -160,10 +160,11 @@ export default function MobileDoorsPage() {
         actor_uid: user.uid,
         status: 'queued',
       });
+      const shortName = formatDoorShortName(unlockTarget.label);
       showToast(
         selectedDuration === 0
-          ? `Hold-open command sent for ${unlockTarget.label}`
-          : `Unlock (${selectedDuration}m) sent for ${unlockTarget.label}`,
+          ? `Hold-open command sent for ${shortName}`
+          : `Unlock (${selectedDuration}m) sent for ${shortName}`,
         'success'
       );
       setUnlockTarget(null);
@@ -189,7 +190,7 @@ export default function MobileDoorsPage() {
         actor_uid: user.uid,
         status: 'queued',
       });
-      showToast(`Lock command sent for ${lockTarget.label}`, 'success');
+      showToast(`Lock command sent for ${formatDoorShortName(lockTarget.label)}`, 'success');
       setLockTarget(null);
     } catch {
       showToast('Failed to send lock command. Please try again.', 'error');
@@ -393,7 +394,7 @@ export default function MobileDoorsPage() {
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {door.label}
+                        {formatDoorShortName(door.label)}
                       </h2>
                       <span
                         className={`badge ${
@@ -496,7 +497,7 @@ export default function MobileDoorsPage() {
         onClose={() => {
           if (!submitting) setUnlockTarget(null);
         }}
-        title={unlockTarget ? `Unlock ${unlockTarget.label}` : 'Unlock Door'}
+        title={unlockTarget ? `Unlock ${formatDoorShortName(unlockTarget.label)}` : 'Unlock Door'}
         subtitle="Choose how long this door should stay unlocked."
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -588,7 +589,7 @@ export default function MobileDoorsPage() {
         onClose={() => {
           if (!submitting) setLockTarget(null);
         }}
-        title={lockTarget ? `Lock ${lockTarget.label}?` : 'Lock Door'}
+        title={lockTarget ? `Lock ${formatDoorShortName(lockTarget.label)}?` : 'Lock Door'}
         subtitle="This will immediately lock the door and clear any active manual hold."
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>

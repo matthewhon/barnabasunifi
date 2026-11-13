@@ -8,6 +8,7 @@ import {
   subscribeToUnifiSchedules,
 } from '@/lib/firestore';
 import type { DayOfWeek, ScheduleWindow, UnifiSchedule } from '@/lib/types';
+import { formatDoorShortName } from '@/lib/door-status-utils';
 import { safeIsPast } from '@/lib/date-utils';
 import { format } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
@@ -233,7 +234,7 @@ export default function MobileSchedulesPage() {
               }}
             >
               <DoorOpen size={11} />
-              {label}
+              {formatDoorShortName(label)}
             </span>
           ))}
         </div>
@@ -489,7 +490,7 @@ export default function MobileSchedulesPage() {
                       }}
                     >
                       <DoorOpen size={11} />
-                      {label}
+                      {formatDoorShortName(label)}
                     </span>
                   ))}
                 </div>

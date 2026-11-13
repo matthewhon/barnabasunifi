@@ -1,6 +1,19 @@
 import type { Door, ScheduleWindow, UnifiSchedule, DayOfWeek } from '@/lib/types';
 import { safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
 
+/**
+ * Extracts the concise door name from a hierarchical UniFi label
+ * (e.g. "Dream Machine Church - 1F - Main Door" -> "Main Door").
+ */
+export function formatDoorShortName(label?: string | null): string {
+  if (!label) return 'Door';
+  const parts = label
+    .split(/\s+-\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : label.trim();
+}
+
 const DAYS: DayOfWeek[] = [
   'sunday',
   'monday',

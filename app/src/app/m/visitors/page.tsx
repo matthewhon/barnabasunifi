@@ -11,6 +11,7 @@ import {
 } from '@/lib/firestore';
 import type { Door, UnifiVisitor } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
+import { formatDoorShortName } from '@/lib/door-status-utils';
 import { parseSafeDate, safeFormat } from '@/lib/date-utils';
 import { format } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
@@ -501,7 +502,7 @@ export default function MobileVisitorsPage() {
                           color: 'var(--color-text-secondary)',
                         }}
                       >
-                        {label}
+                        {formatDoorShortName(label)}
                       </span>
                     ))}
                   </div>
@@ -881,7 +882,7 @@ export default function MobileVisitorsPage() {
                         }}
                       />
                       <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>
-                        {door.label}
+                        {formatDoorShortName(door.label)}
                         {door.campus_name ? (
                           <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>
                             {' '}
