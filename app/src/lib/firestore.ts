@@ -56,6 +56,19 @@ export async function getOrgSettings(orgId: string): Promise<OrgSettings | null>
   return snap.exists() ? (snap.data() as OrgSettings) : null;
 }
 
+function stripUndefinedDeep(obj: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined) continue;
+    if (v !== null && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype) {
+      out[k] = stripUndefinedDeep(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 export async function updateOrgSettings(
   orgId: string,
   settings: Partial<OrgSettings>,
@@ -64,6 +77,13 @@ export async function updateOrgSettings(
   for (const [key, value] of Object.entries(settings)) {
     if (value === undefined) {
       cleanSettings[key] = deleteField();
+    } else if (
+      value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      Object.getPrototypeOf(value) === Object.prototype
+    ) {
+      cleanSettings[key] = stripUndefinedDeep(value as Record<string, any>);
     } else {
       cleanSettings[key] = value;
     }

@@ -511,17 +511,18 @@ export default function SettingsPage() {
       await updateOrgSettings(orgId, {
         unifi_protect: {
           enabled: protectEnabled,
-          host: protectHost.trim() || undefined,
+          host: protectHost.trim(),
           api_key: protectApiKey.trim(),
           skip_tls_verify: protectSkipTls,
           stream_mode: protectStreamMode,
-          stream_base_url: protectStreamBaseUrl.trim() || undefined,
+          stream_base_url: protectStreamBaseUrl.trim(),
           onsite_public_ips: onsiteList,
         },
       });
       showToast('UniFi Protect camera settings saved!', 'success');
-    } catch {
-      showToast('Failed to save UniFi Protect settings.', 'error');
+    } catch (err: any) {
+      console.error('Failed to save UniFi Protect settings:', err);
+      showToast(`Failed to save UniFi Protect settings${err?.message ? `: ${err.message}` : '.'}`, 'error');
     } finally {
       setSavingProtect(false);
     }
