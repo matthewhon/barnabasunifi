@@ -16,6 +16,7 @@ import VisitorModal from '@/components/visitors/VisitorModal';
 import { format, isFuture } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import { parseSafeDate, safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
+import { formatDoorDisplayName } from '@/lib/door-status-utils';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -567,7 +568,7 @@ export default function VisitorsPage() {
             <option value="all">All Doors</option>
             {validDoors.map((d) => (
               <option key={d.id} value={d.unifi_door_id || d.id}>
-                {d.label}
+                {formatDoorDisplayName(d.label)}
               </option>
             ))}
           </select>
@@ -695,7 +696,7 @@ export default function VisitorsPage() {
                               border: '1px solid var(--color-border)',
                             }}
                           >
-                            🚪 {labelText}
+                            🚪 {formatDoorDisplayName(labelText)}
                           </span>
                         );
                       })

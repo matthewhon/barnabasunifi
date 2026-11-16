@@ -1,5 +1,5 @@
 import type { Door, ScheduleWindow, UnifiSchedule, DayOfWeek } from '@/lib/types';
-import { safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
+import { parseSafeDate, safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
 
 /**
  * Extracts the concise door name from a hierarchical UniFi label
@@ -12,6 +12,32 @@ export function formatDoorShortName(label?: string | null): string {
     .map((part) => part.trim())
     .filter(Boolean);
   return parts.length > 0 ? parts[parts.length - 1] : label.trim();
+}
+
+/**
+ * Formats a hierarchical UniFi door label into "<Door Name> - <Site/Building>".
+ * e.g. "Dream Machine Church - 1F - Front Door" -> "Front Door - Church"
+ */
+export function formatDoorDisplayName(label?: string | null): string {
+  if (!label) return 'Door';
+  const trimmed = label.trim();
+  if (!trimmed) return 'Door';
+
+  const parts = trimmed
+    .split(/\s+-\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length <= 1) return trimmed;
+
+  const doorName = parts[parts.length - 1];
+  const rawSite = parts[0].replace(/^(dream\s*machine|udm(?:\s*pro|\s*se)?)\s+/i, '').trim() || parts[0];
+
+  if (rawSite.toLowerCase() === doorName.toLowerCase()) {
+    return doorName;
+  }
+
+  return `${doorName} - ${rawSite}`;
 }
 
 const DAYS: DayOfWeek[] = [
@@ -133,8 +159,11 @@ export function getDoorUnlockStatus(
     if (!matchesDoor) return false;
 
     const doorTiming = w.door_timings?.[doorId] || (unifiDoorId ? w.door_timings?.[unifiDoorId] : undefined);
-    const unlockMs = new Date(doorTiming?.unlock_at || w.unlock_at).getTime();
-    const lockMs = new Date(doorTiming?.lock_at || w.lock_at).getTime();
+    const unlockDate = parseSafeDate(doorTiming?.unlock_at || w.unlock_at);
+    const lockDate = parseSafeDate(doorTiming?.lock_at || w.lock_at);
+    if (!unlockDate || !lockDate) return false;
+    const unlockMs = unlockDate.getTime();
+    const lockMs = lockDate.getTime();
     return nowMs >= unlockMs && nowMs <= lockMs;
   });
 
@@ -187,14 +216,16 @@ export function getDoorUnlockStatus(
   // 3. Compute Timing, Expiration, and Durations
   let durationSetMin: number | null = door.unlock_duration_min ?? null;
   let expiresAt: Date | null = null;
-  let unlockedAt: Date | null = door.last_unlocked_at ? new Date(door.last_unlocked_at) : null;
+  let unlockedAt: Date | null = parseSafeDate(door.last_unlocked_at);
 
   if (door.hold_unlock_expires_at) {
-    expiresAt = new Date(door.hold_unlock_expires_at);
+    expiresAt = parseSafeDate(door.hold_unlock_expires_at);
   } else if (activeWindow) {
-    expiresAt = new Date(activeDoorTiming?.lock_at || activeWindow.lock_at);
-    const windowStartMs = new Date(activeDoorTiming?.unlock_at || activeWindow.unlock_at).getTime();
-    durationSetMin = Math.round((expiresAt.getTime() - windowStartMs) / 60000);
+    expiresAt = parseSafeDate(activeDoorTiming?.lock_at || activeWindow.lock_at);
+    const windowStartDate = parseSafeDate(activeDoorTiming?.unlock_at || activeWindow.unlock_at);
+    if (expiresAt && windowStartDate) {
+      durationSetMin = Math.round((expiresAt.getTime() - windowStartDate.getTime()) / 60000);
+    }
   } else if (activeWeeklySlot) {
     const [endH, endM] = activeWeeklySlot.slot.end_time.split(':').map((v) => parseInt(v, 10));
     const slotEndDate = new Date(referenceDate);
@@ -217,7 +248,10 @@ export function getDoorUnlockStatus(
   if (unlockedAt) {
     elapsedMinutes = Math.max(0, Math.round((nowMs - unlockedAt.getTime()) / 60000));
   } else if (door.last_synced && isOutsidePolicy) {
-    elapsedMinutes = Math.max(0, Math.round((nowMs - new Date(door.last_synced).getTime()) / 60000));
+    const syncedDate = parseSafeDate(door.last_synced);
+    if (syncedDate) {
+      elapsedMinutes = Math.max(0, Math.round((nowMs - syncedDate.getTime()) / 60000));
+    }
   }
 
   // 4. Construct human-readable labels and UI Badges
@@ -300,7 +334,7 @@ export function getDoorUnlockStatus(
 
   if (durationSetMin && expiresAt && !isExpired) {
     const remainingStr = formatDurationMinutes(remainingMinutes ?? 0);
-    const expireTimeStr = safeFormat(expiresAt.toISOString(), 'h:mm a');
+    const expireTimeStr = safeFormat(expiresAt, 'h:mm a');
     durationLabel = `Set for ${durationSetMin}m · ${remainingStr} remaining (until ${expireTimeStr})`;
     statusSummary = `Manually unlocked for ${durationSetMin} min (relocks at ${expireTimeStr})`;
 
@@ -334,7 +368,7 @@ export function getDoorUnlockStatus(
 
   // Unlocked without timer or expired timer outside scheduled policy
   const elapsedStr = elapsedMinutes !== null ? formatDurationMinutes(elapsedMinutes) : null;
-  const sinceStr = unlockedAt ? safeFormat(unlockedAt.toISOString(), 'h:mm a') : null;
+  const sinceStr = unlockedAt ? safeFormat(unlockedAt, 'h:mm a') : null;
 
   if (elapsedStr && sinceStr) {
     durationLabel = `Left unlocked for ${elapsedStr} (since ${sinceStr})`;

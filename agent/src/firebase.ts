@@ -10,6 +10,7 @@ import * as admin from 'firebase-admin';
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/firestore';
 import 'firebase/compat/auth';
+import 'firebase/compat/storage';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -90,6 +91,7 @@ export async function initializeFirebase(
         admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
           projectId,
+          storageBucket: `${projectId}.firebasestorage.app`,
         });
       }
 
@@ -117,6 +119,7 @@ export async function initializeFirebase(
         apiKey: DEFAULT_API_KEY,
         projectId,
         authDomain: `${projectId}.firebaseapp.com`,
+        storageBucket: `${projectId}.firebasestorage.app`,
       });
     }
 
@@ -185,3 +188,24 @@ export const db = new Proxy({} as FirebaseFirestore.Firestore, {
     return getDb()[prop as keyof FirebaseFirestore.Firestore];
   },
 });
+
+/**
+ * Upload a JPEG camera snapshot to Firebase Storage using whichever SDK is active.
+ */
+export async function uploadCameraSnapshot(
+  storagePath: string,
+  jpegBuffer: Buffer
+): Promise<void> {
+  if (_useClientSdk) {
+    const ref = firebase.storage().ref(storagePath);
+    await ref.put(jpegBuffer, { contentType: 'image/jpeg' });
+    return;
+  }
+  const bucket = admin.storage().bucket();
+  const file = bucket.file(storagePath);
+  await file.save(jpegBuffer, {
+    contentType: 'image/jpeg',
+    resumable: false,
+    metadata: { cacheControl: 'no-store' },
+  });
+}

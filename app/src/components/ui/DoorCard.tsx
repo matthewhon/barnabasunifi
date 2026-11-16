@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import type { Door, UnifiSchedule, ScheduleWindow } from '@/lib/types';
 import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
-import { getDoorUnlockStatus } from '@/lib/door-status-utils';
+import { formatDoorDisplayName, getDoorUnlockStatus } from '@/lib/door-status-utils';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -215,8 +215,9 @@ export default function DoorCard({
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
             }}
+            title={door.label}
           >
-            {door.label}
+            {formatDoorDisplayName(door.label)}
           </h3>
           <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.15rem' }}>
             {lastSyncedText}

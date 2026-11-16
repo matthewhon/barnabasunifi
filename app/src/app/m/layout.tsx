@@ -6,11 +6,12 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { getOrganization } from '@/lib/firestore';
 import type { Organization } from '@/lib/types';
-import { CalendarClock, DoorOpen, LogOut, Monitor, Users } from 'lucide-react';
+import { CalendarClock, DoorOpen, LogOut, Monitor, Users, Video } from 'lucide-react';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 
 const TABS = [
   { href: '/m', label: 'Doors', icon: DoorOpen, exact: true },
+  { href: '/m/cameras', label: 'Cameras', icon: Video, exact: false },
   { href: '/m/visitors', label: 'Visitors', icon: Users, exact: false },
   { href: '/m/schedules', label: 'Schedules', icon: CalendarClock, exact: false },
 ] as const;
@@ -21,6 +22,15 @@ export default function MobileLayout({ children }: { children: React.ReactNode }
   const { user, orgId, role, loading, signOut } = useAuth();
   const [org, setOrg] = useState<Organization | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+
+  const isCameraOnly = role === 'camera_viewer';
+  const visibleTabs = isCameraOnly ? TABS.filter((t) => t.href === '/m/cameras') : TABS;
+
+  useEffect(() => {
+    if (!loading && user && isCameraOnly && pathname !== '/m/cameras') {
+      router.replace('/m/cameras');
+    }
+  }, [loading, user, isCameraOnly, pathname, router]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -253,11 +263,11 @@ export default function MobileLayout({ children }: { children: React.ReactNode }
             maxWidth: '34rem',
             margin: '0 auto',
             display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
+            gridTemplateColumns: `repeat(${visibleTabs.length}, 1fr)`,
             height: '4rem',
           }}
         >
-          {TABS.map((tab) => {
+          {visibleTabs.map((tab) => {
             const isActive = tab.exact ? pathname === tab.href : pathname.startsWith(tab.href);
             const Icon = tab.icon;
             return (

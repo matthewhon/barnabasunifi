@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
-import { getOrgSettings, updateOrgSettings, disconnectPco, getLatestAgentRelease, createDoorCommand, subscribeToAgents, approveAgentUpdate } from '@/lib/firestore';
+import { getOrgSettings, updateOrgSettings, disconnectPco, getLatestAgentRelease, createDoorCommand, subscribeToAgents, approveAgentUpdate, triggerCameraSync } from '@/lib/firestore';
 import type { OrgSettings, AgentRelease, Agent } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
 import { safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
@@ -140,7 +140,8 @@ function SliderInput({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { orgId, user, isSuperAdmin } = useAuth();
+  const { orgId, user, role, isSuperAdmin } = useAuth();
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
   const { showToast } = useToast();
 
   const [settings, setSettings] = useState<OrgSettings | null>(null);
@@ -477,8 +478,67 @@ export default function SettingsPage() {
         setAgentSkipTls(settings.unifi_agent.skip_tls_verify ?? true);
         setAgentDiscoveredHost(settings.unifi_agent.auto_discovered_host ?? '');
       }
+      if (settings.unifi_protect) {
+        setProtectEnabled(Boolean(settings.unifi_protect.enabled));
+        setProtectHost(settings.unifi_protect.host ?? '');
+        setProtectApiKey(settings.unifi_protect.api_key ?? '');
+        setProtectSkipTls(settings.unifi_protect.skip_tls_verify ?? true);
+        setProtectStreamMode(settings.unifi_protect.stream_mode ?? 'snapshot');
+        setProtectStreamBaseUrl(settings.unifi_protect.stream_base_url ?? '');
+        setProtectOnsiteIps((settings.unifi_protect.onsite_public_ips ?? []).join(', '));
+      }
     }
   }, [settings]);
+
+  const [protectEnabled, setProtectEnabled] = useState(false);
+  const [protectHost, setProtectHost] = useState('');
+  const [protectApiKey, setProtectApiKey] = useState('');
+  const [protectSkipTls, setProtectSkipTls] = useState(true);
+  const [protectStreamMode, setProtectStreamMode] = useState<'snapshot' | 'webrtc_lan' | 'relay'>('snapshot');
+  const [protectStreamBaseUrl, setProtectStreamBaseUrl] = useState('');
+  const [protectOnsiteIps, setProtectOnsiteIps] = useState('');
+  const [savingProtect, setSavingProtect] = useState(false);
+  const [syncingProtect, setSyncingProtect] = useState(false);
+
+  const handleSaveProtect = async () => {
+    if (!orgId) return;
+    setSavingProtect(true);
+    try {
+      const onsiteList = protectOnsiteIps
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await updateOrgSettings(orgId, {
+        unifi_protect: {
+          enabled: protectEnabled,
+          host: protectHost.trim() || undefined,
+          api_key: protectApiKey.trim(),
+          skip_tls_verify: protectSkipTls,
+          stream_mode: protectStreamMode,
+          stream_base_url: protectStreamBaseUrl.trim() || undefined,
+          onsite_public_ips: onsiteList,
+        },
+      });
+      showToast('UniFi Protect camera settings saved!', 'success');
+    } catch {
+      showToast('Failed to save UniFi Protect settings.', 'error');
+    } finally {
+      setSavingProtect(false);
+    }
+  };
+
+  const handleSyncProtectCameras = async () => {
+    if (!orgId) return;
+    setSyncingProtect(true);
+    try {
+      await triggerCameraSync(orgId);
+      showToast('Camera sync command sent to local agent.', 'success');
+    } catch {
+      showToast('Failed to queue camera sync.', 'error');
+    } finally {
+      setTimeout(() => setSyncingProtect(false), 1200);
+    }
+  };
 
   const handleSaveUnifiMode = async (mode: 'agent' | 'remote') => {
     if (!orgId) return;
@@ -1642,6 +1702,125 @@ SKIP_TLS_VERIFY=true`}</pre>
                   </button>
                 </div>
               </>
+            )}
+          </div>
+        </SectionCard>
+
+        {/* UniFi Protect (Cameras) */}
+        <SectionCard title="UniFi Protect (Cameras)">
+          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginTop: 0, marginBottom: '0.75rem' }}>
+            Connect your local UniFi Protect console or UNVR through the on-premises agent for live camera viewing.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 500 }}>
+              <input
+                type="checkbox"
+                checked={protectEnabled}
+                onChange={(e) => setProtectEnabled(e.target.checked)}
+                disabled={!isAdmin}
+              />
+              Enable UniFi Protect Camera Integration
+            </label>
+
+            {protectEnabled && (
+              <>
+                <div className="form-group">
+                  <label className="form-label">Protect Console Host (Optional Override)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Leave blank to reuse UniFi Access host, or enter UNVR URL (e.g. https://192.168.1.20)"
+                    value={protectHost}
+                    onChange={(e) => setProtectHost(e.target.value)}
+                    disabled={!isAdmin}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">UniFi Protect Integration API Key</label>
+                  <input
+                    type="password"
+                    className="form-input"
+                    placeholder="X-API-KEY generated in UniFi Protect / OS Admins"
+                    value={protectApiKey}
+                    onChange={(e) => setProtectApiKey(e.target.value)}
+                    disabled={!isAdmin}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Streaming Mode</label>
+                  <select
+                    className="form-select"
+                    value={protectStreamMode}
+                    onChange={(e) => setProtectStreamMode(e.target.value as 'snapshot' | 'webrtc_lan' | 'relay')}
+                    disabled={!isAdmin}
+                  >
+                    <option value="snapshot">Snapshots (Works everywhere, no port forwarding)</option>
+                    <option value="webrtc_lan">LAN WebRTC (30fps on-site via go2rtc, snapshot fallback off-site)</option>
+                    <option value="relay">Custom Tunnel / Relay URL (30fps remote via go2rtc)</option>
+                  </select>
+                </div>
+
+                {protectStreamMode === 'relay' && (
+                  <div className="form-group">
+                    <label className="form-label">Stream Relay Base URL</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="https://cameras.yourchurch.org"
+                      value={protectStreamBaseUrl}
+                      onChange={(e) => setProtectStreamBaseUrl(e.target.value)}
+                      disabled={!isAdmin}
+                    />
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <label className="form-label">Onsite Public IP / CIDR Allowlist (Optional)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Comma-separated static WAN IPs or CIDRs (agent public IP is auto-detected)"
+                    value={protectOnsiteIps}
+                    onChange={(e) => setProtectOnsiteIps(e.target.value)}
+                    disabled={!isAdmin}
+                  />
+                </div>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={protectSkipTls}
+                    onChange={(e) => setProtectSkipTls(e.target.checked)}
+                    disabled={!isAdmin}
+                  />
+                  Skip TLS certificate verification (recommended for local self-signed UniFi certs)
+                </label>
+              </>
+            )}
+
+            {isAdmin && (
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleSaveProtect}
+                  disabled={savingProtect}
+                >
+                  {savingProtect ? 'Saving…' : 'Save Protect Settings'}
+                </button>
+                {protectEnabled && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={handleSyncProtectCameras}
+                    disabled={syncingProtect}
+                  >
+                    {syncingProtect ? 'Syncing Cameras…' : 'Sync Cameras Now'}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </SectionCard>

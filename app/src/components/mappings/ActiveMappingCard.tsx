@@ -11,6 +11,7 @@ import type {
 } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
 import { safeFormat, safeFormatDistanceToNow, parseSafeDate } from '@/lib/date-utils';
+import { formatDoorDisplayName } from '@/lib/door-status-utils';
 import {
   formatIsoTimeRange,
   formatIsoTimeOnly,
@@ -431,7 +432,7 @@ export function ActiveMappingCard({
                     <span title={isUnlocked ? 'Unlocked' : isLocked ? 'Locked' : 'Unknown state'}>
                       {isUnlocked ? '🔓' : isLocked ? '🔒' : '🚪'}
                     </span>
-                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{door.label}</span>
+                    <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }} title={door.label}>{formatDoorDisplayName(door.label)}</span>
                     {door.campusName && (
                       <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)' }}>
                         ({door.campusName})
@@ -634,7 +635,7 @@ export function ActiveMappingCard({
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>🚪 {d.label}</span>
+                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }} title={d.label}>🚪 {formatDoorDisplayName(d.label)}</span>
                       {d.isDoorCustom && (
                         <span className="badge badge-info" style={{ fontSize: '0.6rem', padding: '0.02rem 0.25rem' }}>
                           Custom

@@ -15,6 +15,7 @@ import {
   onSnapshot,
   serverTimestamp,
   writeBatch,
+  documentId,
   Unsubscribe,
   QueryConstraint,
   Timestamp,
@@ -33,6 +34,8 @@ import type {
   DoorTimingConfig,
   ScheduleWindow,
   DoorCommand,
+  Camera,
+  UserCameraPermission,
   AuditLogEntry,
   AuditAction,
   Agent,
@@ -1266,6 +1269,141 @@ export function subscribeToAccessLogs(
         } as unknown as AccessLogEntry;
       })
     );
+  });
+}
+
+// ─── UniFi Protect Cameras & Permissions ──────────────────────────────────────
+
+export function subscribeToCameras(
+  orgId: string,
+  callback: (cameras: Camera[]) => void,
+  allowedCameraIds?: string[] | null
+): Unsubscribe {
+  // If explicitly empty array, user has no camera access
+  if (Array.isArray(allowedCameraIds) && allowedCameraIds.length === 0) {
+    callback([]);
+    return () => {};
+  }
+
+  // If specific camera IDs are provided (selected mode), query only those IDs
+  // so Firestore security rules do not reject a collection-wide read.
+  if (Array.isArray(allowedCameraIds) && allowedCameraIds.length > 0) {
+    const chunks: string[][] = [];
+    for (let i = 0; i < allowedCameraIds.length; i += 30) {
+      chunks.push(allowedCameraIds.slice(i, i + 30));
+    }
+    const chunkResults = new Map<number, Camera[]>();
+    const unsubs = chunks.map((chunk, idx) => {
+      const q = query(
+        collection(db, 'organizations', orgId, 'cameras'),
+        where(documentId(), 'in', chunk)
+      );
+      return onSnapshot(q, (snap) => {
+        chunkResults.set(
+          idx,
+          snap.docs.map((d) => ({ id: d.id, ...d.data() } as Camera))
+        );
+        const merged = Array.from(chunkResults.values())
+          .flat()
+          .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        callback(merged);
+      });
+    });
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }
+
+  const q = query(collection(db, 'organizations', orgId, 'cameras'), orderBy('name'));
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Camera)));
+  });
+}
+
+export function subscribeToUserCameraPermission(
+  orgId: string,
+  uid: string,
+  callback: (perm: UserCameraPermission | null) => void
+): Unsubscribe {
+  const ref = doc(db, 'organizations', orgId, 'camera_permissions', uid);
+  return onSnapshot(ref, (snap) => {
+    callback(snap.exists() ? ({ uid: snap.id, ...snap.data() } as UserCameraPermission) : null);
+  });
+}
+
+export function subscribeToAllCameraPermissions(
+  orgId: string,
+  callback: (perms: Record<string, UserCameraPermission>) => void
+): Unsubscribe {
+  const ref = collection(db, 'organizations', orgId, 'camera_permissions');
+  return onSnapshot(ref, (snap) => {
+    const map: Record<string, UserCameraPermission> = {};
+    for (const d of snap.docs) {
+      map[d.id] = { uid: d.id, ...d.data() } as UserCameraPermission;
+    }
+    callback(map);
+  });
+}
+
+export async function updateUserCameraPermission(
+  orgId: string,
+  uid: string,
+  data: Omit<UserCameraPermission, 'uid' | 'org_id' | 'updated_at'>
+): Promise<void> {
+  const ref = doc(db, 'organizations', orgId, 'camera_permissions', uid);
+  await setDoc(
+    ref,
+    {
+      ...data,
+      uid,
+      org_id: orgId,
+      updated_at: new Date().toISOString(),
+      updated_by: auth.currentUser?.uid || null,
+    },
+    { merge: true }
+  );
+}
+
+export async function updateCameraSettings(
+  orgId: string,
+  cameraId: string,
+  data: Partial<Pick<Camera, 'hidden' | 'campus_id' | 'campus_name' | 'location_id' | 'location_name' | 'linked_door_ids'>>
+): Promise<void> {
+  const ref = doc(db, 'organizations', orgId, 'cameras', cameraId);
+  await setDoc(ref, data, { merge: true });
+}
+
+export async function linkDoorCameras(
+  orgId: string,
+  doorId: string,
+  cameraIds: string[],
+  primaryCameraId: string | null
+): Promise<void> {
+  const ref = doc(db, 'organizations', orgId, 'doors', doorId);
+  await updateDoc(ref, {
+    camera_ids: cameraIds,
+    primary_camera_id: primaryCameraId,
+  });
+}
+
+export async function triggerCameraSync(orgId: string): Promise<string> {
+  return createDoorCommand(orgId, {
+    org_id: orgId,
+    status: 'queued',
+    action: 'sync_cameras',
+    triggered_by: 'manual',
+    execute_at: new Date().toISOString(),
+  });
+}
+
+export async function requestCameraSnapshot(orgId: string, cameraId: string): Promise<string> {
+  return createDoorCommand(orgId, {
+    org_id: orgId,
+    status: 'queued',
+    action: 'capture_snapshot',
+    camera_id: cameraId,
+    triggered_by: 'manual',
+    execute_at: new Date().toISOString(),
   });
 }
 

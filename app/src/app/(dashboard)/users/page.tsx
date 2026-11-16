@@ -4,18 +4,25 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
-import type { UserRole } from '@/lib/types';
+import type { UserRole, Camera, UserCameraPermission, CameraAccessMode } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
-import { writeAuditLog } from '@/lib/firestore';
+import {
+  writeAuditLog,
+  subscribeToCameras,
+  subscribeToAllCameraPermissions,
+  updateUserCameraPermission,
+} from '@/lib/firestore';
+import { Video } from 'lucide-react';
 
 // ─── Role configuration ───────────────────────────────────────────────────────
 
 const ROLES: { value: UserRole; label: string; description: string }[] = [
   { value: 'org_admin', label: 'Admin', description: 'Full access to all settings and users' },
   { value: 'manager', label: 'Manager', description: 'Can manage doors and schedule, not users' },
-  { value: 'viewer', label: 'Viewer', description: 'Read-only access' },
+  { value: 'viewer', label: 'Viewer', description: 'Read-only access to doors and schedules' },
+  { value: 'camera_viewer', label: 'Camera Only', description: 'Live camera viewing only — no access to doors or schedules' },
 ];
 
 function roleBadgeClass(role: UserRole): string {
@@ -23,6 +30,7 @@ function roleBadgeClass(role: UserRole): string {
     case 'super_admin': return 'badge-danger';
     case 'org_admin': return 'badge-info';
     case 'manager': return 'badge-warning';
+    case 'camera_viewer': return 'badge-success';
     case 'viewer': return 'badge-neutral';
     default: return 'badge-neutral';
   }
@@ -33,6 +41,7 @@ function roleLabel(role: UserRole): string {
     case 'super_admin': return 'Super Admin';
     case 'org_admin': return 'Admin';
     case 'manager': return 'Manager';
+    case 'camera_viewer': return 'Camera Only';
     case 'viewer': return 'Viewer';
     default: return role;
   }
@@ -111,7 +120,56 @@ export default function UsersPage() {
   // Role change loading
   const [changingRole, setChangingRole] = useState<string | null>(null);
 
+  // Camera permissions modal
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  const [cameraPerms, setCameraPerms] = useState<Record<string, UserCameraPermission>>({});
+  const [camModalUser, setCamModalUser] = useState<OrgUser | null>(null);
+  const [camAccessMode, setCamAccessMode] = useState<CameraAccessMode>('none');
+  const [camAllowedIds, setCamAllowedIds] = useState<string[]>([]);
+  const [camOnsiteOnly, setCamOnsiteOnly] = useState(false);
+  const [camAllowNotifs, setCamAllowNotifs] = useState(true);
+  const [savingCamPerm, setSavingCamPerm] = useState(false);
+
   const isAdmin = currentRole === 'org_admin' || isSuperAdmin;
+
+  useEffect(() => {
+    if (!orgId || !isAdmin) return;
+    const unsubCams = subscribeToCameras(orgId, setCameras);
+    const unsubPerms = subscribeToAllCameraPermissions(orgId, setCameraPerms);
+    return () => {
+      unsubCams();
+      unsubPerms();
+    };
+  }, [orgId, isAdmin]);
+
+  const openCameraPermModal = (target: OrgUser) => {
+    const existing = cameraPerms[target.uid];
+    const defaultAll = target.role === 'org_admin' || target.role === 'super_admin';
+    setCamModalUser(target);
+    setCamAccessMode(existing?.access_mode ?? (defaultAll ? 'all' : 'none'));
+    setCamAllowedIds(existing?.allowed_camera_ids ?? []);
+    setCamOnsiteOnly(existing?.onsite_only ?? false);
+    setCamAllowNotifs(existing?.allow_notifications ?? true);
+  };
+
+  const handleSaveCameraPerm = async () => {
+    if (!orgId || !camModalUser) return;
+    setSavingCamPerm(true);
+    try {
+      await updateUserCameraPermission(orgId, camModalUser.uid, {
+        access_mode: camAccessMode,
+        allowed_camera_ids: camAccessMode === 'selected' ? camAllowedIds : [],
+        onsite_only: camOnsiteOnly,
+        allow_notifications: camAllowNotifs,
+      });
+      showToast(`Updated camera access for ${camModalUser.email}.`, 'success');
+      setCamModalUser(null);
+    } catch {
+      showToast('Failed to update camera permissions.', 'error');
+    } finally {
+      setSavingCamPerm(false);
+    }
+  };
 
   const fetchOrgUsers = useCallback(async () => {
     if (!orgId) return;
@@ -393,6 +451,15 @@ export default function UsersPage() {
 
                       {u.uid !== currentUser?.uid && (
                         <>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '0.3125rem 0.625rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                            onClick={() => openCameraPermModal(u)}
+                            title="Configure camera permissions"
+                          >
+                            <Video size={13} />
+                            Cameras
+                          </button>
                           <select
                             className="form-select"
                             style={{ width: 'auto', padding: '0.3125rem 2rem 0.3125rem 0.625rem', fontSize: '0.8125rem' }}
@@ -627,6 +694,101 @@ export default function UsersPage() {
         <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginTop: '0.75rem' }}>
           They will lose access immediately. Their account will not be deleted.
         </p>
+      </Modal>
+
+      {/* Camera Access Permissions Modal */}
+      <Modal
+        isOpen={!!camModalUser}
+        onClose={() => !savingCamPerm && setCamModalUser(null)}
+        title={`Camera Access — ${camModalUser?.display_name || camModalUser?.email || ''}`}
+        footer={
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => setCamModalUser(null)} disabled={savingCamPerm}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={handleSaveCameraPerm} disabled={savingCamPerm}>
+              {savingCamPerm ? 'Saving…' : 'Save Camera Permissions'}
+            </button>
+          </div>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="form-group">
+            <label className="form-label">Camera Visibility</label>
+            <select
+              className="form-select"
+              value={camAccessMode}
+              onChange={(e) => setCamAccessMode(e.target.value as CameraAccessMode)}
+            >
+              <option value="all">All Cameras</option>
+              <option value="selected">Selected Cameras Only</option>
+              <option value="none">No Camera Access</option>
+            </select>
+          </div>
+
+          {camAccessMode === 'selected' && (
+            <div className="form-group">
+              <label className="form-label">Allowed Cameras</label>
+              {cameras.length === 0 ? (
+                <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
+                  No cameras synced yet. Sync UniFi Protect cameras first.
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '12rem', overflowY: 'auto', padding: '0.5rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)' }}>
+                  {cameras.map((cam) => {
+                    const checked = camAllowedIds.includes(cam.id);
+                    return (
+                      <label key={cam.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setCamAllowedIds((prev) => [...prev, cam.id]);
+                            } else {
+                              setCamAllowedIds((prev) => prev.filter((id) => id !== cam.id));
+                            }
+                          }}
+                        />
+                        <span>{cam.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+            <input
+              type="checkbox"
+              checked={camOnsiteOnly}
+              onChange={(e) => setCamOnsiteOnly(e.target.checked)}
+              style={{ marginTop: '0.2rem' }}
+            />
+            <div>
+              <div style={{ fontWeight: 600 }}>Onsite Only</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                Require the user to be connected to the church network (verified via agent public IP / onsite allowlist) to view cameras.
+              </div>
+            </div>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+            <input
+              type="checkbox"
+              checked={!camAllowNotifs}
+              onChange={(e) => setCamAllowNotifs(!e.target.checked)}
+              style={{ marginTop: '0.2rem' }}
+            />
+            <div>
+              <div style={{ fontWeight: 600 }}>Live Stream Only (Restrict Notifications)</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                Prevent this user from receiving camera/event notifications or viewing alert feeds — they only see the live camera stream.
+              </div>
+            </div>
+          </label>
+        </div>
       </Modal>
     </div>
   );

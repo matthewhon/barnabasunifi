@@ -45,6 +45,26 @@ service cloud.firestore {
       return hasOrgRole(orgId, ['org_admin', 'manager', 'viewer']) || isSuperAdmin();
     }
 
+    function isCameraMember(orgId) {
+      return hasOrgRole(orgId, ['org_admin', 'manager', 'viewer', 'camera_viewer']) || isSuperAdmin();
+    }
+
+    function canReadCamera(orgId, cameraId) {
+      return isOrgAdmin(orgId)
+        || isAgentForOrg(orgId)
+        || (
+          isCameraMember(orgId)
+          && exists(/databases/$(database)/documents/organizations/$(orgId)/camera_permissions/$(request.auth.uid))
+          && (
+            get(/databases/$(database)/documents/organizations/$(orgId)/camera_permissions/$(request.auth.uid)).data.access_mode == 'all'
+            || (
+              get(/databases/$(database)/documents/organizations/$(orgId)/camera_permissions/$(request.auth.uid)).data.access_mode == 'selected'
+              && cameraId in get(/databases/$(database)/documents/organizations/$(orgId)/camera_permissions/$(request.auth.uid)).data.allowed_camera_ids
+            )
+          )
+        );
+    }
+
     function isAgentForOrg(orgId) {
       return isSignedIn()
         && request.auth.token.agent == true
@@ -54,7 +74,7 @@ service cloud.firestore {
     // ─── Organizations ───────────────────────────────────────────────────────
 
     match /organizations/{orgId} {
-      allow read: if isOrgMember(orgId);
+      allow read: if isCameraMember(orgId);
       allow create: if isSuperAdmin();
       allow update: if isOrgAdmin(orgId);
       allow delete: if isSuperAdmin();
@@ -142,6 +162,18 @@ service cloud.firestore {
         allow read: if isOrgMember(orgId);
         allow create: if isOrgManager(orgId) || isAgentForOrg(orgId);
         allow update, delete: if false;
+      }
+
+      // UniFi Protect Cameras: per-user allowlist enforced via camera_permissions/{uid}
+      match /cameras/{cameraId} {
+        allow read: if canReadCamera(orgId, cameraId);
+        allow write: if isOrgAdmin(orgId) || isAgentForOrg(orgId);
+      }
+
+      // Per-user Camera Permissions: users can read their own; only org admins can write
+      match /camera_permissions/{uid} {
+        allow read: if isOrgAdmin(orgId) || isAgentForOrg(orgId) || (isCameraMember(orgId) && request.auth.uid == uid);
+        allow write: if isOrgAdmin(orgId);
       }
     }
 

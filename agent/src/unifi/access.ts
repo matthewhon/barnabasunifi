@@ -2411,10 +2411,62 @@ export class UnifiAccessClient {
     for (const endpoint of endpoints) {
       try {
         const res = await this.http.post<any>(endpoint, payload);
+        const rawCode = res.data?.code;
+        const isErrorCode =
+          rawCode !== undefined &&
+          rawCode !== null &&
+          rawCode !== 0 &&
+          rawCode !== 200 &&
+          String(rawCode).toUpperCase() !== 'SUCCESS' &&
+          String(rawCode).toUpperCase() !== 'OK';
+
+        if (isErrorCode) {
+          lastErr = new Error(res.data?.msg || res.data?.message || `UniFi error code ${rawCode}`);
+          logger.warn(`[UniFi] createVisitor tried ${endpoint} -> code ${rawCode}: ${lastErr.message}`);
+          continue;
+        }
+
         const rawData = res.data?.data || (res.data?.id ? res.data : null);
+        let normalized: UnifiVisitor | null = null;
+
         if (rawData && (rawData.id || rawData.unique_id || rawData.visitor_id || rawData._id)) {
-          logger.info(`[UniFi] Visitor ${rawData.id || rawData.unique_id || visitor.first_name} created successfully via ${endpoint}`);
-          const normalized = normalizeUnifiVisitor(rawData);
+          normalized = normalizeUnifiVisitor(rawData);
+        } else if (res.status >= 200 && res.status < 300) {
+          // POST succeeded without returning the full visitor object; look up the created
+          // visitor via GET instead of falling through and double-POSTing to another endpoint.
+          logger.info(`[UniFi] createVisitor POST succeeded via ${endpoint} without ID in body; looking up created visitor...`);
+          try {
+            const allVisitors = await this.getVisitors();
+            const match = allVisitors.find(
+              (v) =>
+                v.first_name?.toLowerCase() === visitor.first_name?.toLowerCase() &&
+                (v.last_name || '').toLowerCase() === (visitor.last_name || '').toLowerCase() &&
+                (!visitor.start_time || v.start_time === visitor.start_time)
+            );
+            if (match) {
+              normalized = match;
+            }
+          } catch (lookupErr: any) {
+            logger.warn(`[UniFi] Post-create visitor lookup failed: ${lookupErr.message}`);
+          }
+          if (!normalized) {
+            normalized = {
+              id: '',
+              unifi_visitor_id: '',
+              first_name: visitor.first_name || '',
+              last_name: visitor.last_name || '',
+              full_name: `${visitor.first_name || ''} ${visitor.last_name || ''}`.trim(),
+              door_ids: visitor.door_ids || [],
+              door_labels: visitor.door_labels || [],
+              start_time: visitor.start_time || new Date().toISOString(),
+              end_time: visitor.end_time || new Date().toISOString(),
+              status: 'active',
+            };
+          }
+        }
+
+        if (normalized) {
+          logger.info(`[UniFi] Visitor ${normalized.id || visitor.first_name} created successfully via ${endpoint}`);
           // If PIN code is specified, assign via PUT /visitors/:id/pin_codes (official Developer API)
           if (visitor.pin_code && normalized.id) {
             await this.assignVisitorPin(normalized.id, visitor.pin_code).catch((err) => {

@@ -2,7 +2,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 
-type Role = 'org_admin' | 'manager' | 'viewer';
+type Role = 'org_admin' | 'manager' | 'viewer' | 'camera_viewer';
 
 interface ChangeUserRoleRequest {
   orgId: string;
@@ -35,7 +35,7 @@ export const changeUserRole = onCall<ChangeUserRoleRequest, Promise<ChangeUserRo
       throw new HttpsError('invalid-argument', 'targetUid is required.');
     }
 
-    const validRoles: Role[] = ['org_admin', 'manager', 'viewer'];
+    const validRoles: Role[] = ['org_admin', 'manager', 'viewer', 'camera_viewer'];
     if (!validRoles.includes(role)) {
       throw new HttpsError('invalid-argument', `role must be one of: ${validRoles.join(', ')}.`);
     }

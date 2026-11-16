@@ -15,6 +15,7 @@ import type {
   PlanTimeType,
 } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
+import { formatDoorDisplayName } from '@/lib/door-status-utils';
 import { Toggle } from './ActiveMappingCard';
 import {
   ProjectedUnlockTimesPreview,
@@ -450,8 +451,8 @@ export function MappingModal({
                 <input type="checkbox" checked={isChecked} onChange={() => toggleDoor(door.id)} />
                 <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: '0.1rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-                    <span style={{ color: 'var(--color-text-primary)', fontWeight: isChecked ? 600 : 500 }}>
-                      {door.label}
+                    <span style={{ color: 'var(--color-text-primary)', fontWeight: isChecked ? 600 : 500 }} title={door.label}>
+                      {formatDoorDisplayName(door.label)}
                     </span>
                     {isDoorHidden(door) && (
                       <span

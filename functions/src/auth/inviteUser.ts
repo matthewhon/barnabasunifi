@@ -3,7 +3,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import * as crypto from 'crypto';
 
-type Role = 'org_admin' | 'manager' | 'viewer';
+type Role = 'org_admin' | 'manager' | 'viewer' | 'camera_viewer';
 
 interface InviteUserRequest {
   email: string;
@@ -61,7 +61,7 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
     if (!email || typeof email !== 'string' || !email.includes('@')) {
       throw new HttpsError('invalid-argument', 'A valid email address is required.');
     }
-    const validRoles: Role[] = ['org_admin', 'manager', 'viewer'];
+    const validRoles: Role[] = ['org_admin', 'manager', 'viewer', 'camera_viewer'];
     if (!validRoles.includes(role)) {
       throw new HttpsError(
         'invalid-argument',

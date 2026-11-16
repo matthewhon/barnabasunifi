@@ -9,6 +9,7 @@
  */
 
 import * as os from 'os';
+import axios from 'axios';
 import { getDb, firestoreTimestamp } from '../firebase';
 import { logger } from '../logger';
 import { getCacheStore } from '../storage/cacheStore';
@@ -35,7 +36,29 @@ export interface AgentHeartbeat {
 // Constants
 // ---------------------------------------------------------------------------
 
-const AGENT_CAPABILITIES = ['unlock', 'lock', 'door_sync'] as const;
+const AGENT_CAPABILITIES = ['unlock', 'lock', 'door_sync', 'camera_sync', 'camera_snapshot', 'camera_webrtc'] as const;
+
+let cachedPublicIp: string | null = null;
+let lastPublicIpCheckMs = 0;
+
+async function getPublicIp(): Promise<string | null> {
+  const now = Date.now();
+  if (cachedPublicIp && now - lastPublicIpCheckMs < 5 * 60 * 1000) {
+    return cachedPublicIp;
+  }
+  try {
+    const res = await axios.get('https://api.ipify.org?format=json', { timeout: 4000 });
+    const ip = res.data?.ip;
+    if (typeof ip === 'string' && ip.trim()) {
+      cachedPublicIp = ip.trim();
+      lastPublicIpCheckMs = now;
+      return cachedPublicIp;
+    }
+  } catch {
+    // Non-fatal: keep last known public IP if offline/timeout
+  }
+  return cachedPublicIp;
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -66,6 +89,7 @@ async function writeHeartbeat(
 ): Promise<void> {
   const db = getDb();
   const localIp = getLocalIp();
+  const publicIp = await getPublicIp();
   const cacheStore = getCacheStore();
   const payload: Record<string, any> = {
     org_id: orgId,
@@ -75,6 +99,7 @@ async function writeHeartbeat(
     version,
     capabilities: [...AGENT_CAPABILITIES],
     ...(localIp ? { local_ip: localIp } : {}),
+    ...(publicIp ? { public_ip: publicIp } : {}),
     hostname: os.hostname(),
     platform: os.platform(),
     offline_resilience: {

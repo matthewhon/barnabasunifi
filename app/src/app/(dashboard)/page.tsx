@@ -16,7 +16,7 @@ import {
 import type { Door, Agent, ScheduleWindow, UnifiSchedule, AuditLogEntry, AccessLogEntry } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
 import { safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
-import { getDoorUnlockStatus } from '@/lib/door-status-utils';
+import { formatDoorDisplayName, getDoorUnlockStatus } from '@/lib/door-status-utils';
 import { Sparkline } from '@/components/analytics/Sparkline';
 import Modal from '@/components/ui/Modal';
 import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
@@ -118,8 +118,8 @@ function DoorStatusCard({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--color-text-primary)' }}>
-          {door.label}
+        <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--color-text-primary)' }} title={door.label}>
+          {formatDoorDisplayName(door.label)}
         </span>
         {isUnknown ? (
           <LockIcon color="var(--color-text-muted)" />
@@ -232,7 +232,7 @@ function ScheduleWindowRow({ window: win }: { window: ScheduleWindow }) {
           {win.source_label}
         </div>
         <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.125rem' }}>
-          {win.door_labels.join(', ')}
+          {win.door_labels.map((l) => formatDoorDisplayName(l)).join(', ')}
         </div>
       </div>
       <div style={{ flex: '1 1 7rem', color: 'var(--color-text-secondary)', fontSize: '0.8125rem', whiteSpace: 'nowrap' }}>
@@ -599,7 +599,7 @@ export default function DashboardPage() {
             </strong>{' '}
             {outsidePolicyDoors.map((d) => {
               const s = getDoorUnlockStatus(d, schedules, scheduleWindows);
-              return `${d.label} (${s.durationLabel || 'unlocked'})`;
+              return `${formatDoorDisplayName(d.label)} (${s.durationLabel || 'unlocked'})`;
             }).join(' · ')}
           </div>
         </div>

@@ -1,6 +1,6 @@
 // ─── User & Auth ─────────────────────────────────────────────────────────────
 
-export type UserRole = 'super_admin' | 'org_admin' | 'manager' | 'viewer';
+export type UserRole = 'super_admin' | 'org_admin' | 'manager' | 'viewer' | 'camera_viewer';
 
 export interface OrgMembership {
   org_id: string;
@@ -60,6 +60,15 @@ export interface OrgSettings {
     access_token: string;
     skip_tls_verify?: boolean;
     auto_discovered_host?: string;
+  };
+  unifi_protect?: {
+    enabled: boolean;
+    host?: string;
+    api_key?: string;
+    skip_tls_verify?: boolean;
+    stream_mode?: 'snapshot' | 'webrtc_lan' | 'relay';
+    stream_base_url?: string;
+    onsite_public_ips?: string[];
   };
   event_notifications?: EventNotificationSettings;
 }
@@ -181,6 +190,8 @@ export interface Door {
   image_url?: string | null;
   unifi_thumbnail_url?: string | null;
   image_source?: 'unifi' | 'upload' | 'custom_url' | null;
+  primary_camera_id?: string | null;
+  camera_ids?: string[];
   last_synced: string; // ISO8601
 }
 
@@ -253,6 +264,8 @@ export type CommandAction =
   | 'update_policy'
   | 'delete_policy'
   | 'sync_access_logs'
+  | 'sync_cameras'
+  | 'capture_snapshot'
   | 'apply_update'
   | 'upgrade_agent'
   | 'restart_agent';
@@ -264,6 +277,7 @@ export interface DoorCommand {
   org_id: string;
   door_id?: string;
   door_label?: string;
+  camera_id?: string;
   schedule_id?: string;
   schedule_data?: Record<string, unknown>;
   visitor_id?: string;
@@ -319,6 +333,7 @@ export interface AuditLogEntry {
   action: AuditAction;
   door_id?: string;
   door_label?: string;
+  camera_id?: string;
   triggered_by: 'scheduler' | 'manual' | 'agent' | 'system';
   actor_uid?: string;
   actor_label?: string;
@@ -339,8 +354,61 @@ export interface Agent {
   version: string;
   capabilities: string[];
   local_ip?: string;
+  public_ip?: string;
   hostname?: string;
   platform?: string;
+}
+
+// ─── UniFi Protect Cameras ────────────────────────────────────────────────────
+
+export type CameraState = 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING';
+export type CameraAccessMode = 'all' | 'selected' | 'none';
+export type CameraStreamMode = 'snapshot' | 'webrtc_lan' | 'relay';
+
+export interface Camera {
+  id: string;
+  org_id: string;
+  unifi_camera_id: string;
+  name: string;
+  model?: string | null;
+  state: CameraState;
+  is_recording?: boolean;
+  has_mic?: boolean;
+  has_speaker?: boolean;
+  campus_id?: string | null;
+  campus_name?: string | null;
+  location_id?: string | null;
+  location_name?: string | null;
+  linked_door_ids?: string[];
+  snapshot_storage_path?: string | null;
+  snapshot_updated_at?: string | null;
+  live_view_until?: string | null;
+  hidden?: boolean;
+  last_synced: string; // ISO8601
+}
+
+export interface UserCameraPermission {
+  uid: string;
+  org_id: string;
+  access_mode: CameraAccessMode;
+  allowed_camera_ids: string[];
+  onsite_only: boolean;
+  allow_notifications: boolean;
+  updated_at: string;
+  updated_by?: string;
+}
+
+export interface CameraStreamSession {
+  camera_id: string;
+  stream_mode: CameraStreamMode;
+  snapshot_url?: string | null;
+  snapshot_updated_at?: string | null;
+  webrtc_url?: string | null;
+  mse_url?: string | null;
+  stream_token?: string | null;
+  allow_notifications: boolean;
+  onsite_only: boolean;
+  expires_at: string;
 }
 
 // ─── PCO API ──────────────────────────────────────────────────────────────────

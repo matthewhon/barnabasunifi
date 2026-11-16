@@ -22,6 +22,7 @@ export { syncUnifiVisitors, saveUnifiVisitor, deleteUnifiVisitor } from './unifi
 export { syncUnifiAccessPolicies, saveUnifiAccessPolicy, deleteUnifiAccessPolicy } from './unifi/policies';
 export { triggerUserSync, getPcoLists } from './pco/userSync';
 export { syncUnifiAccessLogs } from './unifi/accessLogs';
+export { issueCameraStreamSession } from './unifi/cameras';
 export { publishAgentRelease, getLatestAgentRelease, listAgentReleases, uploadAgentRelease, downloadAgentRelease } from './agent/releases';
 export { getPcoCampusesAndLocations, assignDoorsToCampusLocation } from './pco/campuses';
 export { sendTestSlackNotification } from './notifications/testNotification';

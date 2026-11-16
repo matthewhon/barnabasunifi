@@ -12,6 +12,7 @@ import { formatDoorShortName } from '@/lib/door-status-utils';
 import { safeIsPast } from '@/lib/date-utils';
 import { format } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
+import { parseSafeDate, safeFormat } from '@/lib/date-utils';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 import { CalendarClock, Clock, DoorOpen, Repeat, Search } from 'lucide-react';
 
@@ -35,11 +36,13 @@ function formatTime12h(time24: string): string {
   return `${h12}:${mStr || '00'} ${ampm}`;
 }
 
-function formatZoned(iso: string, tz: string, pattern: string): string {
+function formatZoned(iso: unknown, tz: string, pattern: string): string {
+  const d = parseSafeDate(iso);
+  if (!d) return '—';
   try {
-    return format(toZonedTime(new Date(iso), tz), pattern);
+    return format(toZonedTime(d, tz), pattern);
   } catch {
-    return format(new Date(iso), pattern);
+    return safeFormat(d, pattern);
   }
 }
 

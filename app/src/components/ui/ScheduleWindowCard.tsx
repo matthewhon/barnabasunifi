@@ -3,6 +3,8 @@
 import React, { useEffect, useState } from 'react';
 import type { ScheduleWindow } from '@/lib/types';
 import { format, formatDistanceToNow, isPast, isFuture, intervalToDuration } from 'date-fns';
+import { parseSafeDate } from '@/lib/date-utils';
+import { formatDoorDisplayName } from '@/lib/door-status-utils';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -46,7 +48,11 @@ function useCountdown(targetIso: string | null): string | null {
     if (!targetIso) return;
 
     function updateRemaining() {
-      const target = new Date(targetIso!);
+      const target = parseSafeDate(targetIso);
+      if (!target) {
+        setRemaining(null);
+        return;
+      }
       const now = new Date();
       const diffMs = target.getTime() - now.getTime();
       if (diffMs <= 0) {
@@ -72,17 +78,20 @@ interface ScheduleWindowCardProps {
 }
 
 export default function ScheduleWindowCard({ window: win, compact = false }: ScheduleWindowCardProps) {
+  const unlockAt = parseSafeDate(win.unlock_at);
+  const lockAt = parseSafeDate(win.lock_at);
+
   const showCountdown =
-    win.status === 'pending' && isFuture(new Date(win.unlock_at));
+    win.status === 'pending' && !!unlockAt && isFuture(unlockAt);
 
   const countdown = useCountdown(showCountdown ? win.unlock_at : null);
 
-  const unlockAt = new Date(win.unlock_at);
-  const lockAt = new Date(win.lock_at);
-
-  const timeRangeLabel = compact
-    ? `${format(unlockAt, 'h:mm a')} – ${format(lockAt, 'h:mm a')}`
-    : `${format(unlockAt, 'EEE, MMM d · h:mm a')} – ${format(lockAt, 'h:mm a')}`;
+  const timeRangeLabel =
+    unlockAt && lockAt
+      ? compact
+        ? `${format(unlockAt, 'h:mm a')} – ${format(lockAt, 'h:mm a')}`
+        : `${format(unlockAt, 'EEE, MMM d · h:mm a')} – ${format(lockAt, 'h:mm a')}`
+      : '—';
 
   if (compact) {
     return (
@@ -194,13 +203,13 @@ export default function ScheduleWindowCard({ window: win, compact = false }: Sch
           <polyline points="12 6 12 12 16 14" />
         </svg>
         <span>
-          {format(unlockAt, 'EEE, MMM d, yyyy')}
+          {unlockAt ? format(unlockAt, 'EEE, MMM d, yyyy') : '—'}
           {'  '}
-          {format(unlockAt, 'h:mm a')}
+          {unlockAt ? format(unlockAt, 'h:mm a') : '—'}
           {' — '}
-          {format(lockAt, 'h:mm a')}
+          {lockAt ? format(lockAt, 'h:mm a') : '—'}
         </span>
-        {isPast(lockAt) && (
+        {lockAt && isPast(lockAt) && (
           <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
             ({formatDistanceToNow(lockAt, { addSuffix: true })})
           </span>
@@ -251,7 +260,7 @@ export default function ScheduleWindowCard({ window: win, compact = false }: Sch
                     : undefined
                 }
               >
-                <span>{label}</span>
+                <span>{formatDoorDisplayName(label)}</span>
                 {(unlockBadgeText || lockBadgeText) && (
                   <span style={{ fontSize: '0.625rem', opacity: 0.9, fontWeight: 600 }}>
                     · {unlockBadgeText ? `Unlock ${unlockBadgeText}` : ''}

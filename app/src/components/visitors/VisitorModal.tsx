@@ -9,6 +9,7 @@ import type { UnifiVisitor, Door } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
 import { format, addHours, addDays, endOfDay, setMinutes, setSeconds, setMilliseconds } from 'date-fns';
 import { parseSafeDate } from '@/lib/date-utils';
+import { formatDoorDisplayName } from '@/lib/door-status-utils';
 
 interface VisitorModalProps {
   isOpen: boolean;
@@ -671,7 +672,7 @@ export default function VisitorModal({
                       checked={isSelected}
                       onChange={() => handleDoorToggle(doorId)}
                     />
-                    <span style={{ fontWeight: isSelected ? 600 : 400 }}>{door.label}</span>
+                    <span style={{ fontWeight: isSelected ? 600 : 400 }} title={door.label}>{formatDoorDisplayName(door.label)}</span>
                     {isDoorHidden(door) && (
                       <span
                         className="badge"

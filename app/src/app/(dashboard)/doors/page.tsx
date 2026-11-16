@@ -18,14 +18,19 @@ import {
   setAgentAutoUpdate,
   updateDoorHidden,
   batchUpdateDoorsHidden,
+  subscribeToCameras,
+  subscribeToUserCameraPermission,
+  linkDoorCameras,
 } from '@/lib/firestore';
-import type { Door, Agent, UnifiSchedule, ScheduleWindow, AgentRelease, PcoCampus, PcoLocation } from '@/lib/types';
+import type { Door, Agent, UnifiSchedule, ScheduleWindow, AgentRelease, PcoCampus, PcoLocation, Camera, UserCameraPermission } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
 import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
-import { getDoorUnlockStatus } from '@/lib/door-status-utils';
+import { formatDoorDisplayName, getDoorUnlockStatus } from '@/lib/door-status-utils';
 import Modal from '@/components/ui/Modal';
 import DoorPhotoModal from '@/components/doors/DoorPhotoModal';
+import CameraModal from '@/components/cameras/CameraModal';
 import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
+import { Video } from 'lucide-react';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +132,9 @@ interface DoorCardProps {
   onEditCampusLocation?: (door: Door) => void;
   onEditPhoto?: (door: Door) => void;
   onToggleHide?: (door: Door) => void;
+  onViewCamera?: (door: Door) => void;
+  onLinkCamera?: (door: Door) => void;
+  hasLinkedCamera?: boolean;
   isAdmin?: boolean;
   selected?: boolean;
   onSelectToggle?: (door: Door) => void;
@@ -155,6 +163,9 @@ function DoorCard({
   onEditCampusLocation,
   onEditPhoto,
   onToggleHide,
+  onViewCamera,
+  onLinkCamera,
+  hasLinkedCamera = false,
   isAdmin = false,
   selected = false,
   onSelectToggle,
@@ -428,8 +439,9 @@ function DoorCard({
                 whiteSpace: 'nowrap',
                 margin: 0,
               }}
+              title={door.label}
             >
-              {door.label}
+              {formatDoorDisplayName(door.label)}
             </h3>
             <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>
               {door.last_synced
@@ -769,6 +781,25 @@ function DoorCard({
           <LockIcon size={14} color="currentColor" />
           Lock
         </button>
+        {hasLinkedCamera && onViewCamera ? (
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => onViewCamera(door)}
+            title="View linked camera"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+          >
+            <Video size={14} />
+          </button>
+        ) : isAdmin && onLinkCamera ? (
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => onLinkCamera(door)}
+            title="Link camera to door"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+          >
+            <Video size={14} style={{ opacity: 0.5 }} />
+          </button>
+        ) : null}
       </div>
       </div>
     </div>
@@ -1085,7 +1116,7 @@ export default function DoorsPage() {
   const [selectedLocationFilter, setSelectedLocationFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   // Visibility filter for admins: 'all' | 'active' | 'hidden'
-  const [visibilityFilter, setVisibilityFilter] = useState<'all' | 'active' | 'hidden'>('all');
+  const [visibilityFilter, setVisibilityFilter] = useState<'all' | 'active' | 'hidden'>('active');
 
   // Batch selection
   const [selectedDoorIds, setSelectedDoorIds] = useState<string[]>([]);
@@ -1114,6 +1145,64 @@ export default function DoorsPage() {
   // Photo Management Modal
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const [photoDoor, setPhotoDoor] = useState<Door | null>(null);
+
+  // Camera Viewing & Linking
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  const [camPerm, setCamPerm] = useState<UserCameraPermission | null | undefined>(undefined);
+  const [activeCamera, setActiveCamera] = useState<Camera | null>(null);
+  const [linkCameraDoor, setLinkCameraDoor] = useState<Door | null>(null);
+  const [linkCameraId, setLinkCameraId] = useState<string>('');
+  const [savingCameraLink, setSavingCameraLink] = useState(false);
+
+  useEffect(() => {
+    if (!orgId || !user) return;
+    if (isAdmin) {
+      setCamPerm({
+        uid: user.uid,
+        org_id: orgId,
+        access_mode: 'all',
+        allowed_camera_ids: [],
+        onsite_only: false,
+        allow_notifications: true,
+        updated_at: '',
+      });
+      return;
+    }
+    return subscribeToUserCameraPermission(orgId, user.uid, setCamPerm);
+  }, [orgId, user, isAdmin]);
+
+  useEffect(() => {
+    if (!orgId) return;
+    if (!isAdmin && camPerm === undefined) return;
+    const allowed = isAdmin || camPerm?.access_mode === 'all'
+      ? null
+      : camPerm?.access_mode === 'selected'
+        ? (camPerm.allowed_camera_ids || [])
+        : [];
+    return subscribeToCameras(orgId, setCameras, allowed);
+  }, [orgId, isAdmin, camPerm]);
+
+  const getPermittedCameraForDoor = (door: Door): Camera | null => {
+    const targetId = door.primary_camera_id || door.camera_ids?.[0];
+    if (!targetId) return null;
+    return cameras.find((c) => c.id === targetId) || null;
+  };
+
+  const handleSaveCameraLink = async () => {
+    if (!orgId || !linkCameraDoor) return;
+    setSavingCameraLink(true);
+    try {
+      await linkDoorCameras(
+        orgId,
+        linkCameraDoor.id,
+        linkCameraId ? [linkCameraId] : [],
+        linkCameraId || null
+      );
+      setLinkCameraDoor(null);
+    } finally {
+      setSavingCameraLink(false);
+    }
+  };
 
   // Hide / Unhide Confirmation Modal
   const [hideModalOpen, setHideModalOpen] = useState(false);
@@ -1553,7 +1642,7 @@ export default function DoorsPage() {
               </strong>{' '}
               {outsidePolicyDoors.map((d) => {
                 const s = getDoorUnlockStatus(d, schedules, scheduleWindows);
-                return `${d.label} (${s.durationLabel || 'unlocked'})`;
+                return `${formatDoorDisplayName(d.label)} (${s.durationLabel || 'unlocked'})`;
               }).join(' · ')}
             </div>
           </div>
@@ -1819,26 +1908,35 @@ export default function DoorsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-3">
-          {filteredDoors.map((door) => (
-            <DoorCard
-              key={door.id}
-              door={door}
-              schedules={schedules}
-              scheduleWindows={scheduleWindows}
-              onUnlock={openUnlockModal}
-              onLock={openLockModal}
-              onEditCampusLocation={openAssignModalForSingle}
-              onEditPhoto={(d) => {
-                setPhotoDoor(d);
-                setPhotoModalOpen(true);
-              }}
-              onToggleHide={openSingleHideModal}
-              isAdmin={isAdmin}
-              selected={selectedDoorIds.includes(door.id)}
-              onSelectToggle={handleDoorSelectToggle}
-              actionLoading={actionLoading}
-            />
-          ))}
+          {filteredDoors.map((door) => {
+            const linkedCam = getPermittedCameraForDoor(door);
+            return (
+              <DoorCard
+                key={door.id}
+                door={door}
+                schedules={schedules}
+                scheduleWindows={scheduleWindows}
+                onUnlock={openUnlockModal}
+                onLock={openLockModal}
+                onEditCampusLocation={openAssignModalForSingle}
+                onEditPhoto={(d) => {
+                  setPhotoDoor(d);
+                  setPhotoModalOpen(true);
+                }}
+                onToggleHide={openSingleHideModal}
+                hasLinkedCamera={!!linkedCam}
+                onViewCamera={() => linkedCam && setActiveCamera(linkedCam)}
+                onLinkCamera={(d) => {
+                  setLinkCameraDoor(d);
+                  setLinkCameraId(d.primary_camera_id || d.camera_ids?.[0] || '');
+                }}
+                isAdmin={isAdmin}
+                selected={selectedDoorIds.includes(door.id)}
+                onSelectToggle={handleDoorSelectToggle}
+                actionLoading={actionLoading}
+              />
+            );
+          })}
         </div>
       )}
 
@@ -1914,7 +2012,7 @@ export default function DoorsPage() {
           {/* Selected Doors List */}
           {doorsToAssign.length > 1 && (
             <div style={{ padding: '0.625rem', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)', fontSize: '0.75rem', maxHeight: '5rem', overflowY: 'auto' }}>
-              <strong>Applying to:</strong> {doorsToAssign.map((d) => d.label).join(', ')}
+              <strong>Applying to:</strong> {doorsToAssign.map((d) => formatDoorDisplayName(d.label)).join(', ')}
             </div>
           )}
 
@@ -2210,6 +2308,58 @@ export default function DoorsPage() {
       >
         <AgentInstallGuide connectionToken="" showDownloadButton={true} />
       </Modal>
+
+      {/* Link Camera to Door Modal */}
+      <Modal
+        isOpen={!!linkCameraDoor}
+        onClose={() => !savingCameraLink && setLinkCameraDoor(null)}
+        title={`Link Camera — ${linkCameraDoor?.label || ''}`}
+        footer={
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => setLinkCameraDoor(null)} disabled={savingCameraLink}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={handleSaveCameraLink} disabled={savingCameraLink}>
+              {savingCameraLink ? 'Saving…' : 'Save Link'}
+            </button>
+          </div>
+        }
+      >
+        <div className="form-group">
+          <label className="form-label">Primary UniFi Protect Camera</label>
+          <select
+            className="form-select"
+            value={linkCameraId}
+            onChange={(e) => setLinkCameraId(e.target.value)}
+          >
+            <option value="">None (Unlinked)</option>
+            {cameras.map((cam) => (
+              <option key={cam.id} value={cam.id}>
+                {cam.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </Modal>
+
+      {orgId && (
+        <CameraModal
+          isOpen={!!activeCamera}
+          onClose={() => setActiveCamera(null)}
+          orgId={orgId}
+          camera={activeCamera}
+          role={role}
+          linkedDoors={
+            activeCamera
+              ? doors.filter(
+                  (d) =>
+                    d.primary_camera_id === activeCamera.id ||
+                    (Array.isArray(d.camera_ids) && d.camera_ids.includes(activeCamera.id))
+                )
+              : []
+          }
+        />
+      )}
 
       <style>{`
         @media (max-width: 900px) {

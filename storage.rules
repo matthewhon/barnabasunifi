@@ -19,6 +19,19 @@ service firebase.storage {
         && request.resource.contentType.matches('image/.*');
     }
 
+    // ─── UniFi Protect Camera Snapshots ───────────────────────────────────────
+    // Client reads are locked to short-lived signed URLs issued by Cloud Functions
+    // so per-user camera allowlists and onsite-only restrictions cannot be bypassed.
+    // Paired agents for the org may upload snapshots.
+    match /organizations/{orgId}/cameras/{allPaths=**} {
+      allow read: if false;
+      allow write: if request.auth != null
+        && request.auth.token.agent == true
+        && request.auth.token.orgId == orgId
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
     // ─── Deny everything else ──────────────────────────────────────────────────
     match /{allPaths=**} {
       allow read, write: if false;

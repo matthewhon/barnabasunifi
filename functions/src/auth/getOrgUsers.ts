@@ -2,7 +2,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 
-type Role = 'super_admin' | 'org_admin' | 'manager' | 'viewer';
+type Role = 'super_admin' | 'org_admin' | 'manager' | 'viewer' | 'camera_viewer';
 
 interface GetOrgUsersRequest {
   orgId: string;

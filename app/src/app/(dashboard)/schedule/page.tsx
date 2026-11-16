@@ -21,8 +21,9 @@ import type {
   DayOfWeek,
 } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
+import { formatDoorDisplayName } from '@/lib/door-status-utils';
 import { format } from 'date-fns';
-import { safeIsPast } from '@/lib/date-utils';
+import { parseSafeDate, safeFormat, safeIsPast } from '@/lib/date-utils';
 import { toZonedTime } from 'date-fns-tz';
 import Modal from '@/components/ui/Modal';
 import UnifiScheduleModal from '@/components/schedules/UnifiScheduleModal';
@@ -45,21 +46,25 @@ function sourceTypeBadgeClass(type: MappingSourceType): string {
   return type === 'service' ? 'badge-info' : 'badge-neutral';
 }
 
-function formatWindowTime(iso: string, tz: string): string {
+function formatWindowTime(iso: unknown, tz: string): string {
+  const d = parseSafeDate(iso);
+  if (!d) return '—';
   try {
-    const zoned = toZonedTime(new Date(iso), tz);
+    const zoned = toZonedTime(d, tz);
     return format(zoned, 'MMM d, yyyy · h:mm a');
   } catch {
-    return format(new Date(iso), 'MMM d, yyyy · h:mm a');
+    return safeFormat(d, 'MMM d, yyyy · h:mm a');
   }
 }
 
-function formatWindowTimeShort(iso: string, tz: string): string {
+function formatWindowTimeShort(iso: unknown, tz: string): string {
+  const d = parseSafeDate(iso);
+  if (!d) return '—';
   try {
-    const zoned = toZonedTime(new Date(iso), tz);
+    const zoned = toZonedTime(d, tz);
     return format(zoned, 'h:mm a');
   } catch {
-    return format(new Date(iso), 'h:mm a');
+    return safeFormat(d, 'h:mm a');
   }
 }
 
@@ -695,7 +700,7 @@ export default function SchedulePage() {
                                   className={`badge ${d.state === 'locked' ? 'badge-danger' : d.state === 'unlocked' ? 'badge-success' : 'badge-neutral'}`}
                                   style={{ fontSize: '0.6875rem' }}
                                 >
-                                  🚪 {d.label}
+                                  🚪 {formatDoorDisplayName(d.label)}
                                 </span>
                               ))}
                             </div>
@@ -825,7 +830,7 @@ export default function SchedulePage() {
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                               <span style={{ fontSize: '1.125rem' }}>🚪</span>
                               <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                                {door.label || door.id}
+                                {door.label ? formatDoorDisplayName(door.label) : door.id}
                               </h3>
                             </div>
                             <div style={{ display: 'flex', gap: '0.375rem', marginTop: '0.375rem', flexWrap: 'wrap' }}>
@@ -923,7 +928,7 @@ export default function SchedulePage() {
                             : 'Door schedule'}
                         </span>
                         {doorSched?.last_synced && (
-                          <span>Synced {format(new Date(doorSched.last_synced), 'MMM d, h:mm a')}</span>
+                          <span>Synced {safeFormat(doorSched.last_synced, 'MMM d, h:mm a')}</span>
                         )}
                       </div>
                     </div>
@@ -1073,7 +1078,7 @@ export default function SchedulePage() {
                           : 'No doors assigned'}
                       </span>
                       <span>
-                        {sched.last_synced ? `Synced ${format(new Date(sched.last_synced), 'MMM d, h:mm a')}` : ''}
+                        {sched.last_synced ? `Synced ${safeFormat(sched.last_synced, 'MMM d, h:mm a')}` : ''}
                       </span>
                     </div>
                   </div>

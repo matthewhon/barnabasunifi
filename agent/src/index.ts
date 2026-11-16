@@ -14,8 +14,11 @@ import { getConfigurationStatus, saveConfig } from './config';
 import { logger, setLogLevel } from './logger';
 import { initializeFirebase, getDb, firestoreTimestamp } from './firebase';
 import { UnifiAccessClient } from './unifi/access';
+import { UnifiProtectClient } from './unifi/protect';
+import { startGo2Rtc, stopGo2Rtc } from './unifi/go2rtc';
 import { startHeartbeat } from './firebase/heartbeat';
 import { syncDoors, startDoorSyncInterval } from './firebase/doorSync';
+import { syncCameras, startCameraSyncIntervals } from './firebase/cameraSync';
 import { syncSchedules, startScheduleSyncInterval } from './firebase/scheduleSync';
 import { syncVisitors, startVisitorSyncInterval } from './firebase/visitorSync';
 import { syncAccessLogs, startAccessLogSyncInterval } from './firebase/accessLogSync';
@@ -362,6 +365,16 @@ async function startBridgeWorker(): Promise<void> {
     }
     const stopAccessLogSync = startAccessLogSyncInterval(config.orgId, unifiClient, 25 * 1000);
 
+    const protectClient = new UnifiProtectClient(
+      process.env.UNIFI_PROTECT_HOST || config.unifiHost,
+      process.env.UNIFI_PROTECT_API_KEY || '',
+      config.skipTlsVerify
+    );
+    const go2rtcEnabled = startGo2Rtc();
+
+    // Initial camera sync & recurring (if Protect configured via env or cloud settings)
+    const stopCameraSync = startCameraSyncIntervals(config.orgId, protectClient, go2rtcEnabled);
+
     // Start Firestore command listener
     const stopCommandListener = startCommandListener(
       config.orgId,
@@ -372,7 +385,8 @@ async function startBridgeWorker(): Promise<void> {
           `[Main] Command callback — id: ${cmd.id} action: ${cmd.action} door: ${cmd.door_id}`
         );
       },
-      bridgeState.onRestartRequest
+      bridgeState.onRestartRequest,
+      protectClient
     );
 
     // Cloud settings listener
@@ -424,6 +438,19 @@ async function startBridgeWorker(): Promise<void> {
             bridgeState.lastSync = new Date();
           }
         }
+
+        // Apply UniFi Protect settings from cloud
+        const protectCfg = data?.unifi_protect;
+        if (protectCfg?.enabled && protectCfg?.api_key) {
+          const pHost = protectCfg.host || config.unifiHost;
+          const pSkipTls = protectCfg.skip_tls_verify !== undefined ? Boolean(protectCfg.skip_tls_verify) : config.skipTlsVerify;
+          protectClient.updateCredentials(pHost, protectCfg.api_key, pSkipTls);
+          syncCameras(config.orgId, protectClient, go2rtcEnabled).catch((err) => {
+            logger.warn(`[CameraSync] Initial Protect sync notice: ${err.message}`);
+          });
+        } else if (protectCfg && !protectCfg.enabled) {
+          protectClient.updateCredentials('', '', true);
+        }
       },
       (err: any) => {
         logger.warn(`[Bridge] Cloud settings listener notice: ${err.message}`);
@@ -437,6 +464,8 @@ async function startBridgeWorker(): Promise<void> {
     stopOnlineWorkers = () => {
       stopSettingsListener();
       stopCommandListener();
+      stopCameraSync();
+      stopGo2Rtc();
       stopAccessLogSync();
       stopVisitorSync();
       stopPolicySync();

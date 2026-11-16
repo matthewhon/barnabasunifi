@@ -10,9 +10,11 @@
 
 import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient, UnifiVisitor } from '../unifi/access';
+import { UnifiProtectClient } from '../unifi/protect';
 import { logger } from '../logger';
 
 import { syncDoors } from './doorSync';
+import { syncCameras, captureCameraSnapshot } from './cameraSync';
 import { syncSchedules } from './scheduleSync';
 import { syncVisitors } from './visitorSync';
 import { syncAccessLogs } from './accessLogSync';
@@ -45,6 +47,8 @@ export type CommandAction =
   | 'update_policy'
   | 'delete_policy'
   | 'sync_access_logs'
+  | 'sync_cameras'
+  | 'capture_snapshot'
   | 'apply_update'
   | 'upgrade_agent'
   | 'restart_agent';
@@ -61,6 +65,7 @@ export interface DoorCommand {
   action: CommandAction;
   door_id?: string;
   door_label?: string;
+  camera_id?: string;
   unifi_door_id?: string;
   schedule_id?: string;
   schedule_data?: Record<string, unknown>;
@@ -234,7 +239,8 @@ export function startCommandListener(
   agentId: string,
   unifiClient: UnifiAccessClient,
   onCommand?: CommandCallback,
-  onRestart?: () => Promise<void>
+  onRestart?: () => Promise<void>,
+  protectClient?: UnifiProtectClient
 ): () => void {
   const db = getDb();
   const commandsRef = db.collection(`organizations/${orgId}/door_commands`);
@@ -742,6 +748,21 @@ export function startCommandListener(
         await db.doc(`organizations/${orgId}/access_policies/${policyId}`).delete();
 
         resultMessage = `Deleted UniFi access policy '${policyId}'.`;
+      } else if (command.action === 'sync_cameras') {
+        if (!protectClient || !protectClient.isConfigured()) {
+          throw new Error('UniFi Protect is not configured on this agent.');
+        }
+        const cams = await syncCameras(orgId, protectClient, true);
+        resultMessage = `Synced ${cams.length} UniFi Protect camera(s).`;
+      } else if (command.action === 'capture_snapshot') {
+        if (!protectClient || !protectClient.isConfigured()) {
+          throw new Error('UniFi Protect is not configured on this agent.');
+        }
+        const targetCamId = command.camera_id;
+        if (!targetCamId) throw new Error('camera_id is required for capture_snapshot');
+        const ok = await captureCameraSnapshot(orgId, targetCamId, protectClient);
+        if (!ok) throw new Error(`Failed to capture snapshot for camera '${targetCamId}'`);
+        resultMessage = `Captured snapshot for camera '${targetCamId}'.`;
       } else if (command.action === 'apply_update' || command.action === 'upgrade_agent') {
         const updateState = await checkForUpdate();
         if (updateState.updateAvailable) {

@@ -224,10 +224,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const sidebarRef = useRef<HTMLDivElement>(null);
 
   const awaitingOrg = !loading && !!user && !orgId && !isSuperAdmin;
+  const isCameraOnly = role === 'camera_viewer';
 
-  // Real-time unmapped events counter subscription
+  // Real-time unmapped events counter subscription (skipped for camera_viewer)
   useEffect(() => {
-    if (!orgId) return;
+    if (!orgId || isCameraOnly) return;
     const unsub = subscribeToScheduleWindows(orgId, (windows) => {
       const count = windows.filter(
         (w) =>
@@ -239,7 +240,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       setUnmappedCount(count);
     });
     return () => unsub();
-  }, [orgId]);
+  }, [orgId, isCameraOnly]);
+
+  // Camera-only role guard: keep camera_viewer on /cameras
+  useEffect(() => {
+    if (!loading && user && isCameraOnly && pathname !== '/cameras') {
+      router.replace('/cameras');
+    }
+  }, [loading, user, isCameraOnly, pathname, router]);
 
   // Auth guard
   useEffect(() => {
@@ -264,12 +272,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
 
       setRedirectingToMobile(true);
-      const target =
-        pathname === '/visitors'
-          ? '/m/visitors'
-          : pathname === '/schedule'
-          ? '/m/schedules'
-          : '/m';
+      const target = isCameraOnly
+        ? '/m/cameras'
+        : pathname === '/cameras'
+        ? '/m/cameras'
+        : pathname === '/visitors'
+        ? '/m/visitors'
+        : pathname === '/schedule'
+        ? '/m/schedules'
+        : '/m';
       router.replace(target);
     };
 
@@ -298,7 +309,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (orgId) {
       getOrganization(orgId).then((o) => setOrg(o));
     }
-  }, [orgId]);
+  }, [orgId, isCameraOnly]);
+
+  // Camera-only role guard: keep camera_viewer on /cameras
+  useEffect(() => {
+    if (!loading && user && isCameraOnly && pathname !== '/cameras') {
+      router.replace('/cameras');
+    }
+  }, [loading, user, isCameraOnly, pathname, router]);
 
   // Close sidebar on outside click
   useEffect(() => {
@@ -336,6 +354,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       title: 'Operations',
       items: [
         { href: '/doors', label: 'Doors & Campuses', icon: <DoorIcon /> },
+        { href: '/cameras', label: 'Cameras', icon: <ActivityIcon /> },
         { href: '/visitors', label: 'Visitor Access', icon: <VisitorIcon /> },
       ],
     },
@@ -391,6 +410,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   function filterSectionItems(items: NavItem[]): NavItem[] {
     return items.filter((item) => {
+      if (isCameraOnly) return item.href === '/cameras';
       if (item.superAdminOnly) return isSuperAdmin;
       if (item.adminOnly) return role === 'org_admin' || isSuperAdmin;
       return true;
