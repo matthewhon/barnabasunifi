@@ -10,6 +10,7 @@ import { useToast } from '@/components/ui/Toast';
 import { safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
 import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
 import UniFiCredentialsGuide from '@/components/agent/UniFiCredentialsGuide';
+import { Plug, Video, Clock, Bell } from 'lucide-react';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -142,6 +143,14 @@ function SliderInput({
 export default function SettingsPage() {
   const { orgId, user, role, isSuperAdmin } = useAuth();
   const isAdmin = role === 'org_admin' || isSuperAdmin;
+  const [activeTab, setActiveTab] = useState<'connections' | 'cameras' | 'scheduling' | 'notifications'>('connections');
+
+  useEffect(() => {
+    const tabParam = new URLSearchParams(window.location.search).get('tab');
+    if (tabParam === 'connections' || tabParam === 'cameras' || tabParam === 'scheduling' || tabParam === 'notifications') {
+      setActiveTab(tabParam);
+    }
+  }, []);
   const { showToast } = useToast();
 
   const [settings, setSettings] = useState<OrgSettings | null>(null);
@@ -725,7 +734,68 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* Settings Tabs */}
+      <div
+        role="tablist"
+        aria-label="Settings sections"
+        style={{
+          display: 'flex',
+          gap: '0.5rem',
+          flexWrap: 'wrap',
+          borderBottom: '1px solid var(--color-border)',
+          paddingBottom: '0.75rem',
+          marginBottom: '1.5rem',
+        }}
+      >
+        {(
+          [
+            { id: 'connections', label: 'Connections & Agent', icon: Plug },
+            { id: 'cameras', label: 'Cameras (Protect)', icon: Video },
+            { id: 'scheduling', label: 'Timing & Sync', icon: Clock },
+            { id: 'notifications', label: 'Notifications', icon: Bell },
+          ] as const
+        ).map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => {
+                setActiveTab(tab.id);
+                const url = new URL(window.location.href);
+                url.searchParams.set('tab', tab.id);
+                window.history.replaceState({}, '', url.toString());
+              }}
+              className={`btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+              }}
+            >
+              <Icon size={15} />
+              {tab.label}
+              {tab.id === 'cameras' && protectEnabled && (
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: isActive ? '#fff' : '#10b981',
+                  }}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        {activeTab === 'connections' && (
+          <>
         {/* ── 1. Planning Center Connection ── */}
         <SectionCard title="1. Planning Center Connection">
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.25rem' }}>
@@ -1051,7 +1121,11 @@ SKIP_TLS_VERIFY=true`}</pre>
             </button>
           </div>
         </SectionCard>
+          </>
+        )}
 
+        {activeTab === 'scheduling' && (
+          <>
         {/* ── 3. Timing Configuration ── */}
         <SectionCard title="3. Timing Configuration">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -1260,7 +1334,11 @@ SKIP_TLS_VERIFY=true`}</pre>
             </div>
           </div>
         </SectionCard>
+          </>
+        )}
 
+        {activeTab === 'connections' && (
+          <>
         {/* ── 5. Agent Software ── */}
         <SectionCard title="5. Agent Software & Network Status">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -1568,7 +1646,11 @@ SKIP_TLS_VERIFY=true`}</pre>
             )}
           </div>
         </SectionCard>
+          </>
+        )}
 
+        {activeTab === 'notifications' && (
+          <>
         {/* ── 6. Event Review Notifications & Alerts ── */}
         <SectionCard title="6. Event Review Notifications & Alerts">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -1706,8 +1788,10 @@ SKIP_TLS_VERIFY=true`}</pre>
             )}
           </div>
         </SectionCard>
+          </>
+        )}
 
-        {/* UniFi Protect (Cameras) */}
+        {activeTab === 'cameras' && (
         <SectionCard title="UniFi Protect (Cameras)">
           <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginTop: 0, marginBottom: '0.75rem' }}>
             Connect your local UniFi Protect console or UNVR through the on-premises agent for live camera viewing.
@@ -1825,6 +1909,7 @@ SKIP_TLS_VERIFY=true`}</pre>
             )}
           </div>
         </SectionCard>
+        )}
       </div>
     </div>
   );
