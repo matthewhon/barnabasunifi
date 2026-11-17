@@ -286,9 +286,21 @@ export const issueCameraStreamSession = onCall<
   };
 });
 
+export interface AccessLogSnapshotItem {
+  url: string;
+  camera_id: string;
+  camera_name: string | null;
+  captured_at: string | null;
+}
+
 export const getAccessLogSnapshotUrl = onCall<
   { orgId: string; logId: string },
-  Promise<{ url: string | null; captured_at: string | null; camera_id: string | null }>
+  Promise<{
+    url: string | null;
+    captured_at: string | null;
+    camera_id: string | null;
+    snapshots: AccessLogSnapshotItem[];
+  }>
 >({ cors: true }, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Authentication required.');
@@ -323,25 +335,67 @@ export const getAccessLogSnapshotUrl = onCall<
   }
 
   const logData = logSnap.data()!;
-  const storagePath = logData.snapshot_storage_path as string | undefined;
-  if (!storagePath) {
-    return { url: null, captured_at: null, camera_id: null };
+  const rawEntries = Array.isArray(logData.snapshot_entries)
+    ? (logData.snapshot_entries as Array<{ camera_id?: string; storage_path?: string; captured_at?: string }>)
+    : [];
+
+  const candidatePaths: Array<{ camera_id: string; storage_path: string; captured_at: string | null }> = [];
+  for (const item of rawEntries) {
+    if (item?.storage_path) {
+      candidatePaths.push({
+        camera_id: String(item.camera_id || ''),
+        storage_path: String(item.storage_path),
+        captured_at: item.captured_at ? String(item.captured_at) : null,
+      });
+    }
+  }
+  const primaryPath = logData.snapshot_storage_path as string | undefined;
+  if (primaryPath && !candidatePaths.some((c) => c.storage_path === primaryPath)) {
+    candidatePaths.unshift({
+      camera_id: String(logData.snapshot_camera_id || ''),
+      storage_path: primaryPath,
+      captured_at: (logData.snapshot_captured_at as string) || null,
+    });
   }
 
-  const file = getStorage().bucket().file(storagePath);
-  const [exists] = await file.exists();
-  if (!exists) {
-    return { url: null, captured_at: null, camera_id: (logData.snapshot_camera_id as string) || null };
+  if (candidatePaths.length === 0) {
+    return { url: null, captured_at: null, camera_id: null, snapshots: [] };
   }
 
-  const [signed] = await file.getSignedUrl({
-    action: 'read',
-    expires: Date.now() + 5 * 60_000,
-  });
+  const bucket = getStorage().bucket();
+  const expires = Date.now() + 5 * 60_000;
+
+  const resolved = await Promise.all(
+    candidatePaths.map(async (item) => {
+      try {
+        const file = bucket.file(item.storage_path);
+        const [exists] = await file.exists();
+        if (!exists) return null;
+        const [signed] = await file.getSignedUrl({ action: 'read', expires });
+        let cameraName: string | null = null;
+        if (item.camera_id) {
+          const camSnap = await db.doc(`organizations/${orgId}/cameras/${item.camera_id}`).get();
+          cameraName = camSnap.exists ? ((camSnap.data()?.name as string) || null) : null;
+        }
+        return {
+          url: signed,
+          camera_id: item.camera_id,
+          camera_name: cameraName,
+          captured_at: item.captured_at,
+        };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  const snapshots = resolved.filter((r): r is AccessLogSnapshotItem => r !== null);
+  const first = snapshots[0] || null;
 
   return {
-    url: signed,
-    captured_at: (logData.snapshot_captured_at as string) || null,
-    camera_id: (logData.snapshot_camera_id as string) || null,
+    url: first?.url || null,
+    captured_at: first?.captured_at || (logData.snapshot_captured_at as string) || null,
+    camera_id: first?.camera_id || (logData.snapshot_camera_id as string) || null,
+    snapshots,
   };
 });

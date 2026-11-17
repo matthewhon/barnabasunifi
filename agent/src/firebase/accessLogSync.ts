@@ -290,32 +290,70 @@ async function _syncAccessLogsInner(
       try {
         const doorSnap = await db.doc(`organizations/${orgId}/doors/${doorId}`).get();
         const doorData = doorSnap.exists ? doorSnap.data() : null;
-        const camId = doorData?.primary_camera_id || (Array.isArray(doorData?.camera_ids) ? doorData.camera_ids[0] : null);
-        if (camId) {
-          const camIdStr = String(camId);
+        const linkedCamIds = Array.from(
+          new Set(
+            [
+              doorData?.primary_camera_id,
+              ...(Array.isArray(doorData?.camera_ids) ? doorData.camera_ids : []),
+            ].filter((id): id is string => typeof id === 'string' && id.length > 0)
+          )
+        );
+        if (linkedCamIds.length > 0) {
           const label = `${entry.user_name || 'Access'} · ${entry.access_method_label || entry.event_type}`;
-          const shouldSaveEventLogPhoto = !entry.snapshot_storage_path && !entry.snapshot_skipped_reason;
-          const eventLogStoragePath = shouldSaveEventLogPhoto
-            ? `organizations/${orgId}/cameras/${camIdStr}/unlock_events/${entry.id}.jpg`
-            : undefined;
-          const captured = await captureCameraEventSnapshot(
-            orgId,
-            camIdStr,
-            entry.event_type,
-            label,
-            options.protectManager,
-            true,
-            eventLogStoragePath
+          const allowEventLogPhotos = !entry.snapshot_skipped_reason;
+          const capturedEntries: Array<{ camera_id: string; storage_path: string; captured_at: string }> = [];
+
+          if (entry.snapshot_storage_path && entry.snapshot_camera_id) {
+            capturedEntries.push({
+              camera_id: entry.snapshot_camera_id,
+              storage_path: entry.snapshot_storage_path,
+              captured_at: entry.snapshot_captured_at || new Date().toISOString(),
+            });
+          }
+
+          await Promise.all(
+            linkedCamIds.map(async (camIdStr) => {
+              const alreadyCapturedByRule =
+                entry.snapshot_camera_id === camIdStr && Boolean(entry.snapshot_storage_path);
+              const eventLogStoragePath =
+                allowEventLogPhotos && !alreadyCapturedByRule
+                  ? `organizations/${orgId}/cameras/${camIdStr}/unlock_events/${entry.id}.jpg`
+                  : undefined;
+
+              const captured = await captureCameraEventSnapshot(
+                orgId,
+                camIdStr,
+                entry.event_type,
+                label,
+                options.protectManager!,
+                true,
+                eventLogStoragePath
+              );
+              if (captured && eventLogStoragePath) {
+                capturedEntries.push({
+                  camera_id: camIdStr,
+                  storage_path: eventLogStoragePath,
+                  captured_at: new Date().toISOString(),
+                });
+              }
+            })
           );
-          if (captured && eventLogStoragePath) {
-            await db.doc(`organizations/${orgId}/access_logs/${entry.id}`).set(
-              {
-                snapshot_storage_path: eventLogStoragePath,
-                snapshot_camera_id: camIdStr,
-                snapshot_captured_at: new Date().toISOString(),
-              },
-              { merge: true }
+
+          if (capturedEntries.length > 0) {
+            // Preserve linkedCamIds order (primary camera first)
+            capturedEntries.sort(
+              (a, b) => linkedCamIds.indexOf(a.camera_id) - linkedCamIds.indexOf(b.camera_id)
             );
+            const first = capturedEntries[0];
+            const updatePayload: Record<string, unknown> = {
+              snapshot_entries: capturedEntries,
+            };
+            if (!entry.snapshot_storage_path) {
+              updatePayload.snapshot_storage_path = first.storage_path;
+              updatePayload.snapshot_camera_id = first.camera_id;
+              updatePayload.snapshot_captured_at = first.captured_at;
+            }
+            await db.doc(`organizations/${orgId}/access_logs/${entry.id}`).set(updatePayload, { merge: true });
           }
         }
       } catch {

@@ -858,5 +858,10 @@ export interface AccessLogEntry {
   snapshot_camera_id?: string | null;
   snapshot_captured_at?: string | null;
   snapshot_skipped_reason?: string | null;
+  snapshot_entries?: Array<{
+    camera_id: string;
+    storage_path: string;
+    captured_at: string;
+  }>;
   raw_data?: Record<string, unknown>;
 }

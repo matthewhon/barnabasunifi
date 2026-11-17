@@ -295,7 +295,9 @@ export default function AccessActivityPage() {
   const { orgId } = useAuth();
 
   const [snapshotModalEntry, setSnapshotModalEntry] = useState<AccessLogEntry | null>(null);
-  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
+  const [snapshotItems, setSnapshotItems] = useState<
+    Array<{ url: string; camera_id: string; camera_name: string | null; captured_at: string | null }>
+  >([]);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
 
@@ -303,17 +305,40 @@ export default function AccessActivityPage() {
     async (entry: AccessLogEntry) => {
       if (!orgId) return;
       setSnapshotModalEntry(entry);
-      setSnapshotUrl(null);
+      setSnapshotItems([]);
       setSnapshotError(null);
       setSnapshotLoading(true);
       try {
         const fn = httpsCallable<
           { orgId: string; logId: string },
-          { url: string | null; captured_at: string | null; camera_id: string | null }
+          {
+            url: string | null;
+            captured_at: string | null;
+            camera_id: string | null;
+            snapshots?: Array<{
+              url: string;
+              camera_id: string;
+              camera_name: string | null;
+              captured_at: string | null;
+            }>;
+          }
         >(functions, 'getAccessLogSnapshotUrl');
         const res = await fn({ orgId, logId: entry.id });
-        if (res.data?.url) {
-          setSnapshotUrl(res.data.url);
+        const list =
+          Array.isArray(res.data?.snapshots) && res.data.snapshots.length > 0
+            ? res.data.snapshots
+            : res.data?.url
+              ? [
+                  {
+                    url: res.data.url,
+                    camera_id: res.data.camera_id || '',
+                    camera_name: null,
+                    captured_at: res.data.captured_at || null,
+                  },
+                ]
+              : [];
+        if (list.length > 0) {
+          setSnapshotItems(list);
         } else {
           setSnapshotError('Snapshot image is no longer available in storage.');
         }
@@ -1593,19 +1618,36 @@ export default function AccessActivityPage() {
               </div>
             ) : snapshotError ? (
               <div className="alert alert-danger">{snapshotError}</div>
-            ) : snapshotUrl ? (
-              <img
-                src={snapshotUrl}
-                alt={`Unlock snapshot for ${snapshotModalEntry.door_label}`}
+            ) : snapshotItems.length > 0 ? (
+              <div
                 style={{
-                  width: '100%',
-                  maxHeight: '420px',
-                  objectFit: 'contain',
-                  borderRadius: '0.5rem',
-                  border: '1px solid var(--color-border)',
-                  backgroundColor: '#000',
+                  display: 'grid',
+                  gridTemplateColumns: snapshotItems.length > 1 ? 'repeat(auto-fit, minmax(240px, 1fr))' : '1fr',
+                  gap: '0.75rem',
                 }}
-              />
+              >
+                {snapshotItems.map((snap, idx) => (
+                  <div key={`${snap.camera_id}-${idx}`} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                    {snap.camera_name && (
+                      <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                        {snap.camera_name}
+                      </div>
+                    )}
+                    <img
+                      src={snap.url}
+                      alt={`Unlock snapshot${snap.camera_name ? ` (${snap.camera_name})` : ''} for ${snapshotModalEntry.door_label}`}
+                      style={{
+                        width: '100%',
+                        maxHeight: '420px',
+                        objectFit: 'contain',
+                        borderRadius: '0.5rem',
+                        border: '1px solid var(--color-border)',
+                        backgroundColor: '#000',
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
             ) : null}
           </div>
         )}

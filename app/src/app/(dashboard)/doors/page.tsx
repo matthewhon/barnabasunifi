@@ -1214,6 +1214,7 @@ export default function DoorsPage() {
   const [activeCamera, setActiveCamera] = useState<Camera | null>(null);
   const [linkCameraDoor, setLinkCameraDoor] = useState<Door | null>(null);
   const [linkCameraId, setLinkCameraId] = useState<string>('');
+  const [additionalCameraIds, setAdditionalCameraIds] = useState<string[]>([]);
   const [linkCardDisplayMode, setLinkCardDisplayMode] = useState<'photo' | 'camera'>('photo');
   const [unlockSnapCfg, setUnlockSnapCfg] = useState<UnlockSnapshotConfig>({
     enabled: false,
@@ -1271,6 +1272,9 @@ export default function DoorsPage() {
     if (!orgId || !linkCameraDoor) return;
     setSavingCameraLink(true);
     try {
+      const allCameraIds = linkCameraId
+        ? Array.from(new Set([linkCameraId, ...additionalCameraIds.filter((id) => id && id !== linkCameraId)]))
+        : [];
       const cleanSnapCfg: UnlockSnapshotConfig | null = linkCameraId
         ? {
             ...unlockSnapCfg,
@@ -1280,7 +1284,7 @@ export default function DoorsPage() {
       await linkDoorCameras(
         orgId,
         linkCameraDoor.id,
-        linkCameraId ? [linkCameraId] : [],
+        allCameraIds,
         linkCameraId || null,
         linkCameraId ? linkCardDisplayMode : 'photo',
         cleanSnapCfg
@@ -2040,8 +2044,10 @@ export default function DoorsPage() {
                 orgId={orgId ?? undefined}
                 onViewCamera={() => linkedCam && setActiveCamera(linkedCam)}
                 onLinkCamera={(d) => {
+                  const primaryId = d.primary_camera_id || d.camera_ids?.[0] || '';
                   setLinkCameraDoor(d);
-                  setLinkCameraId(d.primary_camera_id || d.camera_ids?.[0] || '');
+                  setLinkCameraId(primaryId);
+                  setAdditionalCameraIds((d.camera_ids || []).filter((id) => id !== primaryId));
                   setLinkCardDisplayMode(d.card_display_mode || 'photo');
                   const existing = d.unlock_snapshot_config;
                   setUnlockSnapCfg({
@@ -2476,7 +2482,11 @@ export default function DoorsPage() {
             <select
               className="form-select"
               value={linkCameraId}
-              onChange={(e) => setLinkCameraId(e.target.value)}
+              onChange={(e) => {
+                const nextPrimary = e.target.value;
+                setLinkCameraId(nextPrimary);
+                setAdditionalCameraIds((prev) => prev.filter((id) => id !== nextPrimary));
+              }}
             >
               <option value="">None (Unlinked)</option>
               {cameras.map((cam) => (
@@ -2486,6 +2496,68 @@ export default function DoorsPage() {
               ))}
             </select>
           </div>
+
+          {linkCameraId && cameras.some((c) => c.id !== linkCameraId) && (
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Additional / Backup Cameras</label>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.4rem',
+                  maxHeight: '140px',
+                  overflowY: 'auto',
+                  padding: '0.5rem 0.75rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-border)',
+                  background: 'var(--color-bg-secondary, rgba(15, 23, 42, 0.3))',
+                }}
+              >
+                {cameras
+                  .filter((cam) => cam.id !== linkCameraId)
+                  .map((cam) => {
+                    const checked = additionalCameraIds.includes(cam.id);
+                    return (
+                      <label
+                        key={cam.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          cursor: 'pointer',
+                          fontSize: '0.85rem',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setAdditionalCameraIds((prev) =>
+                                prev.includes(cam.id) ? prev : [...prev, cam.id]
+                              );
+                            } else {
+                              setAdditionalCameraIds((prev) => prev.filter((id) => id !== cam.id));
+                            }
+                          }}
+                        />
+                        <span>
+                          {cam.name}
+                          {cam.console_label ? (
+                            <span style={{ color: 'var(--color-text-muted)', fontSize: '0.78rem' }}>
+                              {' '}({cam.console_label})
+                            </span>
+                          ) : null}
+                        </span>
+                      </label>
+                    );
+                  })}
+              </div>
+              <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', margin: '0.35rem 0 0' }}>
+                All tagged cameras will capture a photo when this door is unlocked and appear in the Activity Stream.
+              </p>
+            </div>
+          )}
 
           {linkCameraId && (
             <>
