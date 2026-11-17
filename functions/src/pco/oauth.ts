@@ -53,7 +53,7 @@ function getAppBaseUrl(req?: any): string {
       }
     }
   }
-  return 'https://barnabasunifi--barnabasunfi.us-east4.hosted.app';
+  return 'https://barnabasunifi.barnabassoftware.com';
 }
 
 // ---------------------------------------------------------------------------

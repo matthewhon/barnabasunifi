@@ -154,7 +154,7 @@ export const createVisitorRequestLink = onCall<{
   const baseUrl = (
     safeOrigin ||
     orgCtx.portalUrl ||
-    'https://barnabasunifi--barnabasunfi.us-east4.hosted.app'
+    'https://barnabasunifi.barnabassoftware.com'
   ).replace(/\/$/, '');
   const requestUrl = `${baseUrl}/visitor-request/${rawToken}`;
 

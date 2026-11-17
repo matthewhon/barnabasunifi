@@ -81,7 +81,7 @@ export async function getOrgEmailContext(orgId: string): Promise<OrgEmailContext
     timezone: settingsData.timezone || 'America/Chicago',
     address: settingsData.address?.trim() || (orgData.address as string)?.trim() || undefined,
     emailSettings: settingsData.email_settings || {},
-    portalUrl: platformCfg?.portal_url || '',
+    portalUrl: platformCfg?.portal_url || 'https://barnabasunifi.barnabassoftware.com',
   };
 }
 
