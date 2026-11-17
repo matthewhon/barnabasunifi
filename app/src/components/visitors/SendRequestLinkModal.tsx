@@ -62,6 +62,7 @@ export default function SendRequestLinkModal({
         inviteNote: inviteNote.trim() || undefined,
         expiresInDays,
         sendEmail,
+        origin: typeof window !== 'undefined' ? window.location.origin : undefined,
       });
       setGeneratedUrl(res.data.requestUrl);
       setEmailSent(res.data.emailSent);

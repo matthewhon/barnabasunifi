@@ -15,6 +15,7 @@ interface AssignDoorsRequest {
   campusName?: string | null;
   locationId?: string | null;
   locationName?: string | null;
+  address?: string | null;
 }
 
 /**
@@ -198,7 +199,7 @@ export const assignDoorsToCampusLocation = onCall<
     throw new HttpsError('invalid-argument', 'Organization ID is required.');
   }
 
-  const { doorIds, campusId, campusName, locationId, locationName } = request.data;
+  const { doorIds, campusId, campusName, locationId, locationName, address } = request.data;
   if (!Array.isArray(doorIds) || doorIds.length === 0) {
     throw new HttpsError('invalid-argument', 'At least one door ID is required.');
   }
@@ -224,13 +225,17 @@ export const assignDoorsToCampusLocation = onCall<
   const batch = db.batch();
   for (const dId of doorIds) {
     const doorDoc = doorsRef.doc(dId);
-    batch.update(doorDoc, {
+    const updatePayload: Record<string, any> = {
       campus_id: campusId || null,
       campus_name: campusName || null,
       location_id: locationId || null,
       location_name: locationName || null,
       updated_at: FieldValue.serverTimestamp(),
-    });
+    };
+    if (address !== undefined) {
+      updatePayload.address = typeof address === 'string' && address.trim() ? address.trim() : null;
+    }
+    batch.update(doorDoc, updatePayload);
   }
 
   // Audit log entry

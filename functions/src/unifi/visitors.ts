@@ -9,6 +9,7 @@ import {
   buildVisitorHostAlertEmail,
   buildVisitorRevokedEmail,
   buildVisitorCalendarIcs,
+  VisitorDoorLocationInfo,
 } from '../notifications/templates/visitorEmails';
 
 // ---------------------------------------------------------------------------
@@ -324,6 +325,28 @@ export const syncUnifiVisitors = onCall<{ orgId: string }>(
   }
 );
 
+async function resolveVisitorDoorLocations(
+  orgId: string,
+  doorIds: string[]
+): Promise<VisitorDoorLocationInfo[]> {
+  if (!doorIds || doorIds.length === 0) return [];
+  const db = getFirestore();
+  const doorsSnap = await db.collection(`organizations/${orgId}/doors`).get();
+  const doorMap = new Map<string, any>();
+  for (const d of doorsSnap.docs) {
+    doorMap.set(d.id, d.data());
+  }
+  return doorIds.map((id) => {
+    const d = doorMap.get(id);
+    return {
+      label: String(d?.custom_label || d?.label || d?.name || id),
+      address: typeof d?.address === 'string' && d.address.trim() ? d.address.trim() : undefined,
+      campusName: typeof d?.campus_name === 'string' && d.campus_name.trim() ? d.campus_name.trim() : undefined,
+      locationName: typeof d?.location_name === 'string' && d.location_name.trim() ? d.location_name.trim() : undefined,
+    };
+  });
+}
+
 export async function dispatchVisitorEmails(params: {
   orgId: string;
   visitor: Partial<UnifiVisitor>;
@@ -338,6 +361,7 @@ export async function dispatchVisitorEmails(params: {
   let visitorEmailSent = false;
 
   if (sendEmail && visitor.email && visitor.email.includes('@')) {
+    const doorLocations = await resolveVisitorDoorLocations(orgId, visitor.door_ids || []).catch(() => []);
     const emailData = {
       fullName,
       firstName: visitor.first_name,
@@ -349,6 +373,8 @@ export async function dispatchVisitorEmails(params: {
       purpose: visitor.purpose,
       timezone: orgCtx.timezone,
       orgName: orgCtx.orgName,
+      address: orgCtx.address,
+      doorLocations,
     };
     const tmpl = buildVisitorPassEmail(emailData, isUpdate);
     const icsAttachment = buildVisitorCalendarIcs({
@@ -644,6 +670,7 @@ export const sendVisitorPassEmail = onCall<{ orgId: string; visitorId: string }>
     }
 
     const orgCtx = await getOrgEmailContext(orgId);
+    const doorLocations = await resolveVisitorDoorLocations(orgId, visitor.door_ids || []).catch(() => []);
     const emailData = {
       fullName: visitor.full_name || `${visitor.first_name} ${visitor.last_name || ''}`.trim(),
       firstName: visitor.first_name,
@@ -655,6 +682,8 @@ export const sendVisitorPassEmail = onCall<{ orgId: string; visitorId: string }>
       purpose: visitor.purpose,
       timezone: orgCtx.timezone,
       orgName: orgCtx.orgName,
+      address: orgCtx.address,
+      doorLocations,
     };
     const tmpl = buildVisitorPassEmail(emailData, false);
     const icsAttachment = buildVisitorCalendarIcs({

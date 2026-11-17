@@ -175,6 +175,7 @@ export default function SettingsPage() {
   const [lockAfterStartMin, setLockAfterStartMin] = useState(15);
   const [pollInterval, setPollInterval] = useState(30);
   const [timezone, setTimezone] = useState('America/Chicago');
+  const [orgAddress, setOrgAddress] = useState('');
   const [enableUserSync, setEnableUserSync] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingUserSync, setSavingUserSync] = useState(false);
@@ -296,6 +297,7 @@ export default function SettingsPage() {
           setLockAfterStartMin(s.lock_after_start_min ?? 15);
           setPollInterval(s.poll_interval_min);
           setTimezone(s.timezone ?? 'America/Chicago');
+          setOrgAddress(s.address ?? '');
           setEnableUserSync(Boolean(s.enable_user_sync));
           if (s.event_notifications) {
             setNotifyEnabled(Boolean(s.event_notifications.enabled));
@@ -505,6 +507,7 @@ export default function SettingsPage() {
         lock_after_start_min: lockAfterStartMin,
         poll_interval_min: pollInterval,
         timezone,
+        address: orgAddress.trim(),
       });
       showToast('Settings saved successfully.', 'success');
     } catch {
@@ -512,7 +515,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [orgId, unlockBuffer, lockBuffer, lockTimingMode, lockAfterStartMin, pollInterval, timezone, showToast]);
+  }, [orgId, unlockBuffer, lockBuffer, lockTimingMode, lockAfterStartMin, pollInterval, timezone, orgAddress, showToast]);
 
   const handleToggleUserSync = useCallback(async (newVal: boolean) => {
     if (!orgId) return;
@@ -1650,6 +1653,21 @@ SKIP_TLS_VERIFY=true`}</pre>
               </select>
               <span className="form-hint">
                 All schedule windows will be displayed in this timezone.
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Facility Address / Location</label>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="e.g. 123 Main St, Austin, TX 78701"
+                value={orgAddress}
+                onChange={(e) => setOrgAddress(e.target.value)}
+                style={{ maxWidth: '28rem' }}
+              />
+              <span className="form-hint">
+                Included in visitor access pass emails and calendar invites (unless overridden per door).
               </span>
             </div>
 

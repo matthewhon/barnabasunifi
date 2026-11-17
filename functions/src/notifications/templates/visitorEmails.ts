@@ -1,5 +1,12 @@
 import { escapeHtml, formatDateInTz } from './baseLayout';
 
+export interface VisitorDoorLocationInfo {
+  label: string;
+  address?: string;
+  campusName?: string;
+  locationName?: string;
+}
+
 export interface VisitorEmailData {
   fullName: string;
   firstName?: string;
@@ -11,12 +18,41 @@ export interface VisitorEmailData {
   purpose?: string;
   timezone: string;
   orgName: string;
+  address?: string;
+  doorLocations?: VisitorDoorLocationInfo[];
+}
+
+function formatVisitorLocationLines(v: VisitorEmailData): string[] {
+  const doorAddresses = (v.doorLocations || [])
+    .map((dl) => {
+      const addr = dl.address?.trim();
+      const sub = [dl.campusName, dl.locationName].filter(Boolean).join(' · ');
+      if (addr && sub) return `${dl.label}: ${addr} (${sub})`;
+      if (addr) return `${dl.label}: ${addr}`;
+      return null;
+    })
+    .filter((x): x is string => Boolean(x));
+
+  if (doorAddresses.length > 0) {
+    // If all doors share the same address string and there's only one unique address, collapse it cleanly
+    const uniqueRaw = Array.from(
+      new Set((v.doorLocations || []).map((d) => d.address?.trim()).filter(Boolean))
+    );
+    if (uniqueRaw.length === 1 && doorAddresses.length === (v.doorLocations || []).length) {
+      return [uniqueRaw[0]!];
+    }
+    return doorAddresses;
+  }
+
+  return v.address?.trim() ? [v.address.trim()] : [];
 }
 
 export function buildVisitorPassEmail(v: VisitorEmailData, isUpdate = false) {
   const startFormatted = formatDateInTz(v.startTime, v.timezone);
   const endFormatted = formatDateInTz(v.endTime, v.timezone);
   const doorsText = v.doorLabels.length > 0 ? v.doorLabels.join(', ') : 'Assigned facility doors';
+  const locationLines = formatVisitorLocationLines(v);
+  const hasLocation = locationLines.length > 0;
 
   const pinBlock = v.pinCode
     ? `
@@ -51,9 +87,14 @@ export function buildVisitorPassEmail(v: VisitorEmailData, isUpdate = false) {
         <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#0f172a;">${escapeHtml(endFormatted)}</td>
       </tr>
       <tr>
-        <td style="padding:10px 14px;${v.purpose ? 'border-bottom:1px solid #e2e8f0;' : ''}font-size:13px;color:#64748b;">Authorized Doors</td>
-        <td style="padding:10px 14px;${v.purpose ? 'border-bottom:1px solid #e2e8f0;' : ''}font-size:13px;font-weight:600;color:#0f172a;">${escapeHtml(doorsText)}</td>
+        <td style="padding:10px 14px;${v.purpose || hasLocation ? 'border-bottom:1px solid #e2e8f0;' : ''}font-size:13px;color:#64748b;">Authorized Doors</td>
+        <td style="padding:10px 14px;${v.purpose || hasLocation ? 'border-bottom:1px solid #e2e8f0;' : ''}font-size:13px;font-weight:600;color:#0f172a;">${escapeHtml(doorsText)}</td>
       </tr>
+      ${hasLocation ? `
+      <tr>
+        <td style="padding:10px 14px;${v.purpose ? 'border-bottom:1px solid #e2e8f0;' : ''}font-size:13px;color:#64748b;vertical-align:top;">Location / Address</td>
+        <td style="padding:10px 14px;${v.purpose ? 'border-bottom:1px solid #e2e8f0;' : ''}font-size:13px;color:#0f172a;">${locationLines.map((line) => escapeHtml(line)).join('<br/>')}</td>
+      </tr>` : ''}
       ${v.purpose ? `
       <tr>
         <td style="padding:10px 14px;font-size:13px;color:#64748b;">Purpose</td>
@@ -73,6 +114,7 @@ export function buildVisitorPassEmail(v: VisitorEmailData, isUpdate = false) {
     `Valid From: ${startFormatted}`,
     `Valid Until: ${endFormatted}`,
     `Authorized Doors: ${doorsText}`,
+    hasLocation ? `Location / Address: ${locationLines.join(' | ')}` : '',
     v.purpose ? `Purpose: ${v.purpose}` : '',
   ]
     .filter(Boolean)
@@ -179,6 +221,9 @@ export function buildVisitorCalendarIcs(v: VisitorEmailData & { uid?: string }) 
     v.purpose ? `Purpose: ${v.purpose}` : '',
   ].filter(Boolean);
 
+  const locationLines = formatVisitorLocationLines(v);
+  const icsLocation = locationLines.length > 0 ? locationLines.join(' | ') : v.orgName;
+
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -192,7 +237,7 @@ export function buildVisitorCalendarIcs(v: VisitorEmailData & { uid?: string }) 
     `DTEND:${dtEnd}`,
     `SUMMARY:${escapeIcsText(`Visitor Access — ${v.orgName}`)}`,
     `DESCRIPTION:${escapeIcsText(descParts.join('\n'))}`,
-    `LOCATION:${escapeIcsText(v.orgName)}`,
+    `LOCATION:${escapeIcsText(icsLocation)}`,
     'STATUS:CONFIRMED',
     'END:VEVENT',
     'END:VCALENDAR',

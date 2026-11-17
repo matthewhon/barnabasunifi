@@ -30,6 +30,7 @@ export interface Organization {
   id: string;
   name: string;
   slug: string;
+  address?: string;
   created_at: string;
   pco_connected: boolean; // derived: whether OAuth token exists
 }
@@ -43,6 +44,7 @@ export interface OrgSettings {
   lock_after_start_min?: number;    // default 15
   poll_interval_min: number;        // default 30
   timezone: string;                 // e.g. "America/Chicago"
+  address?: string;                 // Tenant / primary facility street address
   enable_user_sync?: boolean;       // Opt-in flag for syncing PCO Lists to UniFi Users & Policies
   pco_oauth?: {
     access_token: string;
@@ -244,6 +246,7 @@ export interface Door {
   unlock_schedule_name?: string | null;
   floor?: string | null;
   building?: string | null;
+  address?: string | null;
   last_accessed_at?: string | null;
   last_accessed_by?: string | null;
   last_access_method?: AccessMethod | string | null;

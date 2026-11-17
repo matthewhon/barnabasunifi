@@ -8,6 +8,7 @@ export interface OrgEmailContext {
   orgId: string;
   orgName: string;
   timezone: string;
+  address?: string;
   emailSettings: OrgEmailSettings;
   portalUrl: string;
 }
@@ -78,6 +79,7 @@ export async function getOrgEmailContext(orgId: string): Promise<OrgEmailContext
     orgId,
     orgName: (orgData.name as string) || orgId,
     timezone: settingsData.timezone || 'America/Chicago',
+    address: settingsData.address?.trim() || (orgData.address as string)?.trim() || undefined,
     emailSettings: settingsData.email_settings || {},
     portalUrl: platformCfg?.portal_url || '',
   };

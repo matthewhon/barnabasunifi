@@ -1200,6 +1200,7 @@ export default function DoorsPage() {
   const [customCampusName, setCustomCampusName] = useState<string>('');
   const [targetLocationId, setTargetLocationId] = useState<string>('');
   const [customLocationName, setCustomLocationName] = useState<string>('');
+  const [doorAddress, setDoorAddress] = useState<string>('');
   const [assigning, setAssigning] = useState(false);
 
   // Photo Management Modal
@@ -1365,6 +1366,7 @@ export default function DoorsPage() {
     setCustomCampusName(door.campus_name || '');
     setTargetLocationId(door.location_id || (door.location_name ? 'custom' : ''));
     setCustomLocationName(door.location_name || '');
+    setDoorAddress(door.address || '');
     setAssignModalOpen(true);
   }
 
@@ -1376,6 +1378,7 @@ export default function DoorsPage() {
     setCustomCampusName('');
     setTargetLocationId('');
     setCustomLocationName('');
+    setDoorAddress('');
     setAssignModalOpen(true);
   }
 
@@ -1511,6 +1514,7 @@ export default function DoorsPage() {
         campusName,
         locationId,
         locationName,
+        address: doorAddress.trim() || null,
       });
 
       setAssignModalOpen(false);
@@ -1524,7 +1528,7 @@ export default function DoorsPage() {
     } finally {
       setAssigning(false);
     }
-  }, [orgId, doorsToAssign, targetCampusId, customCampusName, targetLocationId, customLocationName, campuses, locations]);
+  }, [orgId, doorsToAssign, targetCampusId, customCampusName, targetLocationId, customLocationName, doorAddress, campuses, locations]);
 
   const openSingleHideModal = (door: Door) => {
     setDoorToToggleHide(door);
@@ -2216,6 +2220,23 @@ export default function DoorsPage() {
               />
             </div>
           )}
+
+          <div>
+            <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: '0.25rem', display: 'block' }}>
+              Street Address / Entrance Location (optional)
+            </label>
+            <input
+              type="text"
+              className="input"
+              placeholder="e.g. 123 Main St (East Entrance), Austin, TX"
+              value={doorAddress}
+              onChange={(e) => setDoorAddress(e.target.value)}
+              disabled={assigning}
+            />
+            <div style={{ fontSize: '0.7rem', color: 'var(--color-text-secondary)', marginTop: '0.25rem' }}>
+              Overrides the organization address in visitor pass emails &amp; calendar invites for this door.
+            </div>
+          </div>
         </div>
       </Modal>
 

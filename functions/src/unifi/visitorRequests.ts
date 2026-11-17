@@ -94,6 +94,7 @@ export const createVisitorRequestLink = onCall<{
   inviteNote?: string;
   expiresInDays?: number;
   sendEmail?: boolean;
+  origin?: string;
 }>(async (request) => {
   const {
     orgId,
@@ -102,6 +103,7 @@ export const createVisitorRequestLink = onCall<{
     inviteNote,
     expiresInDays = 7,
     sendEmail = false,
+    origin,
   } = request.data ?? {};
 
   if (!orgId) {
@@ -145,7 +147,15 @@ export const createVisitorRequestLink = onCall<{
   ]);
 
   const orgCtx = await getOrgEmailContext(orgId);
-  const baseUrl = (orgCtx.portalUrl || 'https://barnabasunfi.web.app').replace(/\/$/, '');
+  const safeOrigin =
+    typeof origin === 'string' && /^https?:\/\//i.test(origin.trim())
+      ? origin.trim()
+      : '';
+  const baseUrl = (
+    safeOrigin ||
+    orgCtx.portalUrl ||
+    'https://barnabasunifi--barnabasunfi.us-east4.hosted.app'
+  ).replace(/\/$/, '');
   const requestUrl = `${baseUrl}/visitor-request/${rawToken}`;
 
   let emailSent = false;
