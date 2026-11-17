@@ -373,14 +373,14 @@ async function startBridgeWorker(): Promise<void> {
     // Initial camera sync & recurring (if Protect configured via env or cloud settings)
     const stopCameraSync = startCameraSyncIntervals(config.orgId, protectClient, go2rtcEnabled);
 
-    // Initial access log sync & recurring (10s interval for timely unlock snapshot capture)
+    // Initial access log sync & recurring (3s interval for timely unlock snapshot capture)
     try {
       const logs = await syncAccessLogs(config.orgId, unifiClient, { protectManager: protectClient });
       logger.info(`[AccessLogSync] Initial sync completed (${logs.length} access logs found).`);
     } catch (err: any) {
       logger.error(`[AccessLogSync] Initial sync error: ${err.message}`);
     }
-    const stopAccessLogSync = startAccessLogSyncInterval(config.orgId, unifiClient, 10 * 1000, protectClient);
+    const stopAccessLogSync = startAccessLogSyncInterval(config.orgId, unifiClient, 3 * 1000, protectClient);
 
     let stopProtectEvents: (() => void) | null = null;
     if (protectClient.isConfigured()) {

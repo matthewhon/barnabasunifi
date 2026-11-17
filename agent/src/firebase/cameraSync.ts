@@ -183,12 +183,14 @@ export async function captureCameraEventSnapshot(
   cameraId: string,
   eventType: string,
   eventLabel: string,
-  protectManager: ProtectManager
+  protectManager: ProtectManager,
+  force = false,
+  eventLogStoragePath?: string
 ): Promise<boolean> {
   if (!protectManager.isConfigured()) return false;
   const now = Date.now();
   const prev = lastEventCaptureMs.get(cameraId) || 0;
-  if (now - prev < 10_000) return false;
+  if (!force && now - prev < 10_000) return false;
   lastEventCaptureMs.set(cameraId, now);
 
   try {
@@ -214,7 +216,11 @@ export async function captureCameraEventSnapshot(
     if (!jpeg) return false;
 
     const storagePath = `organizations/${orgId}/cameras/${cameraId}/last_event.jpg`;
-    await uploadCameraSnapshot(storagePath, jpeg);
+    const uploads: Array<Promise<unknown>> = [uploadCameraSnapshot(storagePath, jpeg)];
+    if (eventLogStoragePath) {
+      uploads.push(uploadCameraSnapshot(eventLogStoragePath, jpeg));
+    }
+    await Promise.all(uploads);
     await db.doc(`organizations/${orgId}/cameras/${cameraId}`).set(
       {
         last_event_storage_path: storagePath,

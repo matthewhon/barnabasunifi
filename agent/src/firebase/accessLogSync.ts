@@ -20,14 +20,16 @@ import {
 } from './unlockSnapshotRule';
 
 let _lastSyncedEpochSeconds = 0;
+let _isSyncRunning = false;
 const _processedSnapshotLogIds = new Set<string>();
+const _capturedCameraEventLogIds = new Set<string>();
 const RECENT_EVENT_MAX_AGE_MS = 120_000;
 
-function trackProcessedSnapshotLog(logId: string): void {
-  _processedSnapshotLogIds.add(logId);
-  if (_processedSnapshotLogIds.size > 2000) {
-    const first = _processedSnapshotLogIds.values().next().value;
-    if (first) _processedSnapshotLogIds.delete(first);
+function trackBoundedLogId(set: Set<string>, logId: string): void {
+  set.add(logId);
+  if (set.size > 2000) {
+    const first = set.values().next().value;
+    if (first) set.delete(first);
   }
 }
 
@@ -43,6 +45,22 @@ export interface AccessLogSyncOptions {
  * Supports deep historical lookback and multi-page pagination.
  */
 export async function syncAccessLogs(
+  orgId: string,
+  unifiClient: UnifiAccessClient,
+  options?: AccessLogSyncOptions
+): Promise<AccessLogEntry[]> {
+  if (_isSyncRunning && !options?.forceFull) {
+    return [];
+  }
+  _isSyncRunning = true;
+  try {
+    return await _syncAccessLogsInner(orgId, unifiClient, options);
+  } finally {
+    _isSyncRunning = false;
+  }
+}
+
+async function _syncAccessLogsInner(
   orgId: string,
   unifiClient: UnifiAccessClient,
   options?: AccessLogSyncOptions
@@ -133,7 +151,7 @@ export async function syncAccessLogs(
       }));
 
       for (const entry of recentCandidates) {
-        trackProcessedSnapshotLog(entry.id);
+        trackBoundedLogId(_processedSnapshotLogIds, entry.id);
         const doorDoc = doorMap.get(entry.door_id) || null;
         const evalResult = evaluateUnlockSnapshotRule(entry, doorDoc, windows, timeZone);
 
@@ -254,12 +272,13 @@ export async function syncAccessLogs(
     logger.error(`[AccessLogSync] Metadata write failed: ${String(err)}`);
   }
 
-  // 5. Capture event snapshots on linked cameras for recent door access events
+  // 5. Capture event snapshots on linked cameras for recent door access events (once per log ID)
   if (options?.protectManager?.isConfigured() && entries.length > 0) {
     const nowMs = Date.now();
     const recentByDoor = new Map<string, AccessLogEntry>();
     for (const entry of entries) {
-      if (!entry.door_id) continue;
+      if (!entry.id || !entry.door_id) continue;
+      if (_capturedCameraEventLogIds.has(entry.id)) continue;
       const tsMs = Date.parse(entry.timestamp);
       if (isNaN(tsMs) || nowMs - tsMs > 2 * 60 * 1000) continue; // only fresh events (<2m old)
       if (!recentByDoor.has(entry.door_id)) {
@@ -267,13 +286,37 @@ export async function syncAccessLogs(
       }
     }
     for (const [doorId, entry] of recentByDoor.entries()) {
+      trackBoundedLogId(_capturedCameraEventLogIds, entry.id);
       try {
         const doorSnap = await db.doc(`organizations/${orgId}/doors/${doorId}`).get();
         const doorData = doorSnap.exists ? doorSnap.data() : null;
         const camId = doorData?.primary_camera_id || (Array.isArray(doorData?.camera_ids) ? doorData.camera_ids[0] : null);
         if (camId) {
+          const camIdStr = String(camId);
           const label = `${entry.user_name || 'Access'} · ${entry.access_method_label || entry.event_type}`;
-          await captureCameraEventSnapshot(orgId, String(camId), entry.event_type, label, options.protectManager);
+          const shouldSaveEventLogPhoto = !entry.snapshot_storage_path && !entry.snapshot_skipped_reason;
+          const eventLogStoragePath = shouldSaveEventLogPhoto
+            ? `organizations/${orgId}/cameras/${camIdStr}/unlock_events/${entry.id}.jpg`
+            : undefined;
+          const captured = await captureCameraEventSnapshot(
+            orgId,
+            camIdStr,
+            entry.event_type,
+            label,
+            options.protectManager,
+            true,
+            eventLogStoragePath
+          );
+          if (captured && eventLogStoragePath) {
+            await db.doc(`organizations/${orgId}/access_logs/${entry.id}`).set(
+              {
+                snapshot_storage_path: eventLogStoragePath,
+                snapshot_camera_id: camIdStr,
+                snapshot_captured_at: new Date().toISOString(),
+              },
+              { merge: true }
+            );
+          }
         }
       } catch {
         // non-fatal
@@ -300,12 +343,12 @@ export async function backfillAccessLogs(
 }
 
 /**
- * Start a recurring access log sync on a fixed interval (e.g. every 10 seconds).
+ * Start a recurring access log sync on a fixed interval (e.g. every 3 seconds).
  */
 export function startAccessLogSyncInterval(
   orgId: string,
   unifiClient: UnifiAccessClient,
-  intervalMs = 10000,
+  intervalMs = 3000,
   protectManager?: ProtectManager
 ): () => void {
   logger.info(
