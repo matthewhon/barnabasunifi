@@ -95,8 +95,9 @@ export interface EventNotificationSettings {
     email?: {
       enabled: boolean;
       recipients: string[];
-      mode: 'daily_digest' | 'immediate';
+      mode: 'daily_digest' | 'weekly_digest' | 'immediate';
       digest_time?: string;
+      weekly_day?: number;
     };
   };
 }
@@ -223,6 +224,9 @@ export interface ScheduleWindow {
   source_label: string;       // e.g. "Sunday Morning Service"
   pco_plan_id?: string;
   pco_event_id?: string;
+  pco_location_id?: string | null;
+  pco_location_name?: string | null;
+  location_type_preference?: string | null;
   starts_at: string;          // ISO8601 — original PCO event start
   ends_at: string;            // ISO8601 — original PCO event end
   unlock_at: string;          // starts_at - buffer

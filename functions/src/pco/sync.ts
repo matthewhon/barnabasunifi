@@ -683,15 +683,15 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       const doorIds = mapping?.door_ids ?? [];
       const doorLabels = mapping?.door_labels ?? [];
 
-      let events: PcoResource[];
+      let eventsWithLocations: Awaited<ReturnType<typeof client.getGroupEventsWithLocations>>;
       try {
-        events = await client.getGroupEvents(groupId);
+        eventsWithLocations = await client.getGroupEventsWithLocations(groupId);
       } catch (err) {
         console.error(`Failed to fetch events for group ${groupId}:`, err);
         continue;
       }
 
-      for (const event of events) {
+      for (const { event, pco_location_id, pco_location_name, location_type_preference } of eventsWithLocations) {
         const attrs = event.attributes as {
           starts_at?: string;
           ends_at?: string;
@@ -720,6 +720,9 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
             source_label: eventTitle,
             pco_event_id: event.id,
             pco_group_id: groupId,
+            pco_location_id,
+            pco_location_name,
+            location_type_preference,
             group_mapping_id: mapping?.id ?? null,
             mapping_id: mapping?.id ?? null,
             mapping_name: mapping?.pco_resource_label || groupName,

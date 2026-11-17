@@ -118,8 +118,9 @@ export interface EventNotificationSettings {
     email?: {
       enabled: boolean;
       recipients: string[];
-      mode: 'daily_digest' | 'immediate';
+      mode: 'daily_digest' | 'weekly_digest' | 'immediate';
       digest_time?: string;
+      weekly_day?: number;
     };
   };
 }
@@ -293,6 +294,9 @@ export interface ScheduleWindow {
   pco_event_id?: string;
   pco_service_type_id?: string;
   pco_group_id?: string;
+  pco_location_id?: string | null;
+  pco_location_name?: string | null;
+  location_type_preference?: string | null;
   mapping_id?: string;
   mapping_name?: string;
   service_mapping_id?: string;

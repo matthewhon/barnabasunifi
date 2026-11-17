@@ -25,6 +25,7 @@ import type {
 import { isDoorHidden } from '@/lib/types';
 import { format } from 'date-fns';
 import { safeIsPast, safeFormatDistanceToNow, parseSafeDate } from '@/lib/date-utils';
+import { groupEventsByTimeAndLocation, type TimeLocationGroup } from '@/lib/event-grouping';
 import { toZonedTime } from 'date-fns-tz';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
@@ -172,6 +173,7 @@ export function UnmappedEventsTab({ defaultTab = 'unreviewed', embedded = false 
   const [sourceFilter, setSourceFilter] = useState<'all' | 'service' | 'group'>('all');
   const [timeTypeFilter, setTimeTypeFilter] = useState<'all' | 'service' | 'rehearsal' | 'other'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [viewMode, setViewMode] = useState<'list' | 'grouped'>('list');
 
   // Selection state for batch actions
   const [selectedWindowIds, setSelectedWindowIds] = useState<string[]>([]);
@@ -310,11 +312,16 @@ export function UnmappedEventsTab({ defaultTab = 'unreviewed', embedded = false 
         const labelMatch = w.source_label.toLowerCase().includes(q);
         const doorMatch = w.door_labels.some((l) => l.toLowerCase().includes(q));
         const reasonMatch = w.dismissed_reason?.toLowerCase().includes(q);
-        if (!labelMatch && !doorMatch && !reasonMatch) return false;
+        const locationMatch = w.pco_location_name?.toLowerCase().includes(q);
+        if (!labelMatch && !doorMatch && !reasonMatch && !locationMatch) return false;
       }
       return true;
     });
-  }, [upcomingWindows, unreviewedWindows, dismissedWindows, tab, sourceFilter, timeTypeFilter, searchQuery]);
+  }, [upcomingWindows, unreviewedWindows, oneTimeMappedWindows, dismissedWindows, tab, sourceFilter, timeTypeFilter, searchQuery]);
+
+  const timeLocationGroups = useMemo(() => {
+    return groupEventsByTimeAndLocation(displayedWindows, upcomingWindows);
+  }, [displayedWindows, upcomingWindows]);
 
   // Checkbox batch selection handlers
   const handleSelectAll = (checked: boolean) => {
@@ -348,6 +355,29 @@ export function UnmappedEventsTab({ defaultTab = 'unreviewed', embedded = false 
       setSelectedWindowIds([]);
     } catch (err: any) {
       showToast(`Bulk dismiss failed: ${err?.message || 'Unknown error'}`, 'error');
+    }
+  };
+
+  // Dismiss all unmapped events in a time+location group that is already covered by an existing rule
+  const handleDismissCoveredGroup = async (group: TimeLocationGroup) => {
+    if (!orgId || group.unmappedWindows.length === 0) return;
+    const ruleSummary = group.coveringRuleNames.join(', ') || 'existing rule';
+    try {
+      await Promise.all(
+        group.unmappedWindows.map((w) =>
+          updateScheduleWindowReviewStatus(orgId, w.id, {
+            review_status: 'dismissed',
+            dismissed_reason: `Covered by ${ruleSummary} at ${group.locationLabel}`,
+            dismissed_by: profile?.display_name || 'Admin',
+          })
+        )
+      );
+      showToast(
+        `Dismissed ${group.unmappedWindows.length} event(s) covered by existing rule.`,
+        'success'
+      );
+    } catch (err: any) {
+      showToast(`Failed to dismiss group events: ${err?.message || 'Unknown error'}`, 'error');
     }
   };
 
@@ -704,10 +734,30 @@ export function UnmappedEventsTab({ defaultTab = 'unreviewed', embedded = false 
 
           {/* Filters & Search */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flex: 1, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'inline-flex', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', padding: '0.2rem', border: '1px solid var(--color-border)' }}>
+              <button
+                type="button"
+                className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setViewMode('list')}
+                style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
+              >
+                List View
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${viewMode === 'grouped' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setViewMode('grouped')}
+                style={{ fontSize: '0.75rem', padding: '0.25rem 0.625rem' }}
+                title="Group events by matching time and PCO location to see existing door rules"
+              >
+                Group by Time &amp; Location
+              </button>
+            </div>
+
             <input
               type="text"
               className="form-input"
-              placeholder="Search by event title..."
+              placeholder="Search by title or location..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={{ width: '14rem', height: '2.125rem', fontSize: '0.8125rem' }}
@@ -794,6 +844,197 @@ export function UnmappedEventsTab({ defaultTab = 'unreviewed', embedded = false 
                 ? 'Events mapped as one-time will appear here with their door schedules and unlock/lock times.'
                 : 'No events match your current filter settings.'}
             </p>
+          </div>
+        ) : viewMode === 'grouped' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
+            {timeLocationGroups.map((group) => (
+              <div
+                key={group.groupKey}
+                style={{
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                  overflow: 'hidden',
+                  background: 'var(--color-bg-card)',
+                }}
+              >
+                {/* Group Header */}
+                <div
+                  style={{
+                    padding: '0.875rem 1rem',
+                    background: group.hasRuleInPlace
+                      ? 'rgba(34, 197, 94, 0.06)'
+                      : 'var(--color-bg-base)',
+                    borderBottom: '1px solid var(--color-border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.9375rem' }}>
+                        {formatWindowTime(group.startsAt, timezone)} – {formatWindowTimeOnly(group.endsAt, timezone)}
+                      </span>
+                      <span className="badge badge-neutral" style={{ fontSize: '0.75rem' }}>
+                        {group.isVirtual ? '🌐' : '📍'} {group.locationLabel}
+                      </span>
+                      <span className="badge badge-neutral" style={{ fontSize: '0.75rem' }}>
+                        {group.windows.length} {group.windows.length === 1 ? 'event' : 'events'}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.8125rem' }}>
+                      {group.hasRuleInPlace ? (
+                        <>
+                          <span className="badge badge-success" style={{ fontWeight: 600 }}>
+                            ✅ Rule in place
+                          </span>
+                          <span style={{ color: 'var(--color-text-secondary)' }}>
+                            Covered by: <strong>{group.coveringRuleNames.join(', ')}</strong>
+                          </span>
+                          {group.coveringDoorLabels.length > 0 && (
+                            <span className="badge badge-info" style={{ fontSize: '0.75rem' }}>
+                              🚪 {group.coveringDoorLabels.join(', ')}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="badge badge-warning">
+                          ⚠️ No rule in place for this time &amp; location
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {isManager && group.hasRuleInPlace && group.unmappedWindows.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => handleDismissCoveredGroup(group)}
+                      style={{ color: 'var(--color-success)' }}
+                      title="Dismiss unmapped events in this slot since a door rule is already active"
+                    >
+                      <EyeOffIcon />
+                      Dismiss {group.unmappedWindows.length} Unmapped (Covered)
+                    </button>
+                  )}
+                </div>
+
+                {/* Group Events List */}
+                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                  <tbody>
+                    {group.windows.map((win) => {
+                      const urgent = isUrgent(win.starts_at);
+                      const isRehearsal = win.time_type === 'rehearsal' || win.source_label.toLowerCase().includes('(rehearsal)');
+                      return (
+                        <tr
+                          key={win.id}
+                          style={{
+                            borderBottom: '1px solid var(--color-border)',
+                            background: urgent ? 'rgba(239, 68, 68, 0.03)' : 'transparent',
+                          }}
+                        >
+                          <td style={{ padding: '0.625rem 1rem', whiteSpace: 'nowrap', width: '7rem' }}>
+                            <span className={`badge ${win.source_type === 'service' ? 'badge-info' : 'badge-neutral'}`}>
+                              {win.source_type === 'service' ? 'Service' : 'Group'}
+                            </span>
+                            {isRehearsal && (
+                              <span className="badge" style={{ marginLeft: '0.35rem', fontSize: '0.6875rem' }}>
+                                Rehearsal
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.625rem 1rem' }}>
+                            <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                              {win.source_label}
+                            </div>
+                            {win.dismissed_reason && (
+                              <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.125rem' }}>
+                                Dismissed note: <em>{win.dismissed_reason}</em>
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.625rem 1rem', whiteSpace: 'nowrap' }}>
+                            {win.door_labels && win.door_labels.length > 0 ? (
+                              <span className="badge badge-success">
+                                🚪 {win.door_labels.join(', ')}
+                              </span>
+                            ) : win.review_status === 'dismissed' ? (
+                              <span className="badge badge-neutral" style={{ opacity: 0.8 }}>
+                                👁️ Dismissed
+                              </span>
+                            ) : (
+                              <span className="badge badge-warning">
+                                ⚠️ Unmapped
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.625rem 1rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            {isManager && (
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                                {win.review_status === 'dismissed' ? (
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    onClick={() => handleRestoreEvent(win)}
+                                    title="Restore to review queue"
+                                  >
+                                    Restore
+                                  </button>
+                                ) : win.door_labels && win.door_labels.length > 0 ? (
+                                  <>
+                                    <button
+                                      className="btn btn-secondary btn-sm"
+                                      onClick={() => handleOpenMapModal(win, 'one_time')}
+                                    >
+                                      Edit Doors
+                                    </button>
+                                    <button
+                                      className="btn btn-ghost btn-sm"
+                                      onClick={() => handleOpenMapModal(win, 'recurring')}
+                                    >
+                                      Make Recurring
+                                    </button>
+                                    <button
+                                      className="btn btn-ghost btn-sm"
+                                      onClick={() => handleUnmapOneTime(win)}
+                                      style={{ color: 'var(--color-danger)' }}
+                                    >
+                                      Unmap
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      className="btn btn-primary btn-sm"
+                                      onClick={() => handleOpenMapModal(win)}
+                                    >
+                                      <MapPinIcon />
+                                      Map Doors
+                                    </button>
+                                    <button
+                                      className="btn btn-ghost btn-sm"
+                                      onClick={() => {
+                                        setDismissModalWindow(win);
+                                        setDismissReason('Online Event Only');
+                                        setCustomReason('');
+                                      }}
+                                    >
+                                      Dismiss
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ))}
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -894,6 +1135,13 @@ export function UnmappedEventsTab({ defaultTab = 'unreviewed', embedded = false 
                               <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
                                 {win.source_label}
                               </div>
+                              {(win.pco_location_name || win.location_type_preference === 'virtual') && (
+                                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.15rem' }}>
+                                  {win.location_type_preference === 'virtual' && !win.pco_location_name
+                                    ? '🌐 Virtual / Online'
+                                    : `📍 ${win.pco_location_name}`}
+                                </div>
+                              )}
                               {win.dismissed_reason && (
                                 <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.125rem' }}>
                                   Dismissed note: <em>{win.dismissed_reason}</em>

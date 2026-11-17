@@ -118,12 +118,16 @@ export class PcoClient {
   }
 
   /**
-   * Paginates through all pages of a list endpoint.
+   * Paginates through all pages of a list endpoint, returning both `data` and `included` resources.
    * PCO uses offset-based pagination with a max of 100 records per page.
    */
-  async getAll(path: string, params: Record<string, unknown> = {}): Promise<PcoResource[]> {
+  async getAllWithIncluded(
+    path: string,
+    params: Record<string, unknown> = {}
+  ): Promise<{ data: PcoResource[]; included: PcoResource[] }> {
     const pageSize = 100;
     const allItems: PcoResource[] = [];
+    const allIncluded: PcoResource[] = [];
     let offset = 0;
 
     while (true) {
@@ -133,6 +137,9 @@ export class PcoClient {
 
       const items = response.data ?? [];
       allItems.push(...items);
+      if (response.included && Array.isArray(response.included)) {
+        allIncluded.push(...response.included);
+      }
 
       const totalCount = response.meta?.total_count ?? items.length;
       offset += items.length;
@@ -143,7 +150,16 @@ export class PcoClient {
       }
     }
 
-    return allItems;
+    return { data: allItems, included: allIncluded };
+  }
+
+  /**
+   * Paginates through all pages of a list endpoint.
+   * PCO uses offset-based pagination with a max of 100 records per page.
+   */
+  async getAll(path: string, params: Record<string, unknown> = {}): Promise<PcoResource[]> {
+    const { data } = await this.getAllWithIncluded(path, params);
+    return data;
   }
 
   // -------------------------------------------------------------------------
@@ -204,6 +220,66 @@ export class PcoClient {
       filter: 'upcoming',
       'where[starts_at][gte]': after,
       'where[starts_at][lte]': before,
+    });
+  }
+
+  /**
+   * Returns events for a given group within the next `daysAhead` days,
+   * sideloading and resolving each event's PCO Location resource.
+   */
+  async getGroupEventsWithLocations(
+    groupId: string,
+    daysAhead = 60
+  ): Promise<Array<{
+    event: PcoResource;
+    pco_location_id: string | null;
+    pco_location_name: string | null;
+    location_type_preference: string | null;
+  }>> {
+    const after = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const before = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split('T')[0];
+
+    const { data, included } = await this.getAllWithIncluded(
+      `/groups/v2/groups/${groupId}/events`,
+      {
+        filter: 'upcoming',
+        'where[starts_at][gte]': after,
+        'where[starts_at][lte]': before,
+        include: 'location',
+      }
+    );
+
+    const locationMap = new Map<string, PcoResource>();
+    for (const res of included) {
+      if (res.type === 'Location') {
+        locationMap.set(res.id, res);
+      }
+    }
+
+    return data.map((event) => {
+      const relationships = event.relationships as
+        | Record<string, { data?: { id?: string; type?: string } | null }>
+        | undefined;
+      const locationId = relationships?.location?.data?.id ?? null;
+      const locResource = locationId ? locationMap.get(locationId) : undefined;
+      const locAttrs = locResource?.attributes as
+        | { name?: string; full_formatted_address?: string }
+        | undefined;
+      const locationName =
+        locAttrs?.name?.trim() ||
+        locAttrs?.full_formatted_address?.trim() ||
+        null;
+      const locationTypePref =
+        (event.attributes?.location_type_preference as string | undefined) ?? null;
+
+      return {
+        event,
+        pco_location_id: locationId,
+        pco_location_name: locationName,
+        location_type_preference: locationTypePref,
+      };
     });
   }
 
