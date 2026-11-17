@@ -6,7 +6,7 @@ import { httpsCallable } from 'firebase/functions';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { functions, db } from '@/lib/firebase';
 import { getOrgSettings, updateOrgSettings, disconnectPco, getLatestAgentRelease, createDoorCommand, subscribeToAgents, approveAgentUpdate, triggerCameraSync } from '@/lib/firestore';
-import type { OrgSettings, AgentRelease, Agent } from '@/lib/types';
+import type { OrgSettings, AgentRelease, Agent, ProtectConsoleConfig } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
 import { safeFormat, safeFormatDistanceToNow } from '@/lib/date-utils';
 import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
@@ -493,6 +493,20 @@ export default function SettingsPage() {
         setProtectHost(settings.unifi_protect.host ?? '');
         setProtectApiKey(settings.unifi_protect.api_key ?? '');
         setProtectSkipTls(settings.unifi_protect.skip_tls_verify ?? true);
+        if (Array.isArray(settings.unifi_protect.consoles) && settings.unifi_protect.consoles.length > 0) {
+          setProtectConsoles(settings.unifi_protect.consoles);
+        } else if (settings.unifi_protect.host || settings.unifi_protect.api_key) {
+          setProtectConsoles([
+            {
+              id: 'primary',
+              label: 'Primary NVR / Console',
+              host: settings.unifi_protect.host ?? '',
+              api_key: settings.unifi_protect.api_key ?? '',
+              skip_tls_verify: settings.unifi_protect.skip_tls_verify ?? true,
+              enabled: true,
+            },
+          ]);
+        }
         setProtectStreamMode(settings.unifi_protect.stream_mode ?? 'snapshot');
         setProtectStreamBaseUrl(settings.unifi_protect.stream_base_url ?? '');
         setProtectOnsiteIps((settings.unifi_protect.onsite_public_ips ?? []).join(', '));
@@ -504,6 +518,9 @@ export default function SettingsPage() {
   const [protectHost, setProtectHost] = useState('');
   const [protectApiKey, setProtectApiKey] = useState('');
   const [protectSkipTls, setProtectSkipTls] = useState(true);
+  const [protectConsoles, setProtectConsoles] = useState<ProtectConsoleConfig[]>([
+    { id: 'primary', label: 'Primary NVR / Console', host: '', api_key: '', skip_tls_verify: true, enabled: true },
+  ]);
   const [protectStreamMode, setProtectStreamMode] = useState<'snapshot' | 'webrtc_lan' | 'relay'>('snapshot');
   const [protectStreamBaseUrl, setProtectStreamBaseUrl] = useState('');
   const [protectOnsiteIps, setProtectOnsiteIps] = useState('');
@@ -519,12 +536,24 @@ export default function SettingsPage() {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
+      const cleanedConsoles: ProtectConsoleConfig[] = protectConsoles
+        .map((c, idx) => ({
+          id: c.id || `console-${idx + 1}`,
+          label: (c.label || `Console ${idx + 1}`).trim(),
+          host: (c.host || '').trim(),
+          api_key: (c.api_key || '').trim(),
+          skip_tls_verify: c.skip_tls_verify ?? true,
+          enabled: c.enabled !== false,
+        }))
+        .filter((c) => c.host || c.api_key);
+      const firstConsole = cleanedConsoles[0];
       await updateOrgSettings(orgId, {
         unifi_protect: {
           enabled: protectEnabled,
-          host: protectHost.trim(),
-          api_key: protectApiKey.trim(),
-          skip_tls_verify: protectSkipTls,
+          host: firstConsole?.host ?? protectHost.trim(),
+          api_key: firstConsole?.api_key ?? protectApiKey.trim(),
+          skip_tls_verify: firstConsole?.skip_tls_verify ?? protectSkipTls,
+          consoles: cleanedConsoles,
           stream_mode: protectStreamMode,
           stream_base_url: protectStreamBaseUrl.trim(),
           onsite_public_ips: onsiteList,
@@ -1836,28 +1865,123 @@ SKIP_TLS_VERIFY=true`}</pre>
 
             {protectEnabled && (
               <>
-                <div className="form-group">
-                  <label className="form-label">Protect Console Host (Optional Override)</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Leave blank to reuse UniFi Access host, or enter UNVR URL (e.g. https://192.168.1.20)"
-                    value={protectHost}
-                    onChange={(e) => setProtectHost(e.target.value)}
-                    disabled={!isAdmin}
-                  />
-                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Protect Consoles / NVRs ({protectConsoles.length})
+                    </label>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() =>
+                          setProtectConsoles((prev) => [
+                            ...prev,
+                            {
+                              id: `console-${Date.now()}`,
+                              label: `Protect Console ${prev.length + 1}`,
+                              host: '',
+                              api_key: '',
+                              skip_tls_verify: true,
+                              enabled: true,
+                            },
+                          ])
+                        }
+                      >
+                        + Add Console / Device
+                      </button>
+                    )}
+                  </div>
 
-                <div className="form-group">
-                  <label className="form-label">UniFi Protect Integration API Key</label>
-                  <input
-                    type="password"
-                    className="form-input"
-                    placeholder="X-API-KEY generated in UniFi Protect / OS Admins"
-                    value={protectApiKey}
-                    onChange={(e) => setProtectApiKey(e.target.value)}
-                    disabled={!isAdmin}
-                  />
+                  {protectConsoles.map((consoleCfg, idx) => (
+                    <div
+                      key={consoleCfg.id || idx}
+                      style={{
+                        padding: '0.875rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--color-border)',
+                        background: 'var(--color-bg-base)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.625rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder="Device Label (e.g. Church UNVR or Dream Machine)"
+                          value={consoleCfg.label}
+                          onChange={(e) =>
+                            setProtectConsoles((prev) =>
+                              prev.map((c, i) => (i === idx ? { ...c, label: e.target.value } : c))
+                            )
+                          }
+                          disabled={!isAdmin}
+                          style={{ fontWeight: 600 }}
+                        />
+                        {isAdmin && protectConsoles.length > 1 && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ color: 'var(--color-danger)' }}
+                            onClick={() =>
+                              setProtectConsoles((prev) => prev.filter((_, i) => i !== idx))
+                            }
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(14rem, 1fr))', gap: '0.625rem' }}>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label">Console Host URL</label>
+                          <input
+                            type="text"
+                            className="form-input"
+                            placeholder="https://192.168.1.85"
+                            value={consoleCfg.host}
+                            onChange={(e) =>
+                              setProtectConsoles((prev) =>
+                                prev.map((c, i) => (i === idx ? { ...c, host: e.target.value } : c))
+                              )
+                            }
+                            disabled={!isAdmin}
+                          />
+                        </div>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label">Protect Integration API Key</label>
+                          <input
+                            type="password"
+                            className="form-input"
+                            placeholder="X-API-KEY from this console"
+                            value={consoleCfg.api_key}
+                            onChange={(e) =>
+                              setProtectConsoles((prev) =>
+                                prev.map((c, i) => (i === idx ? { ...c, api_key: e.target.value } : c))
+                              )
+                            }
+                            disabled={!isAdmin}
+                          />
+                        </div>
+                      </div>
+
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={consoleCfg.skip_tls_verify ?? true}
+                          onChange={(e) =>
+                            setProtectConsoles((prev) =>
+                              prev.map((c, i) => (i === idx ? { ...c, skip_tls_verify: e.target.checked } : c))
+                            )
+                          }
+                          disabled={!isAdmin}
+                        />
+                        Skip TLS certificate verification
+                      </label>
+                    </div>
+                  ))}
                 </div>
 
                 <div className="form-group">

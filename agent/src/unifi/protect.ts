@@ -131,3 +131,47 @@ export class UnifiProtectClient {
     }
   }
 }
+
+export interface ManagedProtectConsole {
+  id: string;
+  label: string;
+  client: UnifiProtectClient;
+}
+
+export class ProtectManager {
+  private consoles: ManagedProtectConsole[] = [];
+
+  public isConfigured(): boolean {
+    return this.consoles.some((c) => c.client.isConfigured());
+  }
+
+  public getConsoles(): ManagedProtectConsole[] {
+    return this.consoles.filter((c) => c.client.isConfigured());
+  }
+
+  public clear(): void {
+    this.consoles = [];
+  }
+
+  public setConsoles(
+    entries: Array<{ id: string; label: string; host: string; apiKey: string; skipTlsVerify?: boolean }>
+  ): void {
+    this.consoles = entries
+      .filter((e) => e.host && e.apiKey)
+      .map((e) => ({
+        id: e.id,
+        label: e.label || e.id,
+        client: new UnifiProtectClient(e.host, e.apiKey, e.skipTlsVerify ?? true),
+      }));
+  }
+
+  public getClientForConsole(consoleId?: string | null): UnifiProtectClient | null {
+    const active = this.getConsoles();
+    if (active.length === 0) return null;
+    if (consoleId) {
+      const found = active.find((c) => c.id === consoleId);
+      if (found) return found.client;
+    }
+    return active[0].client;
+  }
+}

@@ -10,7 +10,7 @@
 
 import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient, UnifiVisitor } from '../unifi/access';
-import { UnifiProtectClient } from '../unifi/protect';
+import { ProtectManager } from '../unifi/protect';
 import { logger } from '../logger';
 
 import { syncDoors } from './doorSync';
@@ -240,7 +240,7 @@ export function startCommandListener(
   unifiClient: UnifiAccessClient,
   onCommand?: CommandCallback,
   onRestart?: () => Promise<void>,
-  protectClient?: UnifiProtectClient
+  protectClient?: ProtectManager
 ): () => void {
   const db = getDb();
   const commandsRef = db.collection(`organizations/${orgId}/door_commands`);

@@ -66,6 +66,7 @@ export interface OrgSettings {
     host?: string;
     api_key?: string;
     skip_tls_verify?: boolean;
+    consoles?: ProtectConsoleConfig[];
     stream_mode?: 'snapshot' | 'webrtc_lan' | 'relay';
     stream_base_url?: string;
     onsite_public_ips?: string[];
@@ -361,6 +362,15 @@ export interface Agent {
 
 // ─── UniFi Protect Cameras ────────────────────────────────────────────────────
 
+export interface ProtectConsoleConfig {
+  id: string;
+  label: string;
+  host: string;
+  api_key: string;
+  skip_tls_verify?: boolean;
+  enabled?: boolean;
+}
+
 export type CameraState = 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING';
 export type CameraAccessMode = 'all' | 'selected' | 'none';
 export type CameraStreamMode = 'snapshot' | 'webrtc_lan' | 'relay';
@@ -369,6 +379,8 @@ export interface Camera {
   id: string;
   org_id: string;
   unifi_camera_id: string;
+  console_id?: string | null;
+  console_label?: string | null;
   name: string;
   model?: string | null;
   state: CameraState;
