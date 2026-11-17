@@ -113,8 +113,9 @@ export interface EventNotificationSettings {
     email?: {
       enabled: boolean;
       recipients: string[];
-      mode: 'daily_digest' | 'immediate';
+      mode: 'daily_digest' | 'weekly_digest' | 'immediate';
       digest_time?: string;
+      weekly_day?: number;
     };
   };
 }

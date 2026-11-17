@@ -194,7 +194,8 @@ export default function SettingsPage() {
   // Postmark Event Email & Tenant Branding / Operational Alerts state
   const [emailEnabled, setEmailEnabled] = useState(false);
   const [emailRecipientsStr, setEmailRecipientsStr] = useState('');
-  const [emailMode, setEmailMode] = useState<'daily_digest' | 'immediate'>('daily_digest');
+  const [emailMode, setEmailMode] = useState<'daily_digest' | 'weekly_digest' | 'immediate'>('daily_digest');
+  const [emailWeeklyDay, setEmailWeeklyDay] = useState<number>(1);
   const [testEmailTo, setTestEmailTo] = useState('');
   const [testingEmail, setTestingEmail] = useState(false);
 
@@ -308,6 +309,7 @@ export default function SettingsPage() {
             setEmailEnabled(Boolean(s.event_notifications.channels?.email?.enabled));
             setEmailRecipientsStr((s.event_notifications.channels?.email?.recipients ?? []).join(', '));
             setEmailMode(s.event_notifications.channels?.email?.mode ?? 'daily_digest');
+            setEmailWeeklyDay(s.event_notifications.channels?.email?.weekly_day ?? 1);
           }
           if (s.email_settings) {
             setLogoUrl(s.email_settings.logo_url ?? '');
@@ -377,6 +379,7 @@ export default function SettingsPage() {
               enabled: emailEnabled,
               recipients: parseEmailList(emailRecipientsStr),
               mode: emailMode,
+              ...(emailMode === 'weekly_digest' ? { weekly_day: emailWeeklyDay } : {}),
             },
           },
         },
@@ -2612,12 +2615,31 @@ SKIP_TLS_VERIFY=true`}</pre>
                         <select
                           className="form-input"
                           value={emailMode}
-                          onChange={(e) => setEmailMode(e.target.value as 'daily_digest' | 'immediate')}
+                          onChange={(e) => setEmailMode(e.target.value as 'daily_digest' | 'weekly_digest' | 'immediate')}
                         >
                           <option value="daily_digest">Daily Digest (8:00 AM UTC)</option>
+                          <option value="weekly_digest">Weekly Digest (8:00 AM UTC)</option>
                           <option value="immediate">Immediate (when new unmapped events sync)</option>
                         </select>
                       </div>
+                      {emailMode === 'weekly_digest' && (
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label" style={{ fontSize: '0.75rem' }}>Weekly Digest Day</label>
+                          <select
+                            className="form-input"
+                            value={emailWeeklyDay}
+                            onChange={(e) => setEmailWeeklyDay(Number(e.target.value))}
+                          >
+                            <option value={0}>Sunday</option>
+                            <option value={1}>Monday</option>
+                            <option value={2}>Tuesday</option>
+                            <option value={3}>Wednesday</option>
+                            <option value={4}>Thursday</option>
+                            <option value={5}>Friday</option>
+                            <option value={6}>Saturday</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

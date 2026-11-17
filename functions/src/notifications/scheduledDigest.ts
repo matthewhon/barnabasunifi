@@ -81,7 +81,13 @@ export const scheduledEventReviewDigest = onSchedule(
 
         // 2. Dispatch Email Digest via Postmark if configured
         const emailCfg = settings.channels?.email;
-        if (emailCfg?.enabled && Array.isArray(emailCfg.recipients) && emailCfg.recipients.length > 0) {
+        const emailMode = emailCfg?.mode || 'daily_digest';
+        const isWeeklyMatch =
+          emailMode === 'weekly_digest' &&
+          new Date(now).getUTCDay() === (typeof emailCfg?.weekly_day === 'number' ? emailCfg.weekly_day : 1);
+        const shouldSendDigestEmail = emailMode === 'daily_digest' || isWeeklyMatch;
+
+        if (emailCfg?.enabled && shouldSendDigestEmail && Array.isArray(emailCfg.recipients) && emailCfg.recipients.length > 0) {
           const orgCtx = await getOrgEmailContext(orgId);
           const toIso = (val: any) =>
             val && typeof val.toMillis === 'function' ? new Date(val.toMillis()).toISOString() : String(val || '');
