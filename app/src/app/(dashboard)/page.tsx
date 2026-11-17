@@ -541,7 +541,7 @@ export default function DashboardPage() {
     const label = (d.label || '').trim();
     if (!label) return false;
     if (isUuid(label) && d.current_state === 'unknown') return false;
-    if (!isAdmin && isDoorHidden(d)) return false;
+    if (isDoorHidden(d)) return false;
     return true;
   });
 
