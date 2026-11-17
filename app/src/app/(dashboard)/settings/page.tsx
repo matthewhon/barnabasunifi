@@ -3,7 +3,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '@/lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { functions, db } from '@/lib/firebase';
 import { getOrgSettings, updateOrgSettings, disconnectPco, getLatestAgentRelease, createDoorCommand, subscribeToAgents, approveAgentUpdate, triggerCameraSync } from '@/lib/firestore';
 import type { OrgSettings, AgentRelease, Agent } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
@@ -508,6 +509,7 @@ export default function SettingsPage() {
   const [protectOnsiteIps, setProtectOnsiteIps] = useState('');
   const [savingProtect, setSavingProtect] = useState(false);
   const [syncingProtect, setSyncingProtect] = useState(false);
+  const [protectTestResult, setProtectTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const handleSaveProtect = async () => {
     if (!orgId) return;
@@ -540,13 +542,38 @@ export default function SettingsPage() {
   const handleSyncProtectCameras = async () => {
     if (!orgId) return;
     setSyncingProtect(true);
+    setProtectTestResult(null);
     try {
-      await triggerCameraSync(orgId);
-      showToast('Camera sync command sent to local agent.', 'success');
+      const cmdId = await triggerCameraSync(orgId);
+      let settled = false;
+      const timeoutId = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        unsub();
+        setSyncingProtect(false);
+        const msg = 'Timed out waiting for local agent response (check that the agent is online).';
+        setProtectTestResult({ ok: false, message: msg });
+        showToast(msg, 'error');
+      }, 15000);
+
+      const unsub = onSnapshot(doc(db, 'organizations', orgId, 'door_commands', cmdId), (snap) => {
+        if (!snap.exists() || settled) return;
+        const data = snap.data();
+        if (data.status === 'done' || data.status === 'failed') {
+          settled = true;
+          clearTimeout(timeoutId);
+          unsub();
+          setSyncingProtect(false);
+          const ok = data.status === 'done';
+          const msg = String(data.result_message || (ok ? 'Cameras synced successfully.' : 'Camera sync failed.'));
+          setProtectTestResult({ ok, message: msg });
+          showToast(msg, ok ? 'success' : 'error');
+        }
+      });
     } catch {
+      setSyncingProtect(false);
+      setProtectTestResult({ ok: false, message: 'Failed to queue camera sync command.' });
       showToast('Failed to queue camera sync.', 'error');
-    } finally {
-      setTimeout(() => setSyncingProtect(false), 1200);
     }
   };
 
@@ -1902,9 +1929,25 @@ SKIP_TLS_VERIFY=true`}</pre>
                     onClick={handleSyncProtectCameras}
                     disabled={syncingProtect}
                   >
-                    {syncingProtect ? 'Syncing Cameras…' : 'Sync Cameras Now'}
+                    {syncingProtect ? 'Testing & Syncing…' : 'Test & Sync Cameras Now'}
                   </button>
                 )}
+              </div>
+            )}
+
+            {protectTestResult && (
+              <div
+                style={{
+                  padding: '0.625rem 0.875rem',
+                  borderRadius: 'var(--radius-md)',
+                  fontSize: '0.85rem',
+                  border: `1px solid ${protectTestResult.ok ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.35)'}`,
+                  background: protectTestResult.ok ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                  color: protectTestResult.ok ? '#34d399' : '#f87171',
+                }}
+              >
+                {protectTestResult.ok ? '✓ ' : '✕ '}
+                {protectTestResult.message}
               </div>
             )}
           </div>
