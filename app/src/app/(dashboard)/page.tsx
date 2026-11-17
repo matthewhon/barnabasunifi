@@ -12,14 +12,17 @@ import {
   subscribeToUnifiSchedules,
   subscribeToAuditLog,
   subscribeToAccessLogs,
+  subscribeToCameras,
+  subscribeToUserCameraPermission,
 } from '@/lib/firestore';
-import type { Door, Agent, ScheduleWindow, UnifiSchedule, AuditLogEntry, AccessLogEntry } from '@/lib/types';
+import type { Door, Agent, ScheduleWindow, UnifiSchedule, AuditLogEntry, AccessLogEntry, Camera, UserCameraPermission } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
 import { safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
 import { formatDoorDisplayName, getDoorUnlockStatus } from '@/lib/door-status-utils';
 import { Sparkline } from '@/components/analytics/Sparkline';
 import Modal from '@/components/ui/Modal';
 import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
+import CameraPlayer from '@/components/cameras/CameraPlayer';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -79,10 +82,18 @@ function DoorStatusCard({
   door,
   schedules = [],
   scheduleWindows = [],
+  orgId,
+  mediaMode = 'none',
+  linkedCamera = null,
+  lastEventLog = null,
 }: {
   door: Door;
   schedules?: UnifiSchedule[];
   scheduleWindows?: ScheduleWindow[];
+  orgId?: string;
+  mediaMode?: 'none' | 'last_event' | 'video';
+  linkedCamera?: Camera | null;
+  lastEventLog?: AccessLogEntry | null;
 }) {
   const [, setTick] = useState(0);
 
@@ -107,6 +118,17 @@ function DoorStatusCard({
     ? 'rgba(245,158,11,0.5)'
     : 'rgba(34,197,94,0.3)';
 
+  const lastEventPhoto =
+    (lastEventLog as (AccessLogEntry & { snapshot_url?: string }) | null)?.snapshot_url ||
+    door.image_url ||
+    door.unifi_thumbnail_url ||
+    null;
+  const lastEventCaption = lastEventLog
+    ? `${lastEventLog.user_name || 'Unknown'} · ${lastEventLog.access_method_label || lastEventLog.event_type}`
+    : door.last_accessed_by
+      ? `${door.last_accessed_by}${door.last_access_method_label ? ` · ${door.last_access_method_label}` : ''}`
+      : 'No recent event';
+
   return (
     <div
       className="card"
@@ -117,6 +139,78 @@ function DoorStatusCard({
         gap: '0.5rem',
       }}
     >
+      {mediaMode === 'video' && (
+        <div
+          style={{
+            width: '100%',
+            aspectRatio: '16 / 9',
+            borderRadius: 'var(--radius-md)',
+            overflow: 'hidden',
+            background: '#060911',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {linkedCamera && orgId ? (
+            <div style={{ width: '100%', height: '100%' }}>
+              <CameraPlayer orgId={orgId} camera={linkedCamera} compact />
+            </div>
+          ) : (
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+              No camera linked
+            </span>
+          )}
+        </div>
+      )}
+
+      {mediaMode === 'last_event' && (
+        <div
+          style={{
+            position: 'relative',
+            width: '100%',
+            aspectRatio: '16 / 9',
+            borderRadius: 'var(--radius-md)',
+            overflow: 'hidden',
+            background: '#060911',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {lastEventPhoto ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={lastEventPhoto}
+              alt={`${door.label} last event`}
+              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+              loading="lazy"
+            />
+          ) : (
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+              No event picture available
+            </span>
+          )}
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              padding: '0.3rem 0.5rem',
+              background: 'rgba(10, 14, 23, 0.78)',
+              color: '#e2e8f0',
+              fontSize: '0.6875rem',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {lastEventCaption}
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--color-text-primary)' }} title={door.label}>
           {formatDoorDisplayName(door.label)}
@@ -297,7 +391,8 @@ function AuditRow({ entry }: { entry: AuditLogEntry }) {
 // ─── Main Dashboard Page ──────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { orgId, profile, role, isSuperAdmin } = useAuth();
+  const { orgId, user, profile, role, isSuperAdmin } = useAuth();
+  const isAdmin = role === 'org_admin' || isSuperAdmin;
 
   const [doors, setDoors] = useState<Door[]>([]);
   const [doorsLoading, setDoorsLoading] = useState(true);
@@ -316,6 +411,48 @@ export default function DashboardPage() {
   const [auditLoading, setAuditLoading] = useState(true);
 
   const [accessLogs, setAccessLogs] = useState<AccessLogEntry[]>([]);
+
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  const [camPerm, setCamPerm] = useState<UserCameraPermission | null | undefined>(undefined);
+  const [doorMediaMode, setDoorMediaMode] = useState<'none' | 'last_event' | 'video'>('none');
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('dashboard_door_media_mode');
+      if (saved === 'none' || saved === 'last_event' || saved === 'video') {
+        setDoorMediaMode(saved);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!orgId || !user) return;
+    if (isAdmin) {
+      setCamPerm({
+        uid: user.uid,
+        org_id: orgId,
+        access_mode: 'all',
+        allowed_camera_ids: [],
+        onsite_only: false,
+        allow_notifications: true,
+        updated_at: '',
+      });
+      return;
+    }
+    return subscribeToUserCameraPermission(orgId, user.uid, setCamPerm);
+  }, [orgId, user, isAdmin]);
+
+  useEffect(() => {
+    if (!orgId) return;
+    if (!isAdmin && camPerm === undefined) return;
+    const allowed =
+      isAdmin || camPerm?.access_mode === 'all'
+        ? null
+        : camPerm?.access_mode === 'selected'
+          ? camPerm.allowed_camera_ids || []
+          : [];
+    return subscribeToCameras(orgId, setCameras, allowed);
+  }, [orgId, isAdmin, camPerm]);
 
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -389,8 +526,6 @@ export default function DashboardPage() {
 
   const isUuid = (str: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
-
-  const isAdmin = role === 'org_admin' || isSuperAdmin;
 
   const validDoors = doors.filter((d) => {
     const label = (d.label || '').trim();
@@ -682,9 +817,30 @@ export default function DashboardPage() {
           <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
             Door Status
           </h2>
-          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-            Live · {validDoors.length} door{validDoors.length !== 1 ? 's' : ''}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Display:</span>
+              <select
+                className="form-select"
+                value={doorMediaMode}
+                onChange={(e) => {
+                  const val = e.target.value as 'none' | 'last_event' | 'video';
+                  setDoorMediaMode(val);
+                  try {
+                    localStorage.setItem('dashboard_door_media_mode', val);
+                  } catch {}
+                }}
+                style={{ width: 'auto', fontSize: '0.75rem', padding: '0.2rem 1.65rem 0.2rem 0.5rem', height: 'auto' }}
+              >
+                <option value="none">Compact (No Media)</option>
+                <option value="last_event">Last Event Picture</option>
+                <option value="video">Linked Camera Video</option>
+              </select>
+            </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+              Live · {validDoors.length} door{validDoors.length !== 1 ? 's' : ''}
+            </span>
+          </div>
         </div>
 
         {doorsLoading ? (
@@ -721,14 +877,24 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div className="grid grid-cols-3">
-            {validDoors.map((door) => (
-              <DoorStatusCard
-                key={door.id}
-                door={door}
-                schedules={schedules}
-                scheduleWindows={scheduleWindows}
-              />
-            ))}
+            {validDoors.map((door) => {
+              const targetCamId = door.primary_camera_id || door.camera_ids?.[0];
+              const linkedCam = targetCamId ? cameras.find((c) => c.id === targetCamId) || null : null;
+              const lastLog =
+                accessLogs.find((l) => l.door_id === door.id || l.door_id === door.unifi_door_id) || null;
+              return (
+                <DoorStatusCard
+                  key={door.id}
+                  door={door}
+                  schedules={schedules}
+                  scheduleWindows={scheduleWindows}
+                  orgId={orgId ?? undefined}
+                  mediaMode={doorMediaMode}
+                  linkedCamera={linkedCam}
+                  lastEventLog={lastLog}
+                />
+              );
+            })}
           </div>
         )}
       </section>
