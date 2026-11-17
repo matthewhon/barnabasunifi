@@ -209,6 +209,16 @@ export default function SettingsPage() {
   const [notifyUserSyncWelcome, setNotifyUserSyncWelcome] = useState(false);
   const [notifyVisitorHost, setNotifyVisitorHost] = useState(false);
   const [visitorHostRecipientsStr, setVisitorHostRecipientsStr] = useState('');
+  const [notifyDailySchedule, setNotifyDailySchedule] = useState(false);
+  const [scheduleSummaryRecipientsStr, setScheduleSummaryRecipientsStr] = useState('');
+  const [notifyDoorHeldOpen, setNotifyDoorHeldOpen] = useState(false);
+  const [notifyEventChange, setNotifyEventChange] = useState(false);
+  const [notifyVisitorArrival, setNotifyVisitorArrival] = useState(false);
+  const [notifyVisitorExpiring, setNotifyVisitorExpiring] = useState(false);
+  const [notifyDeniedAccess, setNotifyDeniedAccess] = useState(false);
+  const [notifyUserSyncError, setNotifyUserSyncError] = useState(false);
+  const [notifyAgentUpdate, setNotifyAgentUpdate] = useState(false);
+  const [notifyWeeklyDigest, setNotifyWeeklyDigest] = useState(false);
   const [savingEmailBranding, setSavingEmailBranding] = useState(false);
 
   const [copied, setCopied] = useState(false);
@@ -309,6 +319,16 @@ export default function SettingsPage() {
             setNotifyUserSyncWelcome(Boolean(s.email_settings.notify_on_user_sync_welcome));
             setNotifyVisitorHost(Boolean(s.email_settings.notify_on_visitor_host));
             setVisitorHostRecipientsStr((s.email_settings.visitor_host_recipients ?? []).join(', '));
+            setNotifyDailySchedule(Boolean(s.email_settings.notify_daily_schedule_summary));
+            setScheduleSummaryRecipientsStr((s.email_settings.schedule_summary_recipients ?? []).join(', '));
+            setNotifyDoorHeldOpen(Boolean(s.email_settings.notify_on_door_held_open));
+            setNotifyEventChange(Boolean(s.email_settings.notify_on_event_change));
+            setNotifyVisitorArrival(Boolean(s.email_settings.notify_on_visitor_arrival));
+            setNotifyVisitorExpiring(Boolean(s.email_settings.notify_on_visitor_expiring));
+            setNotifyDeniedAccess(Boolean(s.email_settings.notify_on_denied_access));
+            setNotifyUserSyncError(Boolean(s.email_settings.notify_on_user_sync_error));
+            setNotifyAgentUpdate(Boolean(s.email_settings.notify_on_agent_update));
+            setNotifyWeeklyDigest(Boolean(s.email_settings.notify_weekly_security_digest));
           }
         }
       })
@@ -367,24 +387,36 @@ export default function SettingsPage() {
     }
   };
 
+  const buildEmailSettingsPayload = (overrideLogoUrl?: string) => ({
+    logo_url: (overrideLogoUrl ?? logoUrl).trim(),
+    from_name: emailFromName.trim(),
+    reply_to: emailReplyTo.trim(),
+    footer_text: emailFooterText.trim(),
+    alert_recipients: parseEmailList(alertRecipientsStr),
+    notify_on_agent_offline: notifyAgentOffline,
+    notify_on_command_failure: notifyCommandFailure,
+    notify_on_pco_sync_error: notifyPcoSyncError,
+    notify_on_user_sync_welcome: notifyUserSyncWelcome,
+    notify_on_visitor_host: notifyVisitorHost,
+    visitor_host_recipients: parseEmailList(visitorHostRecipientsStr),
+    notify_daily_schedule_summary: notifyDailySchedule,
+    schedule_summary_recipients: parseEmailList(scheduleSummaryRecipientsStr),
+    notify_on_door_held_open: notifyDoorHeldOpen,
+    notify_on_event_change: notifyEventChange,
+    notify_on_visitor_arrival: notifyVisitorArrival,
+    notify_on_visitor_expiring: notifyVisitorExpiring,
+    notify_on_denied_access: notifyDeniedAccess,
+    notify_on_user_sync_error: notifyUserSyncError,
+    notify_on_agent_update: notifyAgentUpdate,
+    notify_weekly_security_digest: notifyWeeklyDigest,
+  });
+
   const handleSaveEmailSettings = async () => {
     if (!orgId) return;
     setSavingEmailBranding(true);
     try {
       await updateOrgSettings(orgId, {
-        email_settings: {
-          logo_url: logoUrl.trim(),
-          from_name: emailFromName.trim(),
-          reply_to: emailReplyTo.trim(),
-          footer_text: emailFooterText.trim(),
-          alert_recipients: parseEmailList(alertRecipientsStr),
-          notify_on_agent_offline: notifyAgentOffline,
-          notify_on_command_failure: notifyCommandFailure,
-          notify_on_pco_sync_error: notifyPcoSyncError,
-          notify_on_user_sync_welcome: notifyUserSyncWelcome,
-          notify_on_visitor_host: notifyVisitorHost,
-          visitor_host_recipients: parseEmailList(visitorHostRecipientsStr),
-        },
+        email_settings: buildEmailSettingsPayload(),
       });
       showToast('Email branding and alert settings saved.', 'success');
     } catch (err: any) {
@@ -409,19 +441,7 @@ export default function SettingsPage() {
       const downloadUrl = await getDownloadURL(storageRef);
       setLogoUrl(downloadUrl);
       await updateOrgSettings(orgId, {
-        email_settings: {
-          logo_url: downloadUrl,
-          from_name: emailFromName.trim(),
-          reply_to: emailReplyTo.trim(),
-          footer_text: emailFooterText.trim(),
-          alert_recipients: parseEmailList(alertRecipientsStr),
-          notify_on_agent_offline: notifyAgentOffline,
-          notify_on_command_failure: notifyCommandFailure,
-          notify_on_pco_sync_error: notifyPcoSyncError,
-          notify_on_user_sync_welcome: notifyUserSyncWelcome,
-          notify_on_visitor_host: notifyVisitorHost,
-          visitor_host_recipients: parseEmailList(visitorHostRecipientsStr),
-        },
+        email_settings: buildEmailSettingsPayload(downloadUrl),
       });
       showToast('Tenant email logo uploaded and saved.', 'success');
     } catch (err: any) {
@@ -1418,7 +1438,56 @@ SKIP_TLS_VERIFY=true`}</pre>
                   <input type="checkbox" checked={notifyVisitorHost} onChange={(e) => setNotifyVisitorHost(e.target.checked)} />
                   <span>Notify host / staff when a visitor pass is created or updated</span>
                 </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDailySchedule} onChange={(e) => setNotifyDailySchedule(e.target.checked)} />
+                  <span>Daily morning summary of today&apos;s mapped door unlock schedule</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyWeeklyDigest} onChange={(e) => setNotifyWeeklyDigest(e.target.checked)} />
+                  <span>Weekly Monday morning security &amp; facility digest</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDoorHeldOpen} onChange={(e) => setNotifyDoorHeldOpen(e.target.checked)} />
+                  <span>Alert when a door is held unlocked (&gt; 60 min) or propped open while locked</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyEventChange} onChange={(e) => setNotifyEventChange(e.target.checked)} />
+                  <span>Alert when a mapped PCO event changes within 48 hours of start</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorArrival} onChange={(e) => setNotifyVisitorArrival(e.target.checked)} />
+                  <span>Notify host when a visitor arrives (first door unlock)</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorExpiring} onChange={(e) => setNotifyVisitorExpiring(e.target.checked)} />
+                  <span>Remind host 4 hours before a multi-day visitor pass expires</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDeniedAccess} onChange={(e) => setNotifyDeniedAccess(e.target.checked)} />
+                  <span>Alert on denied / failed door access attempts</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyUserSyncError} onChange={(e) => setNotifyUserSyncError(e.target.checked)} />
+                  <span>Alert when PCO-synced users have policies revoked or sync errors</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyAgentUpdate} onChange={(e) => setNotifyAgentUpdate(e.target.checked)} />
+                  <span>Notify when a new Local Agent software update is available</span>
+                </label>
               </div>
+
+              {notifyDailySchedule && (
+                <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Daily Schedule Summary Recipients (optional override)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="facilities@yourchurch.org, security@yourchurch.org"
+                    value={scheduleSummaryRecipientsStr}
+                    onChange={(e) => setScheduleSummaryRecipientsStr(e.target.value)}
+                  />
+                </div>
+              )}
 
               {notifyVisitorHost && (
                 <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
@@ -1787,7 +1856,56 @@ SKIP_TLS_VERIFY=true`}</pre>
                   <input type="checkbox" checked={notifyVisitorHost} onChange={(e) => setNotifyVisitorHost(e.target.checked)} />
                   <span>Notify host / staff when a visitor pass is created or updated</span>
                 </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDailySchedule} onChange={(e) => setNotifyDailySchedule(e.target.checked)} />
+                  <span>Daily morning summary of today&apos;s mapped door unlock schedule</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyWeeklyDigest} onChange={(e) => setNotifyWeeklyDigest(e.target.checked)} />
+                  <span>Weekly Monday morning security &amp; facility digest</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDoorHeldOpen} onChange={(e) => setNotifyDoorHeldOpen(e.target.checked)} />
+                  <span>Alert when a door is held unlocked (&gt; 60 min) or propped open while locked</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyEventChange} onChange={(e) => setNotifyEventChange(e.target.checked)} />
+                  <span>Alert when a mapped PCO event changes within 48 hours of start</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorArrival} onChange={(e) => setNotifyVisitorArrival(e.target.checked)} />
+                  <span>Notify host when a visitor arrives (first door unlock)</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorExpiring} onChange={(e) => setNotifyVisitorExpiring(e.target.checked)} />
+                  <span>Remind host 4 hours before a multi-day visitor pass expires</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDeniedAccess} onChange={(e) => setNotifyDeniedAccess(e.target.checked)} />
+                  <span>Alert on denied / failed door access attempts</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyUserSyncError} onChange={(e) => setNotifyUserSyncError(e.target.checked)} />
+                  <span>Alert when PCO-synced users have policies revoked or sync errors</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyAgentUpdate} onChange={(e) => setNotifyAgentUpdate(e.target.checked)} />
+                  <span>Notify when a new Local Agent software update is available</span>
+                </label>
               </div>
+
+              {notifyDailySchedule && (
+                <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Daily Schedule Summary Recipients (optional override)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="facilities@yourchurch.org, security@yourchurch.org"
+                    value={scheduleSummaryRecipientsStr}
+                    onChange={(e) => setScheduleSummaryRecipientsStr(e.target.value)}
+                  />
+                </div>
+              )}
 
               {notifyVisitorHost && (
                 <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
@@ -2255,7 +2373,56 @@ SKIP_TLS_VERIFY=true`}</pre>
                   <input type="checkbox" checked={notifyVisitorHost} onChange={(e) => setNotifyVisitorHost(e.target.checked)} />
                   <span>Notify host / staff when a visitor pass is created or updated</span>
                 </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDailySchedule} onChange={(e) => setNotifyDailySchedule(e.target.checked)} />
+                  <span>Daily morning summary of today&apos;s mapped door unlock schedule</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyWeeklyDigest} onChange={(e) => setNotifyWeeklyDigest(e.target.checked)} />
+                  <span>Weekly Monday morning security &amp; facility digest</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDoorHeldOpen} onChange={(e) => setNotifyDoorHeldOpen(e.target.checked)} />
+                  <span>Alert when a door is held unlocked (&gt; 60 min) or propped open while locked</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyEventChange} onChange={(e) => setNotifyEventChange(e.target.checked)} />
+                  <span>Alert when a mapped PCO event changes within 48 hours of start</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorArrival} onChange={(e) => setNotifyVisitorArrival(e.target.checked)} />
+                  <span>Notify host when a visitor arrives (first door unlock)</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorExpiring} onChange={(e) => setNotifyVisitorExpiring(e.target.checked)} />
+                  <span>Remind host 4 hours before a multi-day visitor pass expires</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDeniedAccess} onChange={(e) => setNotifyDeniedAccess(e.target.checked)} />
+                  <span>Alert on denied / failed door access attempts</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyUserSyncError} onChange={(e) => setNotifyUserSyncError(e.target.checked)} />
+                  <span>Alert when PCO-synced users have policies revoked or sync errors</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyAgentUpdate} onChange={(e) => setNotifyAgentUpdate(e.target.checked)} />
+                  <span>Notify when a new Local Agent software update is available</span>
+                </label>
               </div>
+
+              {notifyDailySchedule && (
+                <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Daily Schedule Summary Recipients (optional override)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="facilities@yourchurch.org, security@yourchurch.org"
+                    value={scheduleSummaryRecipientsStr}
+                    onChange={(e) => setScheduleSummaryRecipientsStr(e.target.value)}
+                  />
+                </div>
+              )}
 
               {notifyVisitorHost && (
                 <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
@@ -2598,7 +2765,56 @@ SKIP_TLS_VERIFY=true`}</pre>
                   <input type="checkbox" checked={notifyVisitorHost} onChange={(e) => setNotifyVisitorHost(e.target.checked)} />
                   <span>Notify host / staff when a visitor pass is created or updated</span>
                 </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDailySchedule} onChange={(e) => setNotifyDailySchedule(e.target.checked)} />
+                  <span>Daily morning summary of today&apos;s mapped door unlock schedule</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyWeeklyDigest} onChange={(e) => setNotifyWeeklyDigest(e.target.checked)} />
+                  <span>Weekly Monday morning security &amp; facility digest</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDoorHeldOpen} onChange={(e) => setNotifyDoorHeldOpen(e.target.checked)} />
+                  <span>Alert when a door is held unlocked (&gt; 60 min) or propped open while locked</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyEventChange} onChange={(e) => setNotifyEventChange(e.target.checked)} />
+                  <span>Alert when a mapped PCO event changes within 48 hours of start</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorArrival} onChange={(e) => setNotifyVisitorArrival(e.target.checked)} />
+                  <span>Notify host when a visitor arrives (first door unlock)</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorExpiring} onChange={(e) => setNotifyVisitorExpiring(e.target.checked)} />
+                  <span>Remind host 4 hours before a multi-day visitor pass expires</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyDeniedAccess} onChange={(e) => setNotifyDeniedAccess(e.target.checked)} />
+                  <span>Alert on denied / failed door access attempts</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyUserSyncError} onChange={(e) => setNotifyUserSyncError(e.target.checked)} />
+                  <span>Alert when PCO-synced users have policies revoked or sync errors</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyAgentUpdate} onChange={(e) => setNotifyAgentUpdate(e.target.checked)} />
+                  <span>Notify when a new Local Agent software update is available</span>
+                </label>
               </div>
+
+              {notifyDailySchedule && (
+                <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Daily Schedule Summary Recipients (optional override)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="facilities@yourchurch.org, security@yourchurch.org"
+                    value={scheduleSummaryRecipientsStr}
+                    onChange={(e) => setScheduleSummaryRecipientsStr(e.target.value)}
+                  />
+                </div>
+              )}
 
               {notifyVisitorHost && (
                 <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>

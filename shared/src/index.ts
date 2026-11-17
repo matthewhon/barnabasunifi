@@ -87,6 +87,17 @@ export interface OrgEmailSettings {
   notify_on_user_sync_welcome?: boolean;
   notify_on_visitor_host?: boolean;
   visitor_host_recipients?: string[];
+  // Additional opt-in notifications
+  notify_daily_schedule_summary?: boolean;
+  schedule_summary_recipients?: string[];
+  notify_on_door_held_open?: boolean;
+  notify_on_event_change?: boolean;
+  notify_on_visitor_arrival?: boolean;
+  notify_on_visitor_expiring?: boolean;
+  notify_on_denied_access?: boolean;
+  notify_on_user_sync_error?: boolean;
+  notify_on_agent_update?: boolean;
+  notify_weekly_security_digest?: boolean;
 }
 
 export interface EventNotificationSettings {

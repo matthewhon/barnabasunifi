@@ -42,6 +42,8 @@ import type {
   Agent,
   UnifiSchedule,
   UnifiVisitor,
+  VisitorRequest,
+  VisitorPreset,
   AccessLogEntry,
 } from '@/lib/types';
 
@@ -1248,6 +1250,39 @@ export function subscribeToVisitors(
 export async function getLatestAgentRelease(): Promise<import('@/lib/types').AgentRelease | null> {
   const snap = await getDoc(doc(db, 'agent_releases', 'latest'));
   return snap.exists() ? (snap.data() as import('@/lib/types').AgentRelease) : null;
+}
+
+export function subscribeToVisitorRequests(
+  orgId: string,
+  callback: (requests: VisitorRequest[]) => void,
+): Unsubscribe {
+  const q = query(
+    collection(db, 'organizations', orgId, 'visitor_requests'),
+    orderBy('created_at', 'desc'),
+    limit(100)
+  );
+  return onSnapshot(q, (snap) => {
+    const list = snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    })) as VisitorRequest[];
+    callback(list);
+  });
+}
+
+export async function getVisitorPresets(orgId: string): Promise<VisitorPreset[]> {
+  const snap = await getDoc(doc(db, 'organizations', orgId, 'settings', 'visitor_presets'));
+  if (!snap.exists()) return [];
+  const data = snap.data();
+  return Array.isArray(data?.presets) ? (data.presets as VisitorPreset[]) : [];
+}
+
+export async function saveVisitorPresets(orgId: string, presets: VisitorPreset[]): Promise<void> {
+  await setDoc(
+    doc(db, 'organizations', orgId, 'settings', 'visitor_presets'),
+    { presets, updated_at: serverTimestamp() },
+    { merge: true }
+  );
 }
 
 // ─── Access Logs (User Door Activity & Method Tracking) ───────────────────────

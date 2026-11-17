@@ -8,6 +8,7 @@ import {
   buildVisitorPassEmail,
   buildVisitorHostAlertEmail,
   buildVisitorRevokedEmail,
+  buildVisitorCalendarIcs,
 } from '../notifications/templates/visitorEmails';
 
 // ---------------------------------------------------------------------------
@@ -143,7 +144,7 @@ export function serializeUnifiVisitor(visitor: Partial<UnifiVisitor>): any {
   return base;
 }
 
-async function verifyOrgPermission(
+export async function verifyOrgPermission(
   auth: { uid: string; token: Record<string, unknown> } | undefined,
   orgId: string,
   allowedRoles: string[] = ['org_admin', 'manager']
@@ -323,7 +324,7 @@ export const syncUnifiVisitors = onCall<{ orgId: string }>(
   }
 );
 
-async function dispatchVisitorEmails(params: {
+export async function dispatchVisitorEmails(params: {
   orgId: string;
   visitor: Partial<UnifiVisitor>;
   isUpdate: boolean;
@@ -337,25 +338,28 @@ async function dispatchVisitorEmails(params: {
   let visitorEmailSent = false;
 
   if (sendEmail && visitor.email && visitor.email.includes('@')) {
-    const tmpl = buildVisitorPassEmail(
-      {
-        fullName,
-        firstName: visitor.first_name,
-        email: visitor.email,
-        pinCode: visitor.pin_code,
-        startTime: visitor.start_time || new Date().toISOString(),
-        endTime: visitor.end_time || new Date().toISOString(),
-        doorLabels: visitor.door_labels || [],
-        purpose: visitor.purpose,
-        timezone: orgCtx.timezone,
-        orgName: orgCtx.orgName,
-      },
-      isUpdate
-    );
+    const emailData = {
+      fullName,
+      firstName: visitor.first_name,
+      email: visitor.email,
+      pinCode: visitor.pin_code,
+      startTime: visitor.start_time || new Date().toISOString(),
+      endTime: visitor.end_time || new Date().toISOString(),
+      doorLabels: visitor.door_labels || [],
+      purpose: visitor.purpose,
+      timezone: orgCtx.timezone,
+      orgName: orgCtx.orgName,
+    };
+    const tmpl = buildVisitorPassEmail(emailData, isUpdate);
+    const icsAttachment = buildVisitorCalendarIcs({
+      ...emailData,
+      uid: visitor.id || visitor.unifi_visitor_id,
+    });
     const res = await sendOrgEmail({
       orgId,
       to: visitor.email,
       ...tmpl,
+      attachments: [icsAttachment],
     });
     visitorEmailSent = res.sent;
   }
@@ -389,6 +393,213 @@ async function dispatchVisitorEmails(params: {
   return visitorEmailSent;
 }
 
+export interface ProvisionVisitorParams {
+  orgId: string;
+  visitor: Partial<UnifiVisitor>;
+  sendEmail?: boolean;
+  waitForSync?: boolean;
+  actorUid?: string | null;
+  actorEmail?: string;
+}
+
+export async function provisionUnifiVisitor(params: ProvisionVisitorParams) {
+  const { orgId, visitor, sendEmail, waitForSync, actorUid, actorEmail } = params;
+  if (!orgId) throw new HttpsError('invalid-argument', 'orgId is required.');
+  if (!visitor || !visitor.first_name) {
+    throw new HttpsError('invalid-argument', 'Valid visitor data with first_name is required.');
+  }
+  if (!visitor.pin_code || !/^\d{4,8}$/.test(visitor.pin_code.trim())) {
+    throw new HttpsError('invalid-argument', 'PIN code must be 4 to 8 numeric digits.');
+  }
+  if (!visitor.door_ids || visitor.door_ids.length === 0) {
+    throw new HttpsError('invalid-argument', 'At least one door must be selected.');
+  }
+  if (!visitor.start_time || !visitor.end_time) {
+    throw new HttpsError('invalid-argument', 'Start time and end time are required.');
+  }
+
+  const db = getFirestore();
+  const configSnap = await db.collection('organizations').doc(orgId).collection('settings').doc('config').get();
+  const configData = configSnap.exists ? configSnap.data() : null;
+  const unifiMode = configData?.unifi_mode ?? 'agent';
+
+  if (unifiMode === 'remote') {
+    const remoteConfig = configData?.unifi_remote;
+    if (!remoteConfig?.host || !remoteConfig?.access_token) {
+      throw new HttpsError('failed-precondition', 'Remote UniFi configuration missing host or access token.');
+    }
+
+    const host = remoteConfig.host.replace(/\/$/, '');
+    const agent = new https.Agent({ rejectUnauthorized: false });
+    const client = axios.create({
+      baseURL: host,
+      httpsAgent: agent,
+      headers: {
+        'X-API-KEY': remoteConfig.access_token,
+        Authorization: `Bearer ${remoteConfig.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    });
+
+    const payload = serializeUnifiVisitor(visitor);
+    let savedRaw: any;
+
+    if (visitor.unifi_visitor_id || (visitor.id && !visitor.id.startsWith('vis_'))) {
+      const uId = visitor.unifi_visitor_id || visitor.id!;
+      try {
+        const res = await client.put(`/api/v1/developer/visitors/${encodeURIComponent(uId)}`, payload);
+        savedRaw = res.data?.data ?? { id: uId, ...payload };
+      } catch {
+        try {
+          const res = await client.put(`/proxy/access/integration/v1/developer/visitors/${encodeURIComponent(uId)}`, payload);
+          savedRaw = res.data?.data ?? { id: uId, ...payload };
+        } catch {
+          const res = await client.put(`/proxy/access/api/v2/visitor/${encodeURIComponent(uId)}`, payload);
+          savedRaw = res.data?.data ?? { id: uId, ...payload };
+        }
+      }
+    } else {
+      try {
+        const res = await client.post('/api/v1/developer/visitors', payload);
+        savedRaw = res.data?.data ?? payload;
+      } catch {
+        try {
+          const res = await client.post('/proxy/access/integration/v1/developer/visitors', payload);
+          savedRaw = res.data?.data ?? payload;
+        } catch {
+          const res = await client.post('/proxy/access/api/v2/visitors', payload);
+          savedRaw = res.data?.data ?? payload;
+        }
+      }
+    }
+
+    const normalized = normalizeUnifiVisitor(savedRaw, orgId);
+    const visitorDocId = visitor.id || normalized.id || db.collection(`organizations/${orgId}/visitors`).doc().id;
+
+    const now = FieldValue.serverTimestamp();
+    const emailSent = await dispatchVisitorEmails({
+      orgId,
+      visitor: { ...visitor, ...normalized, id: visitorDocId, pin_code: visitor.pin_code },
+      isUpdate: Boolean(visitor.unifi_visitor_id || visitor.id),
+      sendEmail,
+      actorEmail,
+    }).catch(() => false);
+
+    await db.doc(`organizations/${orgId}/visitors/${visitorDocId}`).set({
+      ...normalized,
+      id: visitorDocId,
+      org_id: orgId,
+      pin_code: visitor.pin_code,
+      ...(visitor.request_id ? { request_id: visitor.request_id } : {}),
+      ...(visitor.requester_email ? { requester_email: visitor.requester_email } : {}),
+      send_pass_on_sync: false,
+      pass_email_sent: emailSent,
+      ...(emailSent ? { pass_email_sent_at: new Date().toISOString() } : {}),
+      last_synced: now,
+      sync_status: 'synced',
+      sync_error: null,
+      updated_at: now,
+    }, { merge: true });
+
+    await db.collection(`organizations/${orgId}/audit_log`).add({
+      action: visitor.id ? 'visitor_updated' : 'visitor_created',
+      triggered_by: 'manual',
+      actor_uid: actorUid ?? null,
+      message: `Visitor ${visitor.first_name} ${visitor.last_name || ''} ${visitor.id ? 'updated' : 'created'} via remote UniFi.`,
+      result: 'success',
+      timestamp: now,
+    });
+
+    return {
+      success: true,
+      mode: 'remote' as const,
+      emailSent,
+      visitorId: visitorDocId,
+      visitor: {
+        ...normalized,
+        id: visitorDocId,
+        pin_code: visitor.pin_code,
+      },
+    };
+  }
+
+  // Agent mode: Store optimistic state in Firestore and queue command for local agent
+  const targetVisitorId = visitor.id || db.collection(`organizations/${orgId}/visitors`).doc().id;
+  const nowIso = new Date().toISOString();
+
+  let unifiVisitorId = visitor.unifi_visitor_id;
+  if (!unifiVisitorId && visitor.id) {
+    const existingSnap = await db.doc(`organizations/${orgId}/visitors/${visitor.id}`).get();
+    if (existingSnap.exists) {
+      unifiVisitorId = existingSnap.data()?.unifi_visitor_id;
+    }
+  }
+
+  const deferEmailToSync = Boolean(sendEmail && waitForSync && !unifiVisitorId);
+
+  const pendingVisitor: Partial<UnifiVisitor> = {
+    ...visitor,
+    id: targetVisitorId,
+    org_id: orgId,
+    full_name: `${visitor.first_name} ${visitor.last_name || ''}`.trim(),
+    sync_status: 'pending',
+    send_pass_on_sync: deferEmailToSync,
+    pass_email_sent: false,
+    updated_at: nowIso,
+  };
+
+  if (unifiVisitorId) {
+    pendingVisitor.unifi_visitor_id = unifiVisitorId;
+  }
+
+  let emailSent = false;
+  if (!deferEmailToSync) {
+    emailSent = await dispatchVisitorEmails({
+      orgId,
+      visitor: pendingVisitor,
+      isUpdate: Boolean(unifiVisitorId),
+      sendEmail,
+      actorEmail,
+    }).catch(() => false);
+    if (emailSent) {
+      pendingVisitor.pass_email_sent = true;
+      pendingVisitor.pass_email_sent_at = nowIso;
+    }
+  }
+
+  await db.doc(`organizations/${orgId}/visitors/${targetVisitorId}`).set(pendingVisitor, { merge: true });
+
+  const action = unifiVisitorId ? 'update_visitor' : 'create_visitor';
+
+  const commandRef = await db.collection(`organizations/${orgId}/door_commands`).add({
+    action,
+    visitor_id: targetVisitorId,
+    firestore_visitor_id: targetVisitorId,
+    unifi_visitor_id: unifiVisitorId || null,
+    visitor_data: {
+      ...visitor,
+      id: targetVisitorId,
+      unifi_visitor_id: unifiVisitorId,
+    },
+    status: 'queued',
+    execute_at: nowIso,
+    triggered_by: 'manual',
+    actor_uid: actorUid ?? null,
+    created_at: nowIso,
+    org_id: orgId,
+  });
+
+  return {
+    success: true,
+    mode: 'agent' as const,
+    commandId: commandRef.id,
+    visitorId: targetVisitorId,
+    emailSent,
+    deferredToSync: deferEmailToSync,
+  };
+}
+
 /**
  * saveUnifiVisitor
  * Creates or updates a visitor in UniFi Access.
@@ -397,187 +608,14 @@ export const saveUnifiVisitor = onCall<{ orgId: string; visitor: Partial<UnifiVi
   async (request) => {
     const { orgId, visitor, sendEmail } = request.data ?? {};
     if (!orgId) throw new HttpsError('invalid-argument', 'orgId is required.');
-    if (!visitor || !visitor.first_name) {
-      throw new HttpsError('invalid-argument', 'Valid visitor data with first_name is required.');
-    }
-    if (!visitor.pin_code || !/^\d{4,8}$/.test(visitor.pin_code.trim())) {
-      throw new HttpsError('invalid-argument', 'PIN code must be 4 to 8 numeric digits.');
-    }
-    if (!visitor.door_ids || visitor.door_ids.length === 0) {
-      throw new HttpsError('invalid-argument', 'At least one door must be selected.');
-    }
-    if (!visitor.start_time || !visitor.end_time) {
-      throw new HttpsError('invalid-argument', 'Start time and end time are required.');
-    }
-
     await verifyOrgPermission(request.auth, orgId, ['org_admin', 'manager']);
-
-    const db = getFirestore();
-    const configSnap = await db.collection('organizations').doc(orgId).collection('settings').doc('config').get();
-    const configData = configSnap.exists ? configSnap.data() : null;
-    const unifiMode = configData?.unifi_mode ?? 'agent';
-
-    if (unifiMode === 'remote') {
-      const remoteConfig = configData?.unifi_remote;
-      if (!remoteConfig?.host || !remoteConfig?.access_token) {
-        throw new HttpsError('failed-precondition', 'Remote UniFi configuration missing host or access token.');
-      }
-
-      const host = remoteConfig.host.replace(/\/$/, '');
-      const agent = new https.Agent({ rejectUnauthorized: false });
-      const client = axios.create({
-        baseURL: host,
-        httpsAgent: agent,
-        headers: {
-          'X-API-KEY': remoteConfig.access_token,
-          Authorization: `Bearer ${remoteConfig.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 15000,
-      });
-
-      const payload = serializeUnifiVisitor(visitor);
-      let savedRaw: any;
-
-      if (visitor.unifi_visitor_id || (visitor.id && !visitor.id.startsWith('vis_'))) {
-        const uId = visitor.unifi_visitor_id || visitor.id!;
-        try {
-          const res = await client.put(`/api/v1/developer/visitors/${encodeURIComponent(uId)}`, payload);
-          savedRaw = res.data?.data ?? { id: uId, ...payload };
-        } catch {
-          try {
-            const res = await client.put(`/proxy/access/integration/v1/developer/visitors/${encodeURIComponent(uId)}`, payload);
-            savedRaw = res.data?.data ?? { id: uId, ...payload };
-          } catch {
-            const res = await client.put(`/proxy/access/api/v2/visitor/${encodeURIComponent(uId)}`, payload);
-            savedRaw = res.data?.data ?? { id: uId, ...payload };
-          }
-        }
-      } else {
-        // Create
-        try {
-          const res = await client.post('/api/v1/developer/visitors', payload);
-          savedRaw = res.data?.data ?? payload;
-        } catch {
-          try {
-            const res = await client.post('/proxy/access/integration/v1/developer/visitors', payload);
-            savedRaw = res.data?.data ?? payload;
-          } catch {
-            const res = await client.post('/proxy/access/api/v2/visitors', payload);
-            savedRaw = res.data?.data ?? payload;
-          }
-        }
-      }
-
-      const normalized = normalizeUnifiVisitor(savedRaw, orgId);
-      const visitorDocId = visitor.id || normalized.id || db.collection(`organizations/${orgId}/visitors`).doc().id;
-
-      const now = FieldValue.serverTimestamp();
-      await db.doc(`organizations/${orgId}/visitors/${visitorDocId}`).set({
-        ...normalized,
-        id: visitorDocId,
-        org_id: orgId,
-        pin_code: visitor.pin_code, // Store entered plaintext PIN in Firestore
-        last_synced: now,
-        sync_status: 'synced',
-        sync_error: null,
-        updated_at: now,
-      }, { merge: true });
-
-      // Audit Log
-      await db.collection(`organizations/${orgId}/audit_log`).add({
-        action: visitor.id ? 'visitor_updated' : 'visitor_created',
-        triggered_by: 'manual',
-        actor_uid: request.auth?.uid ?? null,
-        message: `Visitor ${visitor.first_name} ${visitor.last_name || ''} ${visitor.id ? 'updated' : 'created'} via remote UniFi.`,
-        result: 'success',
-        timestamp: now,
-      });
-
-      const emailSent = await dispatchVisitorEmails({
-        orgId,
-        visitor: { ...visitor, ...normalized, pin_code: visitor.pin_code },
-        isUpdate: Boolean(visitor.unifi_visitor_id || visitor.id),
-        sendEmail,
-        actorEmail: request.auth?.token?.email as string | undefined,
-      }).catch(() => false);
-
-      return {
-        success: true,
-        mode: 'remote',
-        emailSent,
-        visitor: {
-          ...normalized,
-          id: visitorDocId,
-          pin_code: visitor.pin_code,
-        },
-      };
-    }
-
-    // Agent mode: Store optimistic state in Firestore and queue command for local agent
-    const targetVisitorId = visitor.id || db.collection(`organizations/${orgId}/visitors`).doc().id;
-    const nowIso = new Date().toISOString();
-
-    // Check if visitor already has an established UniFi ID
-    let unifiVisitorId = visitor.unifi_visitor_id;
-    if (!unifiVisitorId && visitor.id) {
-      const existingSnap = await db.doc(`organizations/${orgId}/visitors/${visitor.id}`).get();
-      if (existingSnap.exists) {
-        unifiVisitorId = existingSnap.data()?.unifi_visitor_id;
-      }
-    }
-
-    const pendingVisitor: Partial<UnifiVisitor> = {
-      ...visitor,
-      id: targetVisitorId,
-      org_id: orgId,
-      full_name: `${visitor.first_name} ${visitor.last_name || ''}`.trim(),
-      sync_status: 'pending',
-      updated_at: nowIso,
-    };
-
-    if (unifiVisitorId) {
-      pendingVisitor.unifi_visitor_id = unifiVisitorId;
-    }
-
-    await db.doc(`organizations/${orgId}/visitors/${targetVisitorId}`).set(pendingVisitor, { merge: true });
-
-    // Only dispatch update_visitor if we actually have a UniFi visitor ID; otherwise create
-    const action = unifiVisitorId ? 'update_visitor' : 'create_visitor';
-
-    const commandRef = await db.collection(`organizations/${orgId}/door_commands`).add({
-      action,
-      visitor_id: targetVisitorId,
-      firestore_visitor_id: targetVisitorId,
-      unifi_visitor_id: unifiVisitorId || null,
-      visitor_data: {
-        ...visitor,
-        id: targetVisitorId,
-        unifi_visitor_id: unifiVisitorId,
-      },
-      status: 'queued',
-      execute_at: nowIso,
-      triggered_by: 'manual',
-      actor_uid: request.auth?.uid ?? null,
-      created_at: nowIso,
-      org_id: orgId,
-    });
-
-    const emailSent = await dispatchVisitorEmails({
+    return provisionUnifiVisitor({
       orgId,
-      visitor: pendingVisitor,
-      isUpdate: Boolean(unifiVisitorId),
+      visitor,
       sendEmail,
+      actorUid: request.auth?.uid ?? null,
       actorEmail: request.auth?.token?.email as string | undefined,
-    }).catch(() => false);
-
-    return {
-      success: true,
-      mode: 'agent',
-      commandId: commandRef.id,
-      visitorId: targetVisitorId,
-      emailSent,
-    };
+    });
   }
 );
 
@@ -606,26 +644,29 @@ export const sendVisitorPassEmail = onCall<{ orgId: string; visitorId: string }>
     }
 
     const orgCtx = await getOrgEmailContext(orgId);
-    const tmpl = buildVisitorPassEmail(
-      {
-        fullName: visitor.full_name || `${visitor.first_name} ${visitor.last_name || ''}`.trim(),
-        firstName: visitor.first_name,
-        email: visitor.email,
-        pinCode: visitor.pin_code,
-        startTime: visitor.start_time,
-        endTime: visitor.end_time,
-        doorLabels: visitor.door_labels || [],
-        purpose: visitor.purpose,
-        timezone: orgCtx.timezone,
-        orgName: orgCtx.orgName,
-      },
-      false
-    );
+    const emailData = {
+      fullName: visitor.full_name || `${visitor.first_name} ${visitor.last_name || ''}`.trim(),
+      firstName: visitor.first_name,
+      email: visitor.email,
+      pinCode: visitor.pin_code,
+      startTime: visitor.start_time,
+      endTime: visitor.end_time,
+      doorLabels: visitor.door_labels || [],
+      purpose: visitor.purpose,
+      timezone: orgCtx.timezone,
+      orgName: orgCtx.orgName,
+    };
+    const tmpl = buildVisitorPassEmail(emailData, false);
+    const icsAttachment = buildVisitorCalendarIcs({
+      ...emailData,
+      uid: visitor.id || visitor.unifi_visitor_id,
+    });
 
     const res = await sendOrgEmail({
       orgId,
       to: visitor.email,
       ...tmpl,
+      attachments: [icsAttachment],
     });
 
     if (!res.sent) {

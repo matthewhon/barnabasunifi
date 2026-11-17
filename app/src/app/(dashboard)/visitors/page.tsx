@@ -6,13 +6,17 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
 import {
   subscribeToVisitors,
+  subscribeToVisitorRequests,
   subscribeToDoors,
   getOrgSettings,
 } from '@/lib/firestore';
-import type { UnifiVisitor, Door, VisitorStatus } from '@/lib/types';
+import type { UnifiVisitor, VisitorRequest, Door, VisitorStatus } from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import VisitorModal from '@/components/visitors/VisitorModal';
+import SendRequestLinkModal from '@/components/visitors/SendRequestLinkModal';
+import VisitorRequestReviewModal from '@/components/visitors/VisitorRequestReviewModal';
+import VisitorPresetsModal from '@/components/visitors/VisitorPresetsModal';
 import { format, isFuture } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import { parseSafeDate, safeFormat, safeFormatDistanceToNow, safeIsPast } from '@/lib/date-utils';
@@ -179,13 +183,14 @@ function getValidityNotice(visitor: UnifiVisitor): { text: string; color: string
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-type TabKey = 'active' | 'upcoming' | 'expired' | 'revoked' | 'all';
+type TabKey = 'active' | 'upcoming' | 'expired' | 'revoked' | 'all' | 'requests';
 
 export default function VisitorsPage() {
   const { orgId, role, isSuperAdmin } = useAuth();
   const canManage = role === 'org_admin' || role === 'manager' || isSuperAdmin;
 
   const [visitors, setVisitors] = useState<UnifiVisitor[]>([]);
+  const [visitorRequests, setVisitorRequests] = useState<VisitorRequest[]>([]);
   const [doors, setDoors] = useState<Door[]>([]);
   const [timezone, setTimezone] = useState('America/Chicago');
   const [loading, setLoading] = useState(true);
@@ -194,9 +199,21 @@ export default function VisitorsPage() {
   const [tab, setTab] = useState<TabKey>('active');
   const [doorFilter, setDoorFilter] = useState<string>('all');
   const [modalOpen, setModalOpen] = useState(false);
+  const [sendLinkModalOpen, setSendLinkModalOpen] = useState(false);
+  const [presetsModalOpen, setPresetsModalOpen] = useState(false);
+  const [reviewingRequest, setReviewingRequest] = useState<VisitorRequest | null>(null);
   const [editingVisitor, setEditingVisitor] = useState<UnifiVisitor | null>(null);
   const [feedback, setFeedback] = useState<{ text: string; ok: boolean } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('tab') === 'requests') {
+        setTab('requests');
+      }
+    }
+  }, []);
 
   const showFeedback = useCallback((text: string, ok: boolean) => {
     setFeedback({ text, ok });
@@ -218,12 +235,16 @@ export default function VisitorsPage() {
       setVisitors(v);
       setLoading(false);
     });
+    const unsubRequests = canManage
+      ? subscribeToVisitorRequests(orgId, (reqs) => setVisitorRequests(reqs))
+      : () => {};
 
     return () => {
       unsubDoors();
       unsubVisitors();
+      unsubRequests();
     };
-  }, [orgId]);
+  }, [orgId, canManage]);
 
   const isUuid = (str: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
@@ -415,6 +436,48 @@ export default function VisitorsPage() {
             <span>{syncing ? 'Syncing…' : 'Sync from UniFi'}</span>
           </button>
 
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setPresetsModalOpen(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.5rem 0.9rem',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--color-bg-surface)',
+                color: 'var(--color-text-primary)',
+                border: '1px solid var(--color-border)',
+                fontWeight: 500,
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+              }}
+            >
+              <span>Door Presets</span>
+            </button>
+          )}
+          {canManage && (
+            <button
+              type="button"
+              onClick={() => setSendLinkModalOpen(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.5rem 0.9rem',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--color-bg-surface)',
+                color: 'var(--color-text-primary)',
+                border: '1px solid var(--color-border)',
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+              }}
+            >
+              <span>Send Request Form</span>
+            </button>
+          )}
           {canManage && (
             <button
               type="button"
@@ -525,6 +588,14 @@ export default function VisitorsPage() {
               { key: 'expired', label: `Expired (${counts.expired})` },
               { key: 'revoked', label: `Revoked (${counts.revoked})` },
               { key: 'all', label: `All (${counts.all})` },
+              ...(canManage
+                ? [
+                    {
+                      key: 'requests' as const,
+                      label: `Requests (${visitorRequests.filter((r) => r.status === 'pending_approval').length})`,
+                    },
+                  ]
+                : []),
             ] as const
           ).map((t) => {
             const isActive = tab === t.key;
@@ -594,7 +665,98 @@ export default function VisitorsPage() {
       </div>
 
       {/* Visitors Content */}
-      {loading ? (
+      {tab === 'requests' ? (
+        <div className="card" style={{ overflow: 'hidden' }}>
+          {visitorRequests.length === 0 ? (
+            <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
+              No visitor requests yet. Click &ldquo;Send Request Form&rdquo; to invite someone to submit visitor details.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Visitor</th>
+                    <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Requested By</th>
+                    <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Requested Window</th>
+                    <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Purpose</th>
+                    <th style={{ textAlign: 'left', padding: '0.75rem 1rem' }}>Status</th>
+                    <th style={{ textAlign: 'right', padding: '0.75rem 1rem' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visitorRequests.map((req) => {
+                    const vd = req.visitor_data;
+                    const vName = vd ? `${vd.first_name} ${vd.last_name || ''}`.trim() : 'Awaiting submission';
+                    return (
+                      <tr key={req.id} style={{ borderTop: '1px solid var(--color-border)' }}>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <div style={{ fontWeight: 600 }}>{vName}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
+                            {vd?.email || req.recipient_email || '—'}
+                          </div>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.875rem' }}>
+                          <div>{req.requester_name || req.recipient_name || '—'}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
+                            {req.requester_email || req.recipient_email || ''}
+                          </div>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.8125rem' }}>
+                          {vd?.start_time ? (
+                            <>
+                              <div>{safeFormat(vd.start_time, 'MMM d, h:mm a', timezone)}</div>
+                              <div style={{ color: 'var(--color-text-secondary)' }}>
+                                to {safeFormat(vd.end_time, 'MMM d, h:mm a', timezone)}
+                              </div>
+                            </>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.875rem' }}>
+                          {vd?.purpose || '—'}
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <span
+                            className={`badge ${
+                              req.status === 'pending_approval'
+                                ? 'badge-warning'
+                                : req.status === 'approved'
+                                ? 'badge-success'
+                                : req.status === 'rejected'
+                                ? 'badge-danger'
+                                : 'badge-secondary'
+                            }`}
+                          >
+                            {req.status.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                          {req.status === 'pending_approval' ? (
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              style={{ padding: '0.375rem 0.75rem', fontSize: '0.8125rem' }}
+                              onClick={() => setReviewingRequest(req)}
+                            >
+                              Review &amp; Approve
+                            </button>
+                          ) : (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
+                              {req.reviewed_by_email || ''}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : loading ? (
         <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
           <div className="spinner" style={{ margin: '0 auto 1rem' }} />
           <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
@@ -940,6 +1102,30 @@ export default function VisitorsPage() {
           </p>
         </div>
       </Modal>
+
+      {orgId && (
+        <>
+          <SendRequestLinkModal
+            isOpen={sendLinkModalOpen}
+            onClose={() => setSendLinkModalOpen(false)}
+            orgId={orgId}
+          />
+          <VisitorRequestReviewModal
+            isOpen={Boolean(reviewingRequest)}
+            onClose={() => setReviewingRequest(null)}
+            orgId={orgId}
+            request={reviewingRequest}
+            doors={doors}
+            onCompleted={() => showFeedback('Visitor request updated.', true)}
+          />
+          <VisitorPresetsModal
+            isOpen={presetsModalOpen}
+            onClose={() => setPresetsModalOpen(false)}
+            orgId={orgId}
+            doors={doors}
+          />
+        </>
+      )}
     </div>
   );
 }

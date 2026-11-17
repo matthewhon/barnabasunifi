@@ -1,8 +1,9 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { PcoClient } from './client';
-import { getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { getOrgAdminEmails, getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
 import { buildSyncedUserWelcomeEmail } from '../notifications/templates/userEmails';
+import { buildUserSyncSummaryAlertEmail } from '../notifications/templates/advancedAlertEmails';
 import { AccessPolicyMapping, OrgSettings, PcoList } from '../types';
 
 export interface UserSyncResult {
@@ -366,6 +367,27 @@ export async function syncOrgUsers(orgId: string, force = false): Promise<UserSy
     total_processed: peopleMap.size,
     timestamp: now.toISOString(),
   });
+
+  if (policiesRevoked > 0) {
+    try {
+      const orgCtx = await getOrgEmailContext(orgId);
+      if (orgCtx.emailSettings.notify_on_user_sync_error) {
+        let recipients = orgCtx.emailSettings.alert_recipients || [];
+        if (recipients.length === 0) recipients = await getOrgAdminEmails(orgId);
+        if (recipients.length > 0) {
+          const tmpl = buildUserSyncSummaryAlertEmail({
+            orgName: orgCtx.orgName,
+            errorCount: 0,
+            revokedCount: policiesRevoked,
+            portalUrl: orgCtx.portalUrl || undefined,
+          });
+          await sendOrgEmail({ orgId, to: recipients, ...tmpl });
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to send user sync revocation alert for org ${orgId}:`, err);
+    }
+  }
 
   return {
     success: true,

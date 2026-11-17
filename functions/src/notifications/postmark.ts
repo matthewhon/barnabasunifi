@@ -28,6 +28,11 @@ export interface SendOrgEmailOptions {
   stream?: 'transactional' | 'digest';
   replyTo?: string;
   metadata?: Record<string, string>;
+  attachments?: Array<{
+    Name: string;
+    Content: string;
+    ContentType: string;
+  }>;
 }
 
 export interface SendEmailResult {
@@ -205,6 +210,9 @@ export async function sendOrgEmail(opts: SendOrgEmailOptions): Promise<SendEmail
         Tag: opts.tag,
         ...(replyTo ? { ReplyTo: replyTo } : {}),
         ...(opts.metadata ? { Metadata: opts.metadata } : {}),
+        ...(opts.attachments && opts.attachments.length > 0
+          ? { Attachments: opts.attachments.map((a) => ({ ...a, ContentID: null })) }
+          : {}),
       };
       const res = await client.sendEmail(payload);
       if (res.MessageID) messageIds.push(res.MessageID);
@@ -222,6 +230,9 @@ export async function sendOrgEmail(opts: SendOrgEmailOptions): Promise<SendEmail
           Tag: opts.tag,
           ...(replyTo ? { ReplyTo: replyTo } : {}),
           ...(opts.metadata ? { Metadata: opts.metadata } : {}),
+          ...(opts.attachments && opts.attachments.length > 0
+          ? { Attachments: opts.attachments.map((a) => ({ ...a, ContentID: null })) }
+          : {}),
         }));
         const responses = await client.sendEmailBatch(batch);
         for (const r of responses) {

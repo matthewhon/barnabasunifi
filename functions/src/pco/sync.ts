@@ -1,8 +1,9 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { PcoClient, PcoResource } from './client';
-import { getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { getOrgAdminEmails, getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
 import { buildUnmappedEventsEmail } from '../notifications/templates/eventEmails';
+import { buildEventChangedEmail } from '../notifications/templates/advancedAlertEmails';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -147,6 +148,13 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
   let windowsCreated = 0;
   let windowsUpdated = 0;
   const newUnmappedEvents: Array<{ title: string; startsAt: string; sourceType: string }> = [];
+  const changedMappedEvents: Array<{
+    title: string;
+    changeType: 'rescheduled' | 'cancelled';
+    oldStart: string;
+    newStart: string;
+    doorLabels: string[];
+  }> = [];
 
   // Helper: upsert a schedule window and optionally create door commands
   async function upsertWindow(
@@ -385,6 +393,21 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
         });
       }
       windowsUpdated++;
+
+      const prevStartMs = existingData?.starts_at && typeof existingData.starts_at.toMillis === 'function'
+        ? existingData.starts_at.toMillis()
+        : 0;
+      const newStartMs = startsAt.getTime();
+      const within48h = Math.abs(newStartMs - Date.now()) <= 48 * 60 * 60 * 1000;
+      if (within48h && finalDoorIds.length > 0 && prevStartMs && Math.abs(prevStartMs - newStartMs) > 60 * 1000) {
+        changedMappedEvents.push({
+          title: String(metadata.source_label || existingData?.source_label || 'PCO Event'),
+          changeType: 'rescheduled',
+          oldStart: new Date(prevStartMs).toISOString(),
+          newStart: startsAt.toISOString(),
+          doorLabels: finalDoorLabels,
+        });
+      }
     }
 
     // Create door_commands for windows within the next 24 hours ONLY if doors are mapped
@@ -771,6 +794,28 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       }
     } catch (err) {
       console.error(`Failed to send immediate unmapped event email for org ${orgId}:`, err);
+    }
+  }
+
+  // 8. Last-minute mapped event change email alert (if configured)
+  if (changedMappedEvents.length > 0) {
+    try {
+      const orgCtx = await getOrgEmailContext(orgId);
+      if (orgCtx.emailSettings.notify_on_event_change) {
+        let recipients = orgCtx.emailSettings.alert_recipients || [];
+        if (recipients.length === 0) recipients = await getOrgAdminEmails(orgId);
+        if (recipients.length > 0) {
+          const tmpl = buildEventChangedEmail({
+            orgName: orgCtx.orgName,
+            timezone: orgCtx.timezone,
+            changes: changedMappedEvents,
+            portalUrl: orgCtx.portalUrl || undefined,
+          });
+          await sendOrgEmail({ orgId, to: recipients, ...tmpl });
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to send event change email for org ${orgId}:`, err);
     }
   }
 

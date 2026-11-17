@@ -2,6 +2,8 @@ import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { randomUUID } from 'crypto';
+import { getOrgAdminEmails, getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { buildAgentUpdateAvailableEmail } from '../notifications/templates/advancedAlertEmails';
 
 export interface AgentRelease {
   version: string;
@@ -49,6 +51,29 @@ export const publishAgentRelease = onCall<{
   await batch.commit();
 
   console.log(`[Releases] Published agent release v${version} by ${request.auth.uid}`);
+
+  // Notify orgs that opted in to agent update emails
+  try {
+    const orgsSnap = await db.collection('organizations').get();
+    for (const orgDoc of orgsSnap.docs) {
+      const orgCtx = await getOrgEmailContext(orgDoc.id);
+      if (!orgCtx.emailSettings.notify_on_agent_update) continue;
+      let recipients = orgCtx.emailSettings.alert_recipients || [];
+      if (recipients.length === 0) recipients = await getOrgAdminEmails(orgDoc.id);
+      if (recipients.length === 0) continue;
+
+      const tmpl = buildAgentUpdateAvailableEmail({
+        orgName: orgCtx.orgName,
+        version,
+        releaseNotes: changelog || undefined,
+        portalUrl: orgCtx.portalUrl || undefined,
+      });
+      await sendOrgEmail({ orgId: orgDoc.id, to: recipients, ...tmpl }).catch(() => {});
+    }
+  } catch (err) {
+    console.warn('[Releases] Failed to send agent update emails:', err);
+  }
+
   return { success: true, version };
 });
 

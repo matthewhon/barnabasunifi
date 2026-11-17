@@ -19,6 +19,16 @@ export { generateAgentToken, registerAgentWithToken } from './agent/agentRegistr
 export { syncUnifiDoors } from './unifi/doors';
 export { syncUnifiSchedules, saveUnifiSchedule, deleteUnifiSchedule } from './unifi/schedules';
 export { syncUnifiVisitors, saveUnifiVisitor, deleteUnifiVisitor, sendVisitorPassEmail } from './unifi/visitors';
+export {
+  createVisitorRequestLink,
+  getVisitorRequestByToken,
+  submitVisitorRequest,
+  approveVisitorRequest,
+  rejectVisitorRequest,
+  onVisitorSyncedSendPass,
+  onVisitorFirstAccessLog,
+  scheduledVisitorRequestMaintenance,
+} from './unifi/visitorRequests';
 export { syncUnifiAccessPolicies, saveUnifiAccessPolicy, deleteUnifiAccessPolicy } from './unifi/policies';
 export { triggerUserSync, getPcoLists, sendSyncedUserWelcomeEmail } from './pco/userSync';
 export { syncUnifiAccessLogs } from './unifi/accessLogs';
@@ -31,4 +41,7 @@ export { sendEventInfoEmail } from './notifications/eventEmails';
 export { scheduledAgentHealthMonitor } from './notifications/agentMonitor';
 export { onDoorCommandFailed } from './notifications/commandFailureAlert';
 export { postmarkWebhook } from './notifications/postmarkWebhook';
+export { scheduledDailyDoorSchedule, scheduledWeeklySecurityDigest } from './notifications/scheduledSummaries';
+export { scheduledSecurityAndVisitorMonitor } from './notifications/securityMonitor';
+export { onAccessLogCreated } from './notifications/accessLogAlerts';
 

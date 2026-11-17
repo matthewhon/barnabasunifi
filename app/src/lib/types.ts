@@ -90,6 +90,17 @@ export interface OrgEmailSettings {
   notify_on_user_sync_welcome?: boolean;
   notify_on_visitor_host?: boolean;
   visitor_host_recipients?: string[];
+  // Additional opt-in notifications
+  notify_daily_schedule_summary?: boolean;
+  schedule_summary_recipients?: string[];
+  notify_on_door_held_open?: boolean;
+  notify_on_event_change?: boolean;
+  notify_on_visitor_arrival?: boolean;
+  notify_on_visitor_expiring?: boolean;
+  notify_on_denied_access?: boolean;
+  notify_on_user_sync_error?: boolean;
+  notify_on_agent_update?: boolean;
+  notify_weekly_security_digest?: boolean;
 }
 
 export interface EventNotificationSettings {
@@ -705,10 +716,72 @@ export interface UnifiVisitor {
   purpose?: string;                // e.g. "Contractor", "Guest Speaker"
   sync_status?: 'synced' | 'pending' | 'error' | 'failed';
   sync_error?: string;
+  send_pass_on_sync?: boolean;
+  pass_email_sent?: boolean;
+  pass_email_sent_at?: string;
+  request_id?: string;
+  requester_email?: string;
+  first_arrival_notified?: boolean;
   raw_data?: Record<string, unknown>;
   last_synced?: string;            // ISO8601
   created_at?: string;             // ISO8601
   updated_at?: string;             // ISO8601
+}
+
+export type VisitorRequestStatus =
+  | 'invited'
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  | 'expired';
+
+export interface VisitorRequestData {
+  first_name: string;
+  last_name?: string;
+  email: string;
+  mobile_phone?: string;
+  purpose: string;
+  start_time: string;              // ISO8601
+  end_time: string;                // ISO8601
+  requested_door_ids?: string[];
+  requested_door_labels?: string[];
+  preset_id?: string;
+  preset_name?: string;
+  notes?: string;
+}
+
+export interface VisitorRequest {
+  id: string;
+  org_id: string;
+  token_hash?: string;
+  status: VisitorRequestStatus;
+  invited_by_uid: string;
+  invited_by_email?: string;
+  recipient_email?: string;
+  recipient_name?: string;
+  invite_note?: string;
+  requester_name?: string;
+  requester_email?: string;
+  expires_at: string;              // ISO8601
+  submitted_at?: string;           // ISO8601
+  visitor_data?: VisitorRequestData;
+  reviewed_by_uid?: string;
+  reviewed_by_email?: string;
+  reviewed_at?: string;            // ISO8601
+  review_notes?: string;
+  rejection_reason?: string;
+  visitor_id?: string;
+  reminder_sent_at?: string;       // ISO8601
+  created_at: string;              // ISO8601
+  updated_at: string;              // ISO8601
+}
+
+export interface VisitorPreset {
+  id: string;
+  name: string;
+  description?: string;
+  door_ids: string[];
+  default_duration_hours?: number;
 }
 
 // ─── API Response Wrappers ────────────────────────────────────────────────────

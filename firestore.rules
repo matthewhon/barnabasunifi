@@ -120,6 +120,12 @@ service cloud.firestore {
         allow create, update, delete: if isOrgManager(orgId) || isAgentForOrg(orgId);
       }
 
+      // Visitor Requests: managers/admins can read; all writes go through Cloud Functions
+      match /visitor_requests/{requestId} {
+        allow read: if isOrgManager(orgId);
+        allow write: if false;
+      }
+
       // Access Policy Mappings: members can read; admins can write
       match /access_policy_mappings/{mappingId} {
         allow read: if isOrgMember(orgId);
