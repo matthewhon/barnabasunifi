@@ -43,8 +43,14 @@ function extractPin(pin: unknown): string {
   return '';
 }
 
-function generateSixDigitPin(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+function generateFourDigitPin(): string {
+  const asc = '0123456789';
+  const desc = '9876543210';
+  let pin = '';
+  do {
+    pin = String(Math.floor(1000 + Math.random() * 9000));
+  } while (asc.includes(pin) || desc.includes(pin) || /^(\d)\1{3}$/.test(pin));
+  return pin;
 }
 
 function toDatetimeLocalValue(date: Date): string {
@@ -191,7 +197,7 @@ export default function MobileVisitorsPage() {
     setEmail('');
     setMobilePhone('');
     setPurpose('');
-    setPinCode(generateSixDigitPin());
+    setPinCode(generateFourDigitPin());
     applyPreset(2);
     setSelectedDoorIds([]);
     setFormError(null);
@@ -206,7 +212,7 @@ export default function MobileVisitorsPage() {
     setEmail(v.email || '');
     setMobilePhone(v.mobile_phone || '');
     setPurpose(v.purpose || '');
-    setPinCode(extractPin(v.pin_code) || generateSixDigitPin());
+    setPinCode(extractPin(v.pin_code) || generateFourDigitPin());
     const start = parseSafeDate(v.start_time) || new Date();
     const end = parseSafeDate(v.end_time) || new Date(Date.now() + 2 * 60 * 60 * 1000);
     setStartTime(toDatetimeLocalValue(start));
@@ -663,7 +669,7 @@ export default function MobileVisitorsPage() {
               <button
                 type="button"
                 className="mobile-touch-btn"
-                onClick={() => setPinCode(generateSixDigitPin())}
+                onClick={() => setPinCode(generateFourDigitPin())}
                 aria-label="Generate random PIN"
                 style={{
                   background: 'var(--color-bg-elevated)',

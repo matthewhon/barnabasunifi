@@ -6,6 +6,7 @@ import * as crypto from 'crypto';
 interface IssueCameraStreamSessionRequest {
   orgId: string;
   cameraId: string;
+  mode?: 'live' | 'event';
 }
 
 interface IssueCameraStreamSessionResponse {
@@ -13,6 +14,9 @@ interface IssueCameraStreamSessionResponse {
   stream_mode: 'snapshot' | 'webrtc_lan' | 'relay';
   snapshot_url: string | null;
   snapshot_updated_at: string | null;
+  last_event_snapshot_url: string | null;
+  last_event_at: string | null;
+  last_event_label: string | null;
   webrtc_url: string | null;
   mse_url: string | null;
   stream_token: string | null;
@@ -90,7 +94,7 @@ export const issueCameraStreamSession = onCall<
     throw new HttpsError('unauthenticated', 'You must be signed in to view cameras.');
   }
 
-  const { orgId, cameraId } = request.data || {};
+  const { orgId, cameraId, mode = 'live' } = request.data || {};
   if (!orgId || !cameraId) {
     throw new HttpsError('invalid-argument', 'orgId and cameraId are required.');
   }
@@ -188,27 +192,45 @@ export const issueCameraStreamSession = onCall<
   }
   const camData = camSnap.data()!;
 
-  // Mark active viewer lease (60s) so the local agent prioritizes snapshot refreshes
+  // Mark active viewer lease (60s) only when viewing live stream
   const nowMs = Date.now();
   const expiresAtIso = new Date(nowMs + 60_000).toISOString();
-  await camRef.set({ live_view_until: expiresAtIso }, { merge: true });
+  if (mode !== 'event') {
+    await camRef.set({ live_view_until: expiresAtIso }, { merge: true });
+  }
 
-  // Issue short-lived signed URL for latest snapshot if present
+  // Issue short-lived signed URLs for latest snapshot and last event snapshot
   let snapshotUrl: string | null = null;
+  let lastEventSnapshotUrl: string | null = null;
   const storagePath =
     (camData.snapshot_storage_path as string) || `organizations/${orgId}/cameras/${cameraId}/latest.jpg`;
+  const lastEventPath =
+    (camData.last_event_storage_path as string) || `organizations/${orgId}/cameras/${cameraId}/last_event.jpg`;
   try {
-    const file = getStorage().bucket().file(storagePath);
-    const [exists] = await file.exists();
-    if (exists) {
-      const [signed] = await file.getSignedUrl({
+    const bucket = getStorage().bucket();
+    if (mode !== 'event') {
+      const file = bucket.file(storagePath);
+      const [exists] = await file.exists();
+      if (exists) {
+        const [signed] = await file.getSignedUrl({
+          action: 'read',
+          expires: nowMs + 60_000,
+        });
+        snapshotUrl = signed;
+      }
+    }
+    const eventFile = bucket.file(lastEventPath);
+    const [eventExists] = await eventFile.exists();
+    if (eventExists) {
+      const [eventSigned] = await eventFile.getSignedUrl({
         action: 'read',
-        expires: nowMs + 60_000,
+        expires: nowMs + 120_000,
       });
-      snapshotUrl = signed;
+      lastEventSnapshotUrl = eventSigned;
     }
   } catch {
     snapshotUrl = null;
+    lastEventSnapshotUrl = null;
   }
 
   // Build WebRTC / MSE URLs when configured
@@ -252,6 +274,9 @@ export const issueCameraStreamSession = onCall<
     stream_mode: streamMode,
     snapshot_url: snapshotUrl,
     snapshot_updated_at: (camData.snapshot_updated_at as string) || null,
+    last_event_snapshot_url: lastEventSnapshotUrl,
+    last_event_at: (camData.last_event_at as string) || null,
+    last_event_label: (camData.last_event_label as string) || null,
     webrtc_url: webrtcUrl,
     mse_url: mseUrl,
     stream_token: streamToken,

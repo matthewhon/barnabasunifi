@@ -2404,6 +2404,17 @@ export class UnifiAccessClient {
     );
   }
 
+  private isUnifiErrorCode(rawCode: unknown): boolean {
+    return (
+      rawCode !== undefined &&
+      rawCode !== null &&
+      rawCode !== 0 &&
+      rawCode !== 200 &&
+      String(rawCode).toUpperCase() !== 'SUCCESS' &&
+      String(rawCode).toUpperCase() !== 'OK'
+    );
+  }
+
   /**
    * Create a new visitor in UniFi Access.
    */
@@ -2416,15 +2427,7 @@ export class UnifiAccessClient {
       try {
         const res = await this.http.post<any>(endpoint, payload);
         const rawCode = res.data?.code;
-        const isErrorCode =
-          rawCode !== undefined &&
-          rawCode !== null &&
-          rawCode !== 0 &&
-          rawCode !== 200 &&
-          String(rawCode).toUpperCase() !== 'SUCCESS' &&
-          String(rawCode).toUpperCase() !== 'OK';
-
-        if (isErrorCode) {
+        if (this.isUnifiErrorCode(rawCode)) {
           lastErr = new Error(res.data?.msg || res.data?.message || `UniFi error code ${rawCode}`);
           logger.warn(`[UniFi] createVisitor tried ${endpoint} -> code ${rawCode}: ${lastErr.message}`);
           continue;
@@ -2473,9 +2476,7 @@ export class UnifiAccessClient {
           logger.info(`[UniFi] Visitor ${normalized.id || visitor.first_name} created successfully via ${endpoint}`);
           // If PIN code is specified, assign via PUT /visitors/:id/pin_codes (official Developer API)
           if (visitor.pin_code && normalized.id) {
-            await this.assignVisitorPin(normalized.id, visitor.pin_code).catch((err) => {
-              logger.warn(`[UniFi] Could not assign PIN to visitor ${normalized.id}: ${err.message}`);
-            });
+            await this.assignVisitorPin(normalized.id, visitor.pin_code);
             normalized.pin_code = visitor.pin_code;
           }
           return normalized;
@@ -2511,7 +2512,7 @@ export class UnifiAccessClient {
           logger.info(`[UniFi] Visitor ${visitorId} updated successfully via ${endpoint}`);
           const normalized = normalizeUnifiVisitor(rawData);
           if (updates.pin_code) {
-            await this.assignVisitorPin(visitorId, updates.pin_code).catch(() => {});
+            await this.assignVisitorPin(visitorId, updates.pin_code);
             normalized.pin_code = updates.pin_code;
           }
           return normalized;
@@ -2709,14 +2710,27 @@ export class UnifiAccessClient {
 
     for (const endpoint of endpoints) {
       try {
-        await this.http.put(endpoint, { pin_code: String(pinCode) });
+        const res = await this.http.put<any>(endpoint, { pin_code: String(pinCode) });
+        const rawCode = res.data?.code;
+        if (this.isUnifiErrorCode(rawCode)) {
+          lastErr = new Error(res.data?.msg || res.data?.message || `UniFi error code ${rawCode}`);
+          logger.warn(`[UniFi] assignVisitorPin tried ${endpoint} -> code ${rawCode}: ${lastErr.message}`);
+          continue;
+        }
         logger.info(`[UniFi] PIN code assigned to visitor ${visitorId} via ${endpoint}`);
         return;
       } catch (err: any) {
         lastErr = err;
+        const msg = err.response?.data?.msg || err.response?.data?.message || err.message;
+        logger.warn(`[UniFi] assignVisitorPin tried ${endpoint} -> ${err.response?.status || 'ERR'}: ${msg}`);
       }
     }
-    logger.warn(`[UniFi] assignVisitorPin failed across endpoints: ${lastErr?.message}`);
+    const errDetail =
+      lastErr?.response?.data?.msg ||
+      lastErr?.response?.data?.message ||
+      lastErr?.message ||
+      String(lastErr);
+    throw new Error(`Failed to assign PIN code to visitor ${visitorId} in UniFi Access: ${errDetail}`);
   }
 
   /**

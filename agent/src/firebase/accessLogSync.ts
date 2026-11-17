@@ -10,6 +10,7 @@
 import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient, AccessLogEntry } from '../unifi/access';
 import { ProtectManager } from '../unifi/protect';
+import { captureCameraEventSnapshot } from './cameraSync';
 import { logger } from '../logger';
 import {
   captureUnlockEventSnapshot,
@@ -251,6 +252,33 @@ export async function syncAccessLogs(
     logger.info(`[AccessLogSync] Successfully committed ${entries.length} access log(s) to Firestore for org: ${orgId}`);
   } catch (err) {
     logger.error(`[AccessLogSync] Metadata write failed: ${String(err)}`);
+  }
+
+  // 5. Capture event snapshots on linked cameras for recent door access events
+  if (options?.protectManager?.isConfigured() && entries.length > 0) {
+    const nowMs = Date.now();
+    const recentByDoor = new Map<string, AccessLogEntry>();
+    for (const entry of entries) {
+      if (!entry.door_id) continue;
+      const tsMs = Date.parse(entry.timestamp);
+      if (isNaN(tsMs) || nowMs - tsMs > 2 * 60 * 1000) continue; // only fresh events (<2m old)
+      if (!recentByDoor.has(entry.door_id)) {
+        recentByDoor.set(entry.door_id, entry);
+      }
+    }
+    for (const [doorId, entry] of recentByDoor.entries()) {
+      try {
+        const doorSnap = await db.doc(`organizations/${orgId}/doors/${doorId}`).get();
+        const doorData = doorSnap.exists ? doorSnap.data() : null;
+        const camId = doorData?.primary_camera_id || (Array.isArray(doorData?.camera_ids) ? doorData.camera_ids[0] : null);
+        if (camId) {
+          const label = `${entry.user_name || 'Access'} · ${entry.access_method_label || entry.event_type}`;
+          await captureCameraEventSnapshot(orgId, String(camId), entry.event_type, label, options.protectManager);
+        }
+      } catch {
+        // non-fatal
+      }
+    }
   }
 
   return entries;

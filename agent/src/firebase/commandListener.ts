@@ -497,25 +497,39 @@ export function startCommandListener(
         const unifiVisitorId = rawUnifiId || (command.visitor_id && command.visitor_id.length > 20 ? command.visitor_id : undefined);
         let resultVisitor: UnifiVisitor;
 
-        if (command.action === 'update_visitor' || unifiVisitorId) {
-          const targetId = unifiVisitorId || command.visitor_id;
-          if (!targetId) throw new Error('Missing visitor ID for update_visitor');
-          try {
-            resultVisitor = await unifiClient.updateVisitor(targetId, command.visitor_data || {});
-            resultMessage = `Visitor ${targetId} updated successfully in UniFi.`;
-          } catch (updateErr: any) {
-            const errStr = String(updateErr);
-            if (errStr.includes('160001') || errStr.includes('not found') || updateErr?.response?.status === 404) {
-              logger.warn(`[CommandListener] Visitor ${targetId} not found in UniFi. Creating new visitor…`);
-              resultVisitor = await unifiClient.createVisitor(command.visitor_data || {});
-              resultMessage = `Visitor created in UniFi (ID: ${resultVisitor.id}).`;
-            } else {
-              throw updateErr;
+        try {
+          if (command.action === 'update_visitor' || unifiVisitorId) {
+            const targetId = unifiVisitorId || command.visitor_id;
+            if (!targetId) throw new Error('Missing visitor ID for update_visitor');
+            try {
+              resultVisitor = await unifiClient.updateVisitor(targetId, command.visitor_data || {});
+              resultMessage = `Visitor ${targetId} updated successfully in UniFi.`;
+            } catch (updateErr: any) {
+              const errStr = String(updateErr);
+              if (errStr.includes('160001') || errStr.includes('not found') || updateErr?.response?.status === 404) {
+                logger.warn(`[CommandListener] Visitor ${targetId} not found in UniFi. Creating new visitor…`);
+                resultVisitor = await unifiClient.createVisitor(command.visitor_data || {});
+                resultMessage = `Visitor created in UniFi (ID: ${resultVisitor.id}).`;
+              } else {
+                throw updateErr;
+              }
             }
+          } else {
+            resultVisitor = await unifiClient.createVisitor(command.visitor_data || {});
+            resultMessage = `Visitor ${resultVisitor.full_name || resultVisitor.first_name} created successfully in UniFi.`;
           }
-        } else {
-          resultVisitor = await unifiClient.createVisitor(command.visitor_data || {});
-          resultMessage = `Visitor ${resultVisitor.full_name || resultVisitor.first_name} created successfully in UniFi.`;
+        } catch (visitorErr: any) {
+          if (command.visitor_id) {
+            await db.doc(`organizations/${orgId}/visitors/${command.visitor_id}`).set(
+              {
+                sync_status: 'failed',
+                sync_error: visitorErr?.message || String(visitorErr),
+                updated_at: nowTimestamp(),
+              },
+              { merge: true }
+            ).catch(() => {});
+          }
+          throw visitorErr;
         }
 
         const targetVisitorId = command.visitor_id || resultVisitor.id;

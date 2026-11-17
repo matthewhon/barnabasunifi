@@ -395,6 +395,10 @@ export interface Camera {
   linked_door_ids?: string[];
   snapshot_storage_path?: string | null;
   snapshot_updated_at?: string | null;
+  last_event_storage_path?: string | null;
+  last_event_at?: string | null;
+  last_event_type?: string | null;
+  last_event_label?: string | null;
   live_view_until?: string | null;
   hidden?: boolean;
   last_synced: string; // ISO8601
@@ -416,6 +420,9 @@ export interface CameraStreamSession {
   stream_mode: CameraStreamMode;
   snapshot_url?: string | null;
   snapshot_updated_at?: string | null;
+  last_event_snapshot_url?: string | null;
+  last_event_at?: string | null;
+  last_event_label?: string | null;
   webrtc_url?: string | null;
   mse_url?: string | null;
   stream_token?: string | null;

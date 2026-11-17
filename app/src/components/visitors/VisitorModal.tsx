@@ -33,15 +33,19 @@ function getVisitorPin(pin: unknown): string {
   return '';
 }
 
-function generateRandomPin(length = 6): string {
-  // Generate random digits, avoiding trivially predictable sequences
+function generateRandomPin(length = 4): string {
+  const safeLength = Math.max(4, Math.min(8, length));
+  const min = Math.pow(10, safeLength - 1);
+  const max = Math.pow(10, safeLength) - 1;
+  const asc = '0123456789';
+  const desc = '9876543210';
   let pin = '';
   do {
-    pin = Math.floor(100000 + Math.random() * 900000).toString();
+    pin = Math.floor(min + Math.random() * (max - min + 1)).toString();
   } while (
-    pin === '123456' ||
-    pin === '654321' ||
-    /^(\d)\1{5}$/.test(pin)
+    asc.includes(pin) ||
+    desc.includes(pin) ||
+    new RegExp(`^(\\d)\\1{${safeLength - 1}}$`).test(pin)
   );
   return pin;
 }
@@ -130,7 +134,7 @@ export default function VisitorModal({
       setMobilePhone('');
       setEmail('');
       setPurpose('');
-      setPinCode(generateRandomPin(6));
+      setPinCode(generateRandomPin(4));
       setSelectedDoorIds(validDoors.map((d) => d.unifi_door_id || d.id));
 
       const now = new Date();
@@ -453,7 +457,7 @@ export default function VisitorModal({
             </label>
             <button
               type="button"
-              onClick={() => setPinCode(generateRandomPin(6))}
+              onClick={() => setPinCode(generateRandomPin(4))}
               style={{
                 fontSize: '0.75rem',
                 color: 'var(--color-accent, #2563eb)',
@@ -474,7 +478,7 @@ export default function VisitorModal({
                 className="input"
                 value={pinCode}
                 onChange={(e) => setPinCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                placeholder="4-8 digits (e.g. 849201)"
+                placeholder="4-8 digits (e.g. 4829)"
                 style={{
                   width: '100%',
                   letterSpacing: showPin ? '0.2em' : 'normal',

@@ -165,3 +165,102 @@ export function startCameraSyncIntervals(
     clearInterval(liveSnapshotTimer);
   };
 }
+
+const lastEventCaptureMs = new Map<string, number>();
+
+/**
+ * Capture and upload an event-triggered JPEG snapshot (last_event.jpg) for a camera.
+ * Debounced per camera (10s) to avoid flooding Storage during continuous motion.
+ */
+export async function captureCameraEventSnapshot(
+  orgId: string,
+  cameraId: string,
+  eventType: string,
+  eventLabel: string,
+  protectManager: ProtectManager
+): Promise<boolean> {
+  if (!protectManager.isConfigured()) return false;
+  const now = Date.now();
+  const prev = lastEventCaptureMs.get(cameraId) || 0;
+  if (now - prev < 10_000) return false;
+  lastEventCaptureMs.set(cameraId, now);
+
+  try {
+    const db = getDb();
+    const camSnap = await db.doc(`organizations/${orgId}/cameras/${cameraId}`).get();
+    const consoleId = camSnap.exists ? (camSnap.data()?.console_id as string | undefined) : undefined;
+    const unifiCamId = (camSnap.exists ? (camSnap.data()?.unifi_camera_id as string | undefined) : undefined) || cameraId;
+
+    const primaryClient = protectManager.getClientForConsole(consoleId);
+    const candidates = primaryClient
+      ? [primaryClient, ...protectManager.getConsoles().map((c) => c.client).filter((c) => c !== primaryClient)]
+      : protectManager.getConsoles().map((c) => c.client);
+
+    let jpeg: Buffer | null = null;
+    for (const client of candidates) {
+      try {
+        jpeg = await client.getSnapshot(unifiCamId);
+        break;
+      } catch {
+        // try next console
+      }
+    }
+    if (!jpeg) return false;
+
+    const storagePath = `organizations/${orgId}/cameras/${cameraId}/last_event.jpg`;
+    await uploadCameraSnapshot(storagePath, jpeg);
+    await db.doc(`organizations/${orgId}/cameras/${cameraId}`).set(
+      {
+        last_event_storage_path: storagePath,
+        last_event_at: new Date(now).toISOString(),
+        last_event_type: eventType,
+        last_event_label: eventLabel,
+      },
+      { merge: true }
+    );
+    return true;
+  } catch (err: any) {
+    logger.debug(`[CameraSync] Event snapshot failed for ${cameraId}: ${err.message}`);
+    return false;
+  }
+}
+
+function formatSmartDetectLabel(eventType: string, smartTypes?: string[]): string {
+  if (eventType === 'ring') return 'Doorbell Ring';
+  if (Array.isArray(smartTypes) && smartTypes.length > 0) {
+    const primary = smartTypes[0];
+    if (primary === 'person') return 'Person Detected';
+    if (primary === 'vehicle') return 'Vehicle Detected';
+    if (primary === 'animal') return 'Animal Detected';
+    if (primary === 'licensePlate') return 'License Plate Detected';
+    return `${primary} Detected`;
+  }
+  return 'Motion Detected';
+}
+
+/**
+ * Subscribes to real-time Protect Integration WebSocket events across all configured consoles
+ * and captures a snapshot whenever motion, smart detection, or ring occurs.
+ */
+export function startProtectEventSubscriptions(
+  orgId: string,
+  protectManager: ProtectManager
+): () => void {
+  const unsubs: Array<() => void> = [];
+  for (const entry of protectManager.getConsoles()) {
+    const unsub = entry.client.subscribeToEvents((evt) => {
+      const item = evt?.item;
+      if (!item || item.modelKey !== 'event') return;
+      const evType = String(item.type || '');
+      if (evType !== 'motion' && evType !== 'smartDetectZone' && evType !== 'ring') return;
+      const camId = item.device;
+      if (!camId || typeof camId !== 'string') return;
+      const label = formatSmartDetectLabel(evType, item.smartDetectTypes);
+      captureCameraEventSnapshot(orgId, camId, evType, label, protectManager).catch(() => {});
+    });
+    unsubs.push(unsub);
+  }
+  return () => {
+    unsubs.forEach((u) => u());
+  };
+}

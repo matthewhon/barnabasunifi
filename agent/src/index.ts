@@ -18,7 +18,7 @@ import { ProtectManager } from './unifi/protect';
 import { startGo2Rtc, stopGo2Rtc } from './unifi/go2rtc';
 import { startHeartbeat } from './firebase/heartbeat';
 import { syncDoors, startDoorSyncInterval } from './firebase/doorSync';
-import { syncCameras, startCameraSyncIntervals } from './firebase/cameraSync';
+import { syncCameras, startCameraSyncIntervals, startProtectEventSubscriptions } from './firebase/cameraSync';
 import { syncSchedules, startScheduleSyncInterval } from './firebase/scheduleSync';
 import { syncVisitors, startVisitorSyncInterval } from './firebase/visitorSync';
 import { syncAccessLogs, startAccessLogSyncInterval } from './firebase/accessLogSync';
@@ -382,6 +382,11 @@ async function startBridgeWorker(): Promise<void> {
     }
     const stopAccessLogSync = startAccessLogSyncInterval(config.orgId, unifiClient, 10 * 1000, protectClient);
 
+    let stopProtectEvents: (() => void) | null = null;
+    if (protectClient.isConfigured()) {
+      stopProtectEvents = startProtectEventSubscriptions(config.orgId, protectClient);
+    }
+
     // Start Firestore command listener
     const stopCommandListener = startCommandListener(
       config.orgId,
@@ -472,12 +477,21 @@ async function startBridgeWorker(): Promise<void> {
           }
 
           protectClient.setConsoles(consoleEntries);
+          if (stopProtectEvents) {
+            stopProtectEvents();
+            stopProtectEvents = null;
+          }
           if (protectClient.isConfigured()) {
+            stopProtectEvents = startProtectEventSubscriptions(config.orgId, protectClient);
             syncCameras(config.orgId, protectClient, go2rtcEnabled).catch((err) => {
               logger.warn(`[CameraSync] Initial Protect sync notice: ${err.message}`);
             });
           }
         } else if (protectCfg && !protectCfg.enabled) {
+          if (stopProtectEvents) {
+            stopProtectEvents();
+            stopProtectEvents = null;
+          }
           protectClient.clear();
         }
       },
@@ -494,6 +508,7 @@ async function startBridgeWorker(): Promise<void> {
       stopSettingsListener();
       stopCommandListener();
       stopCameraSync();
+      if (stopProtectEvents) stopProtectEvents();
       stopGo2Rtc();
       stopAccessLogSync();
       stopVisitorSync();
