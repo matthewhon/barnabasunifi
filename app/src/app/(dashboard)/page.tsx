@@ -425,6 +425,8 @@ export default function DashboardPage() {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [camPerm, setCamPerm] = useState<UserCameraPermission | null | undefined>(undefined);
   const [doorMediaMode, setDoorMediaMode] = useState<'none' | 'last_event' | 'video'>('none');
+  const [selectedDoorIds, setSelectedDoorIds] = useState<string[] | null>(null);
+  const [doorSelectModalOpen, setDoorSelectModalOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -434,6 +436,29 @@ export default function DashboardPage() {
       }
     } catch {}
   }, []);
+
+  useEffect(() => {
+    if (!orgId) return;
+    try {
+      const raw = localStorage.getItem(`dashboard_selected_door_ids_${orgId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) setSelectedDoorIds(parsed);
+      }
+    } catch {}
+  }, [orgId]);
+
+  const updateSelectedDoorIds = (next: string[] | null) => {
+    setSelectedDoorIds(next);
+    if (!orgId) return;
+    try {
+      if (next === null) {
+        localStorage.removeItem(`dashboard_selected_door_ids_${orgId}`);
+      } else {
+        localStorage.setItem(`dashboard_selected_door_ids_${orgId}`, JSON.stringify(next));
+      }
+    } catch {}
+  };
 
   useEffect(() => {
     if (!orgId || !user) return;
@@ -544,6 +569,11 @@ export default function DashboardPage() {
     if (isDoorHidden(d)) return false;
     return true;
   });
+
+  const dashboardDoors =
+    selectedDoorIds === null
+      ? validDoors
+      : validDoors.filter((d) => selectedDoorIds.includes(d.id));
 
   const outsidePolicyDoors = validDoors.filter((d) => {
     const status = getDoorUnlockStatus(d, schedules, scheduleWindows);
@@ -847,8 +877,18 @@ export default function DashboardPage() {
                 <option value="video">Linked Camera Video</option>
               </select>
             </div>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setDoorSelectModalOpen(true)}
+              style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem', height: 'auto' }}
+            >
+              {selectedDoorIds === null
+                ? 'Select Doors'
+                : `Doors (${dashboardDoors.length}/${validDoors.length})`}
+            </button>
             <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-              Live · {validDoors.length} door{validDoors.length !== 1 ? 's' : ''}
+              Live · {dashboardDoors.length} door{dashboardDoors.length !== 1 ? 's' : ''}
             </span>
           </div>
         </div>
@@ -885,9 +925,22 @@ export default function DashboardPage() {
               </Link>
             </div>
           </div>
+        ) : dashboardDoors.length === 0 && validDoors.length > 0 ? (
+          <div className="card" style={{ padding: '2rem', textAlign: 'center' }}>
+            <p style={{ margin: '0 0 0.75rem', color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
+              No doors selected for the Dashboard.
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setDoorSelectModalOpen(true)}
+            >
+              Choose Doors to Display
+            </button>
+          </div>
         ) : (
           <div className="grid grid-cols-3">
-            {validDoors.map((door) => {
+            {dashboardDoors.map((door) => {
               const targetCamId = door.primary_camera_id || door.camera_ids?.[0];
               const linkedCam = targetCamId ? cameras.find((c) => c.id === targetCamId) || null : null;
               const lastLog =
@@ -946,6 +999,75 @@ export default function DashboardPage() {
           )}
         </section>
       </div>
+
+      <Modal
+        isOpen={doorSelectModalOpen}
+        onClose={() => setDoorSelectModalOpen(false)}
+        title="Choose Doors for Dashboard"
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => updateSelectedDoorIds(null)}
+              >
+                Show All
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => updateSelectedDoorIds([])}
+              >
+                Clear
+              </button>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setDoorSelectModalOpen(false)}
+            >
+              Done
+            </button>
+          </div>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '20rem', overflowY: 'auto' }}>
+          {validDoors.map((door) => {
+            const isChecked = selectedDoorIds === null || selectedDoorIds.includes(door.id);
+            return (
+              <label
+                key={door.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.625rem',
+                  padding: '0.45rem 0.625rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-border)',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={(e) => {
+                    const baseIds = selectedDoorIds === null ? validDoors.map((d) => d.id) : selectedDoorIds;
+                    if (e.target.checked) {
+                      const next = Array.from(new Set([...baseIds, door.id]));
+                      updateSelectedDoorIds(next.length === validDoors.length ? null : next);
+                    } else {
+                      updateSelectedDoorIds(baseIds.filter((id) => id !== door.id));
+                    }
+                  }}
+                />
+                <span>{formatDoorDisplayName(door.label)}</span>
+              </label>
+            );
+          })}
+        </div>
+      </Modal>
 
       <Modal
         isOpen={installGuideOpen}
