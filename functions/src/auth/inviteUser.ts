@@ -2,6 +2,8 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import * as crypto from 'crypto';
+import { getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { buildUserInviteEmail } from '../notifications/templates/userEmails';
 
 type Role = 'org_admin' | 'manager' | 'viewer' | 'camera_viewer';
 
@@ -16,6 +18,7 @@ interface InviteUserResponse {
   uid: string;
   isNewUser: boolean;
   setupLink: string;
+  emailSent: boolean;
 }
 
 /**
@@ -120,6 +123,25 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
 
     const setupLink = await auth.generatePasswordResetLink(email);
 
-    return { success: true, uid, isNewUser, setupLink };
+    let emailSent = false;
+    try {
+      const orgCtx = await getOrgEmailContext(orgId);
+      const tmpl = buildUserInviteEmail({
+        orgName: orgCtx.orgName,
+        role,
+        setupLink,
+        isNewUser,
+      });
+      const res = await sendOrgEmail({
+        orgId,
+        to: email,
+        ...tmpl,
+      });
+      emailSent = res.sent;
+    } catch (err) {
+      console.error('Failed to send invite email via Postmark:', err);
+    }
+
+    return { success: true, uid, isNewUser, setupLink, emailSent };
   }
 );

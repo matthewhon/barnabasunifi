@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { invalidatePlatformConfigCache } from '../config/platform';
+import { invalidateEmailPlatformConfigCache } from '../config/emailPlatform';
 import type { AuthClaims } from '../types';
 
 interface UpdatePlatformConfigRequest {
@@ -83,6 +84,108 @@ export const getPlatformConfigCallable = onCall(async (request) => {
     pco_client_secret_preview:
       secret.length > 8 ? `${secret.substring(0, 8)}${'*'.repeat(Math.min(24, secret.length - 8))}` : '********',
     redirect_uri: data.redirect_uri ?? '',
+    updated_at: data.updated_at ?? null,
+    updated_by: data.updated_by ?? null,
+  };
+});
+
+interface UpdateEmailPlatformConfigRequest {
+  postmark_server_token?: string;
+  default_from_email?: string;
+  default_from_name?: string;
+  transactional_stream?: string;
+  digest_stream?: string;
+  portal_url?: string;
+}
+
+/**
+ * Callable Cloud Function — super_admin only.
+ * Updates platform-wide Postmark email configuration in Firestore `platform_config/email`.
+ */
+export const updateEmailPlatformConfig = onCall(async (request) => {
+  const claims = request.auth?.token as AuthClaims | undefined;
+
+  if (!claims || claims.role !== 'super_admin') {
+    throw new HttpsError('permission-denied', 'Only super_admins can update email platform config.');
+  }
+
+  const data = (request.data ?? {}) as UpdateEmailPlatformConfigRequest;
+  const update: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+    updated_by: request.auth!.uid,
+    updated_at_server: FieldValue.serverTimestamp(),
+  };
+
+  if (data.postmark_server_token !== undefined) {
+    const trimmed = data.postmark_server_token.trim();
+    if (!trimmed) {
+      throw new HttpsError('invalid-argument', 'postmark_server_token cannot be empty.');
+    }
+    update.postmark_server_token = trimmed;
+  }
+
+  if (data.default_from_email !== undefined) {
+    const trimmed = data.default_from_email.trim();
+    if (!trimmed || !trimmed.includes('@')) {
+      throw new HttpsError('invalid-argument', 'A valid default_from_email is required.');
+    }
+    update.default_from_email = trimmed;
+  }
+
+  if (data.default_from_name !== undefined) {
+    update.default_from_name = data.default_from_name.trim() || 'UnFi-PCO';
+  }
+
+  if (data.transactional_stream !== undefined) {
+    update.transactional_stream = data.transactional_stream.trim() || 'outbound';
+  }
+
+  if (data.digest_stream !== undefined) {
+    update.digest_stream = data.digest_stream.trim() || 'outbound';
+  }
+
+  if (data.portal_url !== undefined) {
+    update.portal_url = data.portal_url.trim().replace(/\/+$/, '');
+  }
+
+  const db = getFirestore();
+  await db.collection('platform_config').doc('email').set(update, { merge: true });
+  invalidateEmailPlatformConfigCache();
+
+  return { success: true };
+});
+
+/**
+ * Callable Cloud Function — super_admin only.
+ * Returns platform-wide Postmark email configuration (with server token masked).
+ */
+export const getEmailPlatformConfigCallable = onCall(async (request) => {
+  const claims = request.auth?.token as AuthClaims | undefined;
+
+  if (!claims || claims.role !== 'super_admin') {
+    throw new HttpsError('permission-denied', 'Only super_admins can read email platform config.');
+  }
+
+  const db = getFirestore();
+  const snap = await db.collection('platform_config').doc('email').get();
+
+  if (!snap.exists) {
+    return { exists: false };
+  }
+
+  const data = snap.data()!;
+  const token: string = data.postmark_server_token ?? '';
+
+  return {
+    exists: true,
+    has_token: Boolean(token),
+    postmark_server_token_preview:
+      token.length > 8 ? `${token.substring(0, 6)}${'*'.repeat(Math.min(20, token.length - 6))}` : (token ? '********' : ''),
+    default_from_email: data.default_from_email ?? '',
+    default_from_name: data.default_from_name ?? 'UnFi-PCO',
+    transactional_stream: data.transactional_stream ?? 'outbound',
+    digest_stream: data.digest_stream ?? 'outbound',
+    portal_url: data.portal_url ?? '',
     updated_at: data.updated_at ?? null,
     updated_by: data.updated_by ?? null,
   };

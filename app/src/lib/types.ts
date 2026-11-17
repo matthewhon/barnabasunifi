@@ -75,6 +75,21 @@ export interface OrgSettings {
     onsite_public_ips?: string[];
   };
   event_notifications?: EventNotificationSettings;
+  email_settings?: OrgEmailSettings;
+}
+
+export interface OrgEmailSettings {
+  logo_url?: string;
+  from_name?: string;
+  reply_to?: string;
+  footer_text?: string;
+  alert_recipients?: string[];
+  notify_on_agent_offline?: boolean;
+  notify_on_command_failure?: boolean;
+  notify_on_pco_sync_error?: boolean;
+  notify_on_user_sync_welcome?: boolean;
+  notify_on_visitor_host?: boolean;
+  visitor_host_recipients?: string[];
 }
 
 export interface EventNotificationSettings {

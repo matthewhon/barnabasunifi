@@ -1,6 +1,8 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { PcoClient } from './client';
+import { getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { buildSyncedUserWelcomeEmail } from '../notifications/templates/userEmails';
 import { AccessPolicyMapping, OrgSettings, PcoList } from '../types';
 
 export interface UserSyncResult {
@@ -241,6 +243,23 @@ export async function syncOrgUsers(orgId: string, force = false): Promise<UserSy
       });
 
       usersCreated++;
+
+      if (person.email && targetPolicyNames.length > 0) {
+        try {
+          const orgCtx = await getOrgEmailContext(orgId);
+          if (orgCtx.emailSettings.notify_on_user_sync_welcome) {
+            const tmpl = buildSyncedUserWelcomeEmail({
+              orgName: orgCtx.orgName,
+              firstName: person.first_name || 'Member',
+              policyNames: targetPolicyNames,
+              listNames: targetListNames,
+            });
+            await sendOrgEmail({ orgId, to: person.email, ...tmpl });
+          }
+        } catch (err) {
+          console.error(`Failed to send synced user welcome email for ${pcoId}:`, err);
+        }
+      }
     } else {
       // User exists in synced_users
       const existingData = existingDoc.data();

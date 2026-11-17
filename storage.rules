@@ -10,6 +10,16 @@ service firebase.storage {
       allow write: if false; // Admin SDK only
     }
 
+    // ─── Tenant Email & Portal Branding Logos ─────────────────────────────────
+    // Publicly readable so external email clients (Gmail, Outlook, Apple Mail)
+    // can load tenant logos without Firebase Auth; writes require auth + image type.
+    match /organizations/{orgId}/branding/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
     // ─── Door Photos ──────────────────────────────────────────────────────────
     // Members can view door pictures; authenticated users belonging to the org can upload
     match /organizations/{orgId}/doors/{allPaths=**} {

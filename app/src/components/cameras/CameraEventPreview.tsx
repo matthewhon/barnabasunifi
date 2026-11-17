@@ -20,6 +20,7 @@ export default function CameraEventPreview({
   fallbackCaption = 'No recent event',
 }: CameraEventPreviewProps) {
   const [eventUrl, setEventUrl] = useState<string | null>(null);
+  const [fallbackCamUrl, setFallbackCamUrl] = useState<string | null>(null);
   const [eventLabel, setEventLabel] = useState<string | null>(camera.last_event_label ?? null);
   const [eventAt, setEventAt] = useState<string | null>(camera.last_event_at ?? null);
 
@@ -32,11 +33,13 @@ export default function CameraEventPreview({
       const res = await fn({ orgId, cameraId: camera.id, mode: 'event' });
       const data = res.data;
       setEventUrl(data.last_event_snapshot_url || null);
+      setFallbackCamUrl(data.snapshot_url || null);
       if (data.last_event_label) setEventLabel(data.last_event_label);
       if (data.last_event_at) setEventAt(data.last_event_at);
     } catch {
       // Fallback gracefully if onsite-only or permission denied
       setEventUrl(null);
+      setFallbackCamUrl(null);
     }
   }, [orgId, camera.id]);
 
@@ -48,7 +51,7 @@ export default function CameraEventPreview({
     return () => clearInterval(timer);
   }, [loadEventSession, camera.last_event_at]);
 
-  const imgSrc = eventUrl || fallbackPhoto;
+  const imgSrc = eventUrl || fallbackCamUrl || fallbackPhoto;
   const captionText = eventLabel
     ? `${eventLabel}${eventAt ? ` · ${safeFormatDistanceToNow(eventAt)}` : ''}`
     : fallbackCaption;

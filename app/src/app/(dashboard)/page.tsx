@@ -197,7 +197,7 @@ function DoorStatusCard({
               />
             ) : (
               <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                No event picture available
+                No camera linked
               </span>
             )}
             <div

@@ -1,6 +1,8 @@
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { sendSlackUnmappedEventAlert } from './slack';
+import { getOrgEmailContext, sendOrgEmail } from './postmark';
+import { buildUnmappedEventsEmail } from './templates/eventEmails';
 
 /**
  * Scheduled Cloud Function: scheduledEventReviewDigest
@@ -74,6 +76,53 @@ export const scheduledEventReviewDigest = onSchedule(
             orgName,
             unmappedCount: unmappedWindows.length,
             urgentEvents,
+          });
+        }
+
+        // 2. Dispatch Email Digest via Postmark if configured
+        const emailCfg = settings.channels?.email;
+        if (emailCfg?.enabled && Array.isArray(emailCfg.recipients) && emailCfg.recipients.length > 0) {
+          const orgCtx = await getOrgEmailContext(orgId);
+          const toIso = (val: any) =>
+            val && typeof val.toMillis === 'function' ? new Date(val.toMillis()).toISOString() : String(val || '');
+
+          const urgentList = unmappedWindows
+            .filter((w: any) => {
+              const startMs = w.starts_at ? w.starts_at.toMillis() : 0;
+              return startMs - now <= 48 * 60 * 60 * 1000;
+            })
+            .map((w: any) => ({
+              title: w.source_label || 'PCO Event',
+              startsAt: toIso(w.starts_at),
+              sourceType: w.source_type || 'service',
+            }));
+
+          const upcomingList = unmappedWindows
+            .filter((w: any) => {
+              const startMs = w.starts_at ? w.starts_at.toMillis() : 0;
+              return startMs - now > 48 * 60 * 60 * 1000;
+            })
+            .map((w: any) => ({
+              title: w.source_label || 'PCO Event',
+              startsAt: toIso(w.starts_at),
+              sourceType: w.source_type || 'service',
+            }));
+
+          const reviewUrl = orgCtx.portalUrl ? `${orgCtx.portalUrl}/events/unmapped` : undefined;
+          const tmpl = buildUnmappedEventsEmail({
+            orgName: orgCtx.orgName,
+            unmappedCount: unmappedWindows.length,
+            urgentEvents: urgentList,
+            upcomingEvents: upcomingList,
+            timezone: orgCtx.timezone,
+            reviewUrl,
+          });
+
+          await sendOrgEmail({
+            orgId,
+            to: emailCfg.recipients,
+            stream: 'digest',
+            ...tmpl,
           });
         }
       } catch (err) {

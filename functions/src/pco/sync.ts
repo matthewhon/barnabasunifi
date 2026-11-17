@@ -1,6 +1,8 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { PcoClient, PcoResource } from './client';
+import { getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { buildUnmappedEventsEmail } from '../notifications/templates/eventEmails';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -144,6 +146,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
   let windowsCreated = 0;
   let windowsUpdated = 0;
+  const newUnmappedEvents: Array<{ title: string; startsAt: string; sourceType: string }> = [];
 
   // Helper: upsert a schedule window and optionally create door commands
   async function upsertWindow(
@@ -265,6 +268,13 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       });
       windowId = newWindowRef.id;
       windowsCreated++;
+      if (initialReviewStatus === 'unreviewed') {
+        newUnmappedEvents.push({
+          title: String(metadata.source_label || 'PCO Event'),
+          startsAt: startsAt.toISOString(),
+          sourceType: String(metadata.source_type || 'service'),
+        });
+      }
     } else {
       const existingDoc = existingSnap.docs[0];
       windowId = existingDoc.id;
@@ -714,6 +724,55 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
     windows_updated: windowsUpdated,
     synced_at: FieldValue.serverTimestamp(),
   });
+
+  // 7. Immediate unmapped event email alert (if configured)
+  if (newUnmappedEvents.length > 0) {
+    try {
+      const eventNotif = (configSnap.data() as any)?.event_notifications;
+      const emailCfg = eventNotif?.channels?.email;
+      if (
+        eventNotif?.enabled &&
+        emailCfg?.enabled &&
+        emailCfg?.mode === 'immediate' &&
+        Array.isArray(emailCfg?.recipients) &&
+        emailCfg.recipients.length > 0
+      ) {
+        const nowMs = Date.now();
+        const leadDays = eventNotif.lead_days || 14;
+        const maxMs = nowMs + leadDays * 24 * 60 * 60 * 1000;
+        const withinLead = newUnmappedEvents.filter((ev) => {
+          const ms = new Date(ev.startsAt).getTime();
+          return ms >= nowMs && ms <= maxMs;
+        });
+
+        if (withinLead.length > 0) {
+          const orgCtx = await getOrgEmailContext(orgId);
+          const urgentEvents = withinLead.filter(
+            (ev) => new Date(ev.startsAt).getTime() - nowMs <= 48 * 60 * 60 * 1000
+          );
+          const upcomingEvents = withinLead.filter(
+            (ev) => new Date(ev.startsAt).getTime() - nowMs > 48 * 60 * 60 * 1000
+          );
+          const tmpl = buildUnmappedEventsEmail({
+            orgName: orgCtx.orgName,
+            unmappedCount: withinLead.length,
+            urgentEvents,
+            upcomingEvents,
+            timezone: orgCtx.timezone,
+            reviewUrl: orgCtx.portalUrl ? `${orgCtx.portalUrl}/events/unmapped` : undefined,
+            isImmediate: true,
+          });
+          await sendOrgEmail({
+            orgId,
+            to: emailCfg.recipients,
+            ...tmpl,
+          });
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to send immediate unmapped event email for org ${orgId}:`, err);
+    }
+  }
 
   return { windowsCreated, windowsUpdated };
 }

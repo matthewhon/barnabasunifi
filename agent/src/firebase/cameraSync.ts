@@ -9,6 +9,8 @@ import { ProtectManager, UnifiProtectCamera } from '../unifi/protect';
 import { logger } from '../logger';
 import { syncGo2RtcStreams } from '../unifi/go2rtc';
 
+const seededCameras = new Set<string>();
+
 function mapCameraState(raw: string): 'CONNECTED' | 'DISCONNECTED' | 'CONNECTING' {
   const upper = (raw || '').toUpperCase();
   if (upper === 'CONNECTED') return 'CONNECTED';
@@ -100,6 +102,10 @@ export async function syncCameras(
           { merge: true }
         );
         allCameras.push(cam);
+        if (!seededCameras.has(cam.id)) {
+          seededCameras.add(cam.id);
+          captureCameraSnapshot(orgId, cam.id, protectManager).catch(() => {});
+        }
       }
 
       if (enableGo2Rtc && cameras.length > 0) {

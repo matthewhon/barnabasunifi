@@ -208,7 +208,16 @@ export const issueCameraStreamSession = onCall<
     (camData.last_event_storage_path as string) || `organizations/${orgId}/cameras/${cameraId}/last_event.jpg`;
   try {
     const bucket = getStorage().bucket();
-    if (mode !== 'event') {
+    const eventFile = bucket.file(lastEventPath);
+    const [eventExists] = await eventFile.exists();
+    if (eventExists) {
+      const [eventSigned] = await eventFile.getSignedUrl({
+        action: 'read',
+        expires: nowMs + 120_000,
+      });
+      lastEventSnapshotUrl = eventSigned;
+    }
+    if (mode !== 'event' || !lastEventSnapshotUrl) {
       const file = bucket.file(storagePath);
       const [exists] = await file.exists();
       if (exists) {
@@ -218,15 +227,6 @@ export const issueCameraStreamSession = onCall<
         });
         snapshotUrl = signed;
       }
-    }
-    const eventFile = bucket.file(lastEventPath);
-    const [eventExists] = await eventFile.exists();
-    if (eventExists) {
-      const [eventSigned] = await eventFile.getSignedUrl({
-        action: 'read',
-        expires: nowMs + 120_000,
-      });
-      lastEventSnapshotUrl = eventSigned;
     }
   } catch {
     snapshotUrl = null;

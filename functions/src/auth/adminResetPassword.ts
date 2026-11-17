@@ -1,6 +1,8 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
+import { getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { buildPasswordResetEmail } from '../notifications/templates/userEmails';
 
 interface AdminResetPasswordRequest {
   orgId: string;
@@ -13,6 +15,7 @@ interface AdminResetPasswordResponse {
   success: boolean;
   message: string;
   resetLink?: string;
+  emailSent?: boolean;
 }
 
 /**
@@ -86,10 +89,30 @@ export const adminResetPassword = onCall<AdminResetPasswordRequest, Promise<Admi
       }
 
       const resetLink = await auth.generatePasswordResetLink(targetAuthUser.email);
+      let emailSent = false;
+      try {
+        const orgCtx = await getOrgEmailContext(orgId);
+        const tmpl = buildPasswordResetEmail({
+          orgName: orgCtx.orgName,
+          resetLink,
+        });
+        const res = await sendOrgEmail({
+          orgId,
+          to: targetAuthUser.email,
+          ...tmpl,
+        });
+        emailSent = res.sent;
+      } catch (err) {
+        console.error('Failed to send password reset email via Postmark:', err);
+      }
+
       return {
         success: true,
-        message: `Password reset link generated for ${targetAuthUser.email}.`,
+        message: emailSent
+          ? `Password reset email sent to ${targetAuthUser.email}.`
+          : `Password reset link generated for ${targetAuthUser.email}.`,
         resetLink,
+        emailSent,
       };
     }
   }

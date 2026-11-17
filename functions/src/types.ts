@@ -51,6 +51,41 @@ export interface OrgSettings {
     pco_org_id?: string;
     pco_org_name?: string;
   };
+  event_notifications?: EventNotificationSettings;
+  email_settings?: OrgEmailSettings;
+}
+
+export interface OrgEmailSettings {
+  logo_url?: string;
+  from_name?: string;
+  reply_to?: string;
+  footer_text?: string;
+  alert_recipients?: string[];
+  notify_on_agent_offline?: boolean;
+  notify_on_command_failure?: boolean;
+  notify_on_pco_sync_error?: boolean;
+  notify_on_user_sync_welcome?: boolean;
+  notify_on_visitor_host?: boolean;
+  visitor_host_recipients?: string[];
+}
+
+export interface EventNotificationSettings {
+  enabled: boolean;
+  lead_days: number;
+  channels: {
+    in_app: boolean;
+    slack_webhook?: {
+      enabled: boolean;
+      webhook_url: string;
+      channel_name?: string;
+    };
+    email?: {
+      enabled: boolean;
+      recipients: string[];
+      mode: 'daily_digest' | 'immediate';
+      digest_time?: string;
+    };
+  };
 }
 
 // ─── Mappings ─────────────────────────────────────────────────────────────────

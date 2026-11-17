@@ -1,6 +1,8 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
+import { getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { buildRoleChangedEmail } from '../notifications/templates/userEmails';
 
 type Role = 'org_admin' | 'manager' | 'viewer' | 'camera_viewer';
 
@@ -77,8 +79,10 @@ export const changeUserRole = onCall<ChangeUserRoleRequest, Promise<ChangeUserRo
     }
 
     // Update target user's custom claims if their active org matches
+    let targetEmail: string | undefined = userData?.email;
     try {
       const targetUser = await auth.getUser(targetUid);
+      targetEmail = targetEmail || targetUser.email;
       const currentCustomClaims = targetUser.customClaims ?? {};
       if (currentCustomClaims.orgId === orgId) {
         await auth.setCustomUserClaims(targetUid, {
@@ -88,6 +92,20 @@ export const changeUserRole = onCall<ChangeUserRoleRequest, Promise<ChangeUserRo
       }
     } catch (err) {
       console.error(`Failed to update custom claims for user ${targetUid}:`, err);
+    }
+
+    if (targetEmail) {
+      try {
+        const orgCtx = await getOrgEmailContext(orgId);
+        const tmpl = buildRoleChangedEmail({
+          orgName: orgCtx.orgName,
+          newRole: role,
+          portalUrl: orgCtx.portalUrl || undefined,
+        });
+        await sendOrgEmail({ orgId, to: targetEmail, ...tmpl });
+      } catch (err) {
+        console.error('Failed to send role updated email:', err);
+      }
     }
 
     return { success: true };

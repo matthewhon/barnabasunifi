@@ -2,6 +2,8 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore } from 'firebase-admin/firestore';
 import { syncOrgSchedule } from './sync';
 import { syncOrgUsers } from './userSync';
+import { getOrgAdminEmails, getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { buildPcoSyncErrorEmail } from '../notifications/templates/alertEmails';
 
 /**
  * Scheduled Cloud Function: scheduledPcoSync
@@ -60,6 +62,23 @@ export const scheduledPcoSync = onSchedule(
           return { orgId, ...result };
         } catch (err) {
           console.error(`scheduledPcoSync: [${orgName}] ✗ sync failed:`, err);
+          try {
+            const orgCtx = await getOrgEmailContext(orgId);
+            if (orgCtx.emailSettings.notify_on_pco_sync_error) {
+              let recipients = orgCtx.emailSettings.alert_recipients || [];
+              if (recipients.length === 0) recipients = await getOrgAdminEmails(orgId);
+              if (recipients.length > 0) {
+                const tmpl = buildPcoSyncErrorEmail({
+                  orgName: orgCtx.orgName,
+                  errorMessage: err instanceof Error ? err.message : String(err),
+                  portalUrl: orgCtx.portalUrl || undefined,
+                });
+                await sendOrgEmail({ orgId, to: recipients, ...tmpl });
+              }
+            }
+          } catch (mailErr) {
+            console.error(`Failed to send PCO sync error email for org ${orgId}:`, mailErr);
+          }
           throw err;
         }
       })

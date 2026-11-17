@@ -3,6 +3,12 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import axios from 'axios';
 import * as https from 'https';
 import { UnifiVisitor, VisitorStatus } from '../types';
+import { getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import {
+  buildVisitorPassEmail,
+  buildVisitorHostAlertEmail,
+  buildVisitorRevokedEmail,
+} from '../notifications/templates/visitorEmails';
 
 // ---------------------------------------------------------------------------
 // Helpers & Normalizers
@@ -317,13 +323,79 @@ export const syncUnifiVisitors = onCall<{ orgId: string }>(
   }
 );
 
+async function dispatchVisitorEmails(params: {
+  orgId: string;
+  visitor: Partial<UnifiVisitor>;
+  isUpdate: boolean;
+  sendEmail?: boolean;
+  actorEmail?: string;
+}): Promise<boolean> {
+  const { orgId, visitor, isUpdate, sendEmail, actorEmail } = params;
+  const orgCtx = await getOrgEmailContext(orgId);
+  const fullName = visitor.full_name || `${visitor.first_name || ''} ${visitor.last_name || ''}`.trim() || 'Visitor';
+
+  let visitorEmailSent = false;
+
+  if (sendEmail && visitor.email && visitor.email.includes('@')) {
+    const tmpl = buildVisitorPassEmail(
+      {
+        fullName,
+        firstName: visitor.first_name,
+        email: visitor.email,
+        pinCode: visitor.pin_code,
+        startTime: visitor.start_time || new Date().toISOString(),
+        endTime: visitor.end_time || new Date().toISOString(),
+        doorLabels: visitor.door_labels || [],
+        purpose: visitor.purpose,
+        timezone: orgCtx.timezone,
+        orgName: orgCtx.orgName,
+      },
+      isUpdate
+    );
+    const res = await sendOrgEmail({
+      orgId,
+      to: visitor.email,
+      ...tmpl,
+    });
+    visitorEmailSent = res.sent;
+  }
+
+  if (
+    orgCtx.emailSettings.notify_on_visitor_host &&
+    orgCtx.emailSettings.visitor_host_recipients &&
+    orgCtx.emailSettings.visitor_host_recipients.length > 0
+  ) {
+    const hostTmpl = buildVisitorHostAlertEmail({
+      fullName,
+      firstName: visitor.first_name,
+      email: visitor.email || '',
+      pinCode: visitor.pin_code,
+      startTime: visitor.start_time || new Date().toISOString(),
+      endTime: visitor.end_time || new Date().toISOString(),
+      doorLabels: visitor.door_labels || [],
+      purpose: visitor.purpose,
+      timezone: orgCtx.timezone,
+      orgName: orgCtx.orgName,
+      actorEmail,
+      isUpdate,
+    });
+    await sendOrgEmail({
+      orgId,
+      to: orgCtx.emailSettings.visitor_host_recipients,
+      ...hostTmpl,
+    }).catch((err) => console.error('Failed to send visitor host alert:', err));
+  }
+
+  return visitorEmailSent;
+}
+
 /**
  * saveUnifiVisitor
  * Creates or updates a visitor in UniFi Access.
  */
-export const saveUnifiVisitor = onCall<{ orgId: string; visitor: Partial<UnifiVisitor> }>(
+export const saveUnifiVisitor = onCall<{ orgId: string; visitor: Partial<UnifiVisitor>; sendEmail?: boolean }>(
   async (request) => {
-    const { orgId, visitor } = request.data ?? {};
+    const { orgId, visitor, sendEmail } = request.data ?? {};
     if (!orgId) throw new HttpsError('invalid-argument', 'orgId is required.');
     if (!visitor || !visitor.first_name) {
       throw new HttpsError('invalid-argument', 'Valid visitor data with first_name is required.');
@@ -422,9 +494,18 @@ export const saveUnifiVisitor = onCall<{ orgId: string; visitor: Partial<UnifiVi
         timestamp: now,
       });
 
+      const emailSent = await dispatchVisitorEmails({
+        orgId,
+        visitor: { ...visitor, ...normalized, pin_code: visitor.pin_code },
+        isUpdate: Boolean(visitor.unifi_visitor_id || visitor.id),
+        sendEmail,
+        actorEmail: request.auth?.token?.email as string | undefined,
+      }).catch(() => false);
+
       return {
         success: true,
         mode: 'remote',
+        emailSent,
         visitor: {
           ...normalized,
           id: visitorDocId,
@@ -482,12 +563,76 @@ export const saveUnifiVisitor = onCall<{ orgId: string; visitor: Partial<UnifiVi
       org_id: orgId,
     });
 
+    const emailSent = await dispatchVisitorEmails({
+      orgId,
+      visitor: pendingVisitor,
+      isUpdate: Boolean(unifiVisitorId),
+      sendEmail,
+      actorEmail: request.auth?.token?.email as string | undefined,
+    }).catch(() => false);
+
     return {
       success: true,
       mode: 'agent',
       commandId: commandRef.id,
       visitorId: targetVisitorId,
+      emailSent,
     };
+  }
+);
+
+/**
+ * sendVisitorPassEmail
+ * Sends (or resends) the visitor access pass email with PIN and door details.
+ */
+export const sendVisitorPassEmail = onCall<{ orgId: string; visitorId: string }>(
+  async (request) => {
+    const { orgId, visitorId } = request.data ?? {};
+    if (!orgId || !visitorId) {
+      throw new HttpsError('invalid-argument', 'orgId and visitorId are required.');
+    }
+
+    await verifyOrgPermission(request.auth, orgId, ['org_admin', 'manager']);
+
+    const db = getFirestore();
+    const snap = await db.doc(`organizations/${orgId}/visitors/${visitorId}`).get();
+    if (!snap.exists) {
+      throw new HttpsError('not-found', 'Visitor not found.');
+    }
+
+    const visitor = snap.data() as UnifiVisitor;
+    if (!visitor.email || !visitor.email.includes('@')) {
+      throw new HttpsError('failed-precondition', 'Visitor does not have a valid email address.');
+    }
+
+    const orgCtx = await getOrgEmailContext(orgId);
+    const tmpl = buildVisitorPassEmail(
+      {
+        fullName: visitor.full_name || `${visitor.first_name} ${visitor.last_name || ''}`.trim(),
+        firstName: visitor.first_name,
+        email: visitor.email,
+        pinCode: visitor.pin_code,
+        startTime: visitor.start_time,
+        endTime: visitor.end_time,
+        doorLabels: visitor.door_labels || [],
+        purpose: visitor.purpose,
+        timezone: orgCtx.timezone,
+        orgName: orgCtx.orgName,
+      },
+      false
+    );
+
+    const res = await sendOrgEmail({
+      orgId,
+      to: visitor.email,
+      ...tmpl,
+    });
+
+    if (!res.sent) {
+      throw new HttpsError('failed-precondition', res.error || 'Failed to send visitor pass email.');
+    }
+
+    return { success: true, messageId: res.messageIds?.[0] };
   }
 );
 
@@ -495,9 +640,9 @@ export const saveUnifiVisitor = onCall<{ orgId: string; visitor: Partial<UnifiVi
  * deleteUnifiVisitor
  * Revokes / deletes a visitor from UniFi Access and updates Firestore.
  */
-export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; unifiVisitorId?: string }>(
+export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; unifiVisitorId?: string; notifyVisitor?: boolean }>(
   async (request) => {
-    const { orgId, visitorId, unifiVisitorId } = request.data ?? {};
+    const { orgId, visitorId, unifiVisitorId, notifyVisitor } = request.data ?? {};
     if (!orgId || !visitorId) {
       throw new HttpsError('invalid-argument', 'orgId and visitorId are required.');
     }
@@ -581,6 +726,18 @@ export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; uni
         timestamp: FieldValue.serverTimestamp(),
       });
 
+      if (notifyVisitor && visitorData?.email) {
+        const orgCtx = await getOrgEmailContext(orgId);
+        const tmpl = buildVisitorRevokedEmail({
+          fullName: visitorData.full_name || visitorData.first_name || 'Visitor',
+          firstName: visitorData.first_name,
+          orgName: orgCtx.orgName,
+          startTime: visitorData.start_time || new Date().toISOString(),
+          timezone: orgCtx.timezone,
+        });
+        await sendOrgEmail({ orgId, to: visitorData.email, ...tmpl }).catch(() => {});
+      }
+
       return {
         success: true,
         mode: 'remote',
@@ -624,6 +781,18 @@ export const deleteUnifiVisitor = onCall<{ orgId: string; visitorId: string; uni
       result: 'success',
       timestamp: FieldValue.serverTimestamp(),
     });
+
+    if (notifyVisitor && visitorData?.email) {
+      const orgCtx = await getOrgEmailContext(orgId);
+      const tmpl = buildVisitorRevokedEmail({
+        fullName: visitorData.full_name || visitorData.first_name || 'Visitor',
+        firstName: visitorData.first_name,
+        orgName: orgCtx.orgName,
+        startTime: visitorData.start_time || new Date().toISOString(),
+        timezone: orgCtx.timezone,
+      });
+      await sendOrgEmail({ orgId, to: visitorData.email, ...tmpl }).catch(() => {});
+    }
 
     return {
       success: true,

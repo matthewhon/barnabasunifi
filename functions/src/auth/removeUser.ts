@@ -1,6 +1,8 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
+import { getOrgEmailContext, sendOrgEmail } from '../notifications/postmark';
+import { buildUserRemovedEmail } from '../notifications/templates/userEmails';
 
 interface RemoveUserRequest {
   orgId: string;
@@ -65,8 +67,10 @@ export const removeUser = onCall<RemoveUserRequest, Promise<RemoveUserResponse>>
     }
 
     // Reset target user's custom claims if active org was removed
+    let targetEmail: string | undefined = userData?.email;
     try {
       const targetUser = await auth.getUser(targetUid);
+      targetEmail = targetEmail || targetUser.email;
       const currentCustomClaims = targetUser.customClaims ?? {};
       if (currentCustomClaims.orgId === orgId) {
         await auth.setCustomUserClaims(targetUid, {
@@ -77,6 +81,16 @@ export const removeUser = onCall<RemoveUserRequest, Promise<RemoveUserResponse>>
       }
     } catch (err) {
       console.error(`Failed to reset custom claims for removed user ${targetUid}:`, err);
+    }
+
+    if (targetEmail) {
+      try {
+        const orgCtx = await getOrgEmailContext(orgId);
+        const tmpl = buildUserRemovedEmail({ orgName: orgCtx.orgName });
+        await sendOrgEmail({ orgId, to: targetEmail, ...tmpl });
+      } catch (err) {
+        console.error('Failed to send user removed email:', err);
+      }
     }
 
     return { success: true };
