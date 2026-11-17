@@ -1397,12 +1397,14 @@ export async function linkDoorCameras(
   orgId: string,
   doorId: string,
   cameraIds: string[],
-  primaryCameraId: string | null
+  primaryCameraId: string | null,
+  cardDisplayMode?: 'photo' | 'camera' | null
 ): Promise<void> {
   const ref = doc(db, 'organizations', orgId, 'doors', doorId);
   await updateDoc(ref, {
     camera_ids: cameraIds,
     primary_camera_id: primaryCameraId,
+    ...(cardDisplayMode !== undefined ? { card_display_mode: cardDisplayMode } : {}),
   });
 }
 

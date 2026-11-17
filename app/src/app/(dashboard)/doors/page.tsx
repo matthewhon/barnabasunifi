@@ -29,6 +29,7 @@ import { formatDoorDisplayName, getDoorUnlockStatus } from '@/lib/door-status-ut
 import Modal from '@/components/ui/Modal';
 import DoorPhotoModal from '@/components/doors/DoorPhotoModal';
 import CameraModal from '@/components/cameras/CameraModal';
+import CameraPlayer from '@/components/cameras/CameraPlayer';
 import AgentInstallGuide from '@/components/agent/AgentInstallGuide';
 import { Video } from 'lucide-react';
 
@@ -135,6 +136,9 @@ interface DoorCardProps {
   onViewCamera?: (door: Door) => void;
   onLinkCamera?: (door: Door) => void;
   hasLinkedCamera?: boolean;
+  linkedCamera?: Camera | null;
+  showLiveCamera?: boolean;
+  orgId?: string;
   isAdmin?: boolean;
   selected?: boolean;
   onSelectToggle?: (door: Door) => void;
@@ -166,6 +170,9 @@ function DoorCard({
   onViewCamera,
   onLinkCamera,
   hasLinkedCamera = false,
+  linkedCamera = null,
+  showLiveCamera = false,
+  orgId,
   isAdmin = false,
   selected = false,
   onSelectToggle,
@@ -273,7 +280,11 @@ function DoorCard({
           justifyContent: 'center',
         }}
       >
-        {activeImage ? (
+        {showLiveCamera && linkedCamera && orgId ? (
+          <div style={{ width: '100%', height: '100%' }}>
+            <CameraPlayer orgId={orgId} camera={linkedCamera} compact />
+          </div>
+        ) : activeImage ? (
           <img
             src={activeImage}
             alt={door.label}
@@ -373,35 +384,67 @@ function DoorCard({
           </span>
         </div>
 
-        {/* Bottom Left: Change Photo Action Trigger */}
-        {onEditPhoto && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => onEditPhoto(door)}
-            title={activeImage ? 'Change / Manage Door Photo' : 'Add Door Photo'}
-            style={{
-              position: 'absolute',
-              bottom: '0.45rem',
-              left: '0.625rem',
-              zIndex: 2,
-              padding: '0.2rem 0.45rem',
-              background: 'rgba(15, 23, 42, 0.75)',
-              backdropFilter: 'blur(4px)',
-              color: '#fff',
-              fontSize: '0.6875rem',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid rgba(255,255,255,0.2)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.3rem',
-              height: 'auto',
-            }}
-          >
-            <CameraIcon size={12} />
-            <span>{activeImage ? 'Edit Photo' : '+ Photo'}</span>
-          </button>
-        )}
+        {/* Bottom Left: Change Photo & Link Camera Triggers */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '0.45rem',
+            left: '0.625rem',
+            zIndex: 2,
+            display: 'flex',
+            gap: '0.35rem',
+            alignItems: 'center',
+          }}
+        >
+          {onEditPhoto && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => onEditPhoto(door)}
+              title={activeImage ? 'Change / Manage Door Photo' : 'Add Door Photo'}
+              style={{
+                padding: '0.2rem 0.45rem',
+                background: 'rgba(15, 23, 42, 0.75)',
+                backdropFilter: 'blur(4px)',
+                color: '#fff',
+                fontSize: '0.6875rem',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+                height: 'auto',
+              }}
+            >
+              <CameraIcon size={12} />
+              <span>{activeImage ? 'Edit Photo' : '+ Photo'}</span>
+            </button>
+          )}
+          {isAdmin && onLinkCamera && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => onLinkCamera(door)}
+              title={hasLinkedCamera ? 'Change linked camera or card display mode' : 'Link camera to door'}
+              style={{
+                padding: '0.2rem 0.45rem',
+                background: 'rgba(15, 23, 42, 0.75)',
+                backdropFilter: 'blur(4px)',
+                color: '#fff',
+                fontSize: '0.6875rem',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+                height: 'auto',
+              }}
+            >
+              <Video size={12} />
+              <span>{hasLinkedCamera ? 'Change Cam' : '+ Cam'}</span>
+            </button>
+          )}
+        </div>
 
         {/* Bottom Right: Image Source Badge (if available) */}
         {activeImage && (
@@ -1152,6 +1195,8 @@ export default function DoorsPage() {
   const [activeCamera, setActiveCamera] = useState<Camera | null>(null);
   const [linkCameraDoor, setLinkCameraDoor] = useState<Door | null>(null);
   const [linkCameraId, setLinkCameraId] = useState<string>('');
+  const [linkCardDisplayMode, setLinkCardDisplayMode] = useState<'photo' | 'camera'>('photo');
+  const [cardPreviewMode, setCardPreviewMode] = useState<'default' | 'photo' | 'camera'>('default');
   const [savingCameraLink, setSavingCameraLink] = useState(false);
 
   useEffect(() => {
@@ -1196,7 +1241,8 @@ export default function DoorsPage() {
         orgId,
         linkCameraDoor.id,
         linkCameraId ? [linkCameraId] : [],
-        linkCameraId || null
+        linkCameraId || null,
+        linkCameraId ? linkCardDisplayMode : 'photo'
       );
       setLinkCameraDoor(null);
     } finally {
@@ -1738,6 +1784,22 @@ export default function DoorsPage() {
               style={{ fontSize: '0.8125rem', padding: '0.3rem 0.6rem', height: 'auto', minWidth: '9rem', flex: 1 }}
             />
           </div>
+
+          {cameras.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Card View:</span>
+              <select
+                className="form-select"
+                value={cardPreviewMode}
+                onChange={(e) => setCardPreviewMode(e.target.value as 'default' | 'photo' | 'camera')}
+                style={{ width: 'auto', fontSize: '0.8125rem', padding: '0.3rem 1.75rem 0.3rem 0.6rem', height: 'auto' }}
+              >
+                <option value="default">Door Default</option>
+                <option value="photo">Status Photos</option>
+                <option value="camera">Live Cameras</option>
+              </select>
+            </div>
+          )}
         </div>
 
         {/* Admin Visibility Tabs */}
@@ -1910,6 +1972,10 @@ export default function DoorsPage() {
         <div className="grid grid-cols-3">
           {filteredDoors.map((door) => {
             const linkedCam = getPermittedCameraForDoor(door);
+            const showLiveCam =
+              !!linkedCam &&
+              (cardPreviewMode === 'camera' ||
+                (cardPreviewMode === 'default' && door.card_display_mode === 'camera'));
             return (
               <DoorCard
                 key={door.id}
@@ -1925,10 +1991,14 @@ export default function DoorsPage() {
                 }}
                 onToggleHide={openSingleHideModal}
                 hasLinkedCamera={!!linkedCam}
+                linkedCamera={linkedCam}
+                showLiveCamera={showLiveCam}
+                orgId={orgId ?? undefined}
                 onViewCamera={() => linkedCam && setActiveCamera(linkedCam)}
                 onLinkCamera={(d) => {
                   setLinkCameraDoor(d);
                   setLinkCameraId(d.primary_camera_id || d.camera_ids?.[0] || '');
+                  setLinkCardDisplayMode(d.card_display_mode || 'photo');
                 }}
                 isAdmin={isAdmin}
                 selected={selectedDoorIds.includes(door.id)}
@@ -2325,20 +2395,36 @@ export default function DoorsPage() {
           </div>
         }
       >
-        <div className="form-group">
-          <label className="form-label">Primary UniFi Protect Camera</label>
-          <select
-            className="form-select"
-            value={linkCameraId}
-            onChange={(e) => setLinkCameraId(e.target.value)}
-          >
-            <option value="">None (Unlinked)</option>
-            {cameras.map((cam) => (
-              <option key={cam.id} value={cam.id}>
-                {cam.name}
-              </option>
-            ))}
-          </select>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label className="form-label">Primary UniFi Protect Camera</label>
+            <select
+              className="form-select"
+              value={linkCameraId}
+              onChange={(e) => setLinkCameraId(e.target.value)}
+            >
+              <option value="">None (Unlinked)</option>
+              {cameras.map((cam) => (
+                <option key={cam.id} value={cam.id}>
+                  {cam.name}{cam.console_label ? ` (${cam.console_label})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {linkCameraId && (
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Door Card Display</label>
+              <select
+                className="form-select"
+                value={linkCardDisplayMode}
+                onChange={(e) => setLinkCardDisplayMode(e.target.value as 'photo' | 'camera')}
+              >
+                <option value="photo">Status Picture (click camera button to view live)</option>
+                <option value="camera">Live Linked Camera Feed on Door Card</option>
+              </select>
+            </div>
+          )}
         </div>
       </Modal>
 

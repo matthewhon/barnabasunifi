@@ -196,6 +196,7 @@ export interface Door {
   image_source?: 'unifi' | 'upload' | 'custom_url' | null;
   primary_camera_id?: string | null;
   camera_ids?: string[];
+  card_display_mode?: 'photo' | 'camera' | null;
   is_hidden?: boolean;
   hidden?: boolean;
   hidden_at?: string | null;
