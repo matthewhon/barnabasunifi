@@ -9,14 +9,32 @@
 
 import { getDb, firestoreTimestamp } from '../firebase';
 import { UnifiAccessClient, AccessLogEntry } from '../unifi/access';
+import { ProtectManager } from '../unifi/protect';
 import { logger } from '../logger';
+import {
+  captureUnlockEventSnapshot,
+  DoorSnapshotDoc,
+  evaluateUnlockSnapshotRule,
+  ScheduleWindowSnapshotDoc,
+} from './unlockSnapshotRule';
 
 let _lastSyncedEpochSeconds = 0;
+const _processedSnapshotLogIds = new Set<string>();
+const RECENT_EVENT_MAX_AGE_MS = 120_000;
+
+function trackProcessedSnapshotLog(logId: string): void {
+  _processedSnapshotLogIds.add(logId);
+  if (_processedSnapshotLogIds.size > 2000) {
+    const first = _processedSnapshotLogIds.values().next().value;
+    if (first) _processedSnapshotLogIds.delete(first);
+  }
+}
 
 export interface AccessLogSyncOptions {
   lookbackDays?: number;
   maxPages?: number;
   forceFull?: boolean;
+  protectManager?: ProtectManager;
 }
 
 /**
@@ -73,6 +91,79 @@ export async function syncAccessLogs(
   }
 
   logger.info(`[AccessLogSync] Processing ${entries.length} log entry(s) for Firestore permanent archive…`);
+
+  // 1b. Evaluate unlock snapshot rules for recent events if Protect is configured
+  const protectManager = options?.protectManager;
+  const nowMs = Date.now();
+  const recentCandidates =
+    protectManager && protectManager.isConfigured()
+      ? entries.filter((e) => {
+          if (!e.id || !e.door_id) return false;
+          if (_processedSnapshotLogIds.has(e.id)) return false;
+          const isUnlockOrDenied =
+            (e.event_type === 'door_unlock' && e.event_result === 'success') ||
+            e.event_type === 'access_denied' ||
+            e.event_result === 'denied';
+          if (!isUnlockOrDenied) return false;
+          const tsMs = Date.parse(e.timestamp);
+          return !isNaN(tsMs) && nowMs - tsMs <= RECENT_EVENT_MAX_AGE_MS;
+        })
+      : [];
+
+  if (recentCandidates.length > 0 && protectManager) {
+    try {
+      const [settingsSnap, doorsSnap, windowsSnap] = await Promise.all([
+        db.doc(`organizations/${orgId}/settings/config`).get(),
+        db.collection(`organizations/${orgId}/doors`).get(),
+        db
+          .collection(`organizations/${orgId}/schedule_windows`)
+          .where('status', 'in', ['pending', 'unlocked', 'locked'])
+          .get(),
+      ]);
+
+      const timeZone = String(settingsSnap.data()?.timezone || 'America/Chicago');
+      const doorMap = new Map<string, DoorSnapshotDoc>();
+      for (const d of doorsSnap.docs) {
+        doorMap.set(d.id, { id: d.id, ...(d.data() as Omit<DoorSnapshotDoc, 'id'>) });
+      }
+      const windows: ScheduleWindowSnapshotDoc[] = windowsSnap.docs.map((w) => ({
+        id: w.id,
+        ...(w.data() as Omit<ScheduleWindowSnapshotDoc, 'id'>),
+      }));
+
+      for (const entry of recentCandidates) {
+        trackProcessedSnapshotLog(entry.id);
+        const doorDoc = doorMap.get(entry.door_id) || null;
+        const evalResult = evaluateUnlockSnapshotRule(entry, doorDoc, windows, timeZone);
+
+        if (evalResult.shouldCapture && evalResult.cameraId) {
+          const storagePath = await captureUnlockEventSnapshot(
+            orgId,
+            evalResult.cameraId,
+            entry.id,
+            protectManager
+          );
+          if (storagePath) {
+            entry.snapshot_storage_path = storagePath;
+            entry.snapshot_camera_id = evalResult.cameraId;
+            entry.snapshot_captured_at = new Date().toISOString();
+            logger.info(
+              `[UnlockSnapshot] Captured unlock photo for door "${entry.door_label}" (log ${entry.id})`
+            );
+          }
+        } else if (
+          doorDoc?.unlock_snapshot_config?.enabled &&
+          evalResult.reason &&
+          evalResult.reason !== 'capture_disabled' &&
+          evalResult.reason !== 'event_type_ignored'
+        ) {
+          entry.snapshot_skipped_reason = evalResult.reason;
+        }
+      }
+    } catch (err: any) {
+      logger.warn(`[UnlockSnapshot] Rule evaluation/capture error: ${err.message}`);
+    }
+  }
 
   // 2. Commit logs to Firestore in safe chunks (max 400 operations per batch)
   const now = firestoreTimestamp.now();
@@ -181,12 +272,13 @@ export async function backfillAccessLogs(
 }
 
 /**
- * Start a recurring access log sync on a fixed interval (e.g. every 25 seconds).
+ * Start a recurring access log sync on a fixed interval (e.g. every 10 seconds).
  */
 export function startAccessLogSyncInterval(
   orgId: string,
   unifiClient: UnifiAccessClient,
-  intervalMs = 25000
+  intervalMs = 10000,
+  protectManager?: ProtectManager
 ): () => void {
   logger.info(
     `[AccessLogSync] Starting access log sync interval — every ${intervalMs / 1000}s for org: ${orgId}`
@@ -194,13 +286,13 @@ export function startAccessLogSyncInterval(
 
   // Initial sync after 3 seconds
   setTimeout(() => {
-    syncAccessLogs(orgId, unifiClient).catch((err) => {
+    syncAccessLogs(orgId, unifiClient, { protectManager }).catch((err) => {
       logger.error(`[AccessLogSync] Error in initial sync: ${String(err)}`);
     });
   }, 3000);
 
   const handle = setInterval(() => {
-    syncAccessLogs(orgId, unifiClient).catch((err) => {
+    syncAccessLogs(orgId, unifiClient, { protectManager }).catch((err) => {
       logger.error(`[AccessLogSync] Unhandled error in sync interval: ${String(err)}`);
     });
   }, intervalMs);

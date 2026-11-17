@@ -142,6 +142,10 @@ export interface AccessLogEntry {
   source_label?: string;
   source_type?: string;
   time_type?: string;
+  snapshot_storage_path?: string | null;
+  snapshot_camera_id?: string | null;
+  snapshot_captured_at?: string | null;
+  snapshot_skipped_reason?: string | null;
   raw_data?: Record<string, unknown>;
 }
 

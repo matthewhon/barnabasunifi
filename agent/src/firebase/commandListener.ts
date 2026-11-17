@@ -581,6 +581,7 @@ export function startCommandListener(
           forceFull: backfill,
           lookbackDays: days,
           maxPages: backfill ? 50 : 15,
+          protectManager: protectClient,
         });
         resultMessage = `Synced ${synced.length} access log(s) from UniFi Access.`;
       } else if (command.action === 'sync_policies') {

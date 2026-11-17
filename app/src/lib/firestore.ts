@@ -36,6 +36,7 @@ import type {
   DoorCommand,
   Camera,
   UserCameraPermission,
+  UnlockSnapshotConfig,
   AuditLogEntry,
   AuditAction,
   Agent,
@@ -1398,13 +1399,15 @@ export async function linkDoorCameras(
   doorId: string,
   cameraIds: string[],
   primaryCameraId: string | null,
-  cardDisplayMode?: 'photo' | 'camera' | null
+  cardDisplayMode?: 'photo' | 'camera' | null,
+  unlockSnapshotConfig?: UnlockSnapshotConfig | null
 ): Promise<void> {
   const ref = doc(db, 'organizations', orgId, 'doors', doorId);
   await updateDoc(ref, {
     camera_ids: cameraIds,
     primary_camera_id: primaryCameraId,
     ...(cardDisplayMode !== undefined ? { card_display_mode: cardDisplayMode } : {}),
+    ...(unlockSnapshotConfig !== undefined ? { unlock_snapshot_config: unlockSnapshotConfig } : {}),
   });
 }
 

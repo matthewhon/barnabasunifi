@@ -164,6 +164,37 @@ export interface SyncedUser {
 
 export type DoorState = 'locked' | 'unlocked' | 'unknown';
 
+export type UnlockSnapshotRuleMode =
+  | 'off'
+  | 'always'
+  | 'outside_pco_windows'
+  | 'during_pco_windows'
+  | 'custom_schedule';
+
+export interface UnlockSnapshotTimeRange {
+  days: DayOfWeek[];
+  start_time: string; // "HH:MM" 24h
+  end_time: string;   // "HH:MM" 24h
+}
+
+export interface UnlockSnapshotConfig {
+  enabled: boolean;
+  mode: UnlockSnapshotRuleMode;
+  camera_id?: string | null;
+  /** Optional PCO Service Type IDs to match; if both service & group lists are empty, matches any PCO window for this door */
+  pco_service_type_ids?: string[];
+  /** Optional PCO Group IDs to match */
+  pco_group_ids?: string[];
+  /** Buffer in minutes before/after PCO windows (default 15) */
+  pco_buffer_min?: number;
+  /** Custom day/time ranges (used when mode === 'custom_schedule') */
+  custom_ranges?: UnlockSnapshotTimeRange[];
+  /** When mode === 'custom_schedule', optionally also skip during matching PCO Services & Groups */
+  skip_during_pco_windows?: boolean;
+  /** Also capture snapshots on access_denied events */
+  capture_on_denied?: boolean;
+}
+
 export interface Door {
   id: string;
   org_id: string;
@@ -197,6 +228,7 @@ export interface Door {
   primary_camera_id?: string | null;
   camera_ids?: string[];
   card_display_mode?: 'photo' | 'camera' | null;
+  unlock_snapshot_config?: UnlockSnapshotConfig | null;
   is_hidden?: boolean;
   hidden?: boolean;
   hidden_at?: string | null;
@@ -720,5 +752,9 @@ export interface AccessLogEntry {
   time_type?: string;
   window_unlock_at?: string;
   window_lock_at?: string;
+  snapshot_storage_path?: string | null;
+  snapshot_camera_id?: string | null;
+  snapshot_captured_at?: string | null;
+  snapshot_skipped_reason?: string | null;
   raw_data?: Record<string, unknown>;
 }

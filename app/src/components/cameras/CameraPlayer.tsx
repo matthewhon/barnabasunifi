@@ -10,6 +10,7 @@ interface CameraPlayerProps {
   orgId: string;
   camera: Camera;
   compact?: boolean;
+  fillContainer?: boolean;
   onSessionLoaded?: (session: CameraStreamSession) => void;
 }
 
@@ -17,6 +18,7 @@ export default function CameraPlayer({
   orgId,
   camera,
   compact = false,
+  fillContainer = false,
   onSessionLoaded,
 }: CameraPlayerProps) {
   const [session, setSession] = useState<CameraStreamSession | null>(null);
@@ -143,11 +145,15 @@ export default function CameraPlayer({
     };
   }, [fetchSession, startWebRtcIfAvailable, webrtcActive]);
 
+  const containerSizeStyle: React.CSSProperties = fillContainer
+    ? { width: '100%', height: '100%', minHeight: 0, overflow: 'hidden' }
+    : { aspectRatio: '16 / 9' };
+
   if (loading) {
     return (
       <div
         style={{
-          aspectRatio: '16 / 9',
+          ...containerSizeStyle,
           background: '#0b0f19',
           borderRadius: 'var(--radius-md)',
           display: 'flex',
@@ -155,11 +161,13 @@ export default function CameraPlayer({
           alignItems: 'center',
           justifyContent: 'center',
           gap: '0.5rem',
+          padding: compact ? '0.5rem' : '1rem',
           color: 'var(--color-text-muted)',
-          fontSize: '0.8rem',
+          fontSize: compact ? '0.72rem' : '0.8rem',
+          textAlign: 'center',
         }}
       >
-        <RefreshCw size={20} style={{ animation: 'spin 1s linear infinite' }} />
+        <RefreshCw size={compact ? 16 : 20} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />
         <span>Connecting to {camera.name}…</span>
       </div>
     );
@@ -169,7 +177,7 @@ export default function CameraPlayer({
     return (
       <div
         style={{
-          aspectRatio: '16 / 9',
+          ...containerSizeStyle,
           background: '#0b0f19',
           borderRadius: 'var(--radius-md)',
           border: '1px solid rgba(245, 158, 11, 0.3)',
@@ -177,18 +185,20 @@ export default function CameraPlayer({
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '1rem',
+          padding: compact ? '0.5rem' : '1rem',
           textAlign: 'center',
-          gap: '0.5rem',
+          gap: compact ? '0.25rem' : '0.5rem',
         }}
       >
-        <WifiOff size={24} color="#f59e0b" />
-        <div style={{ fontWeight: 600, fontSize: '0.875rem', color: '#fbbf24' }}>
+        <WifiOff size={compact ? 18 : 24} color="#f59e0b" style={{ flexShrink: 0 }} />
+        <div style={{ fontWeight: 600, fontSize: compact ? '0.75rem' : '0.875rem', color: '#fbbf24' }}>
           Onsite Access Required
         </div>
-        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', maxWidth: '22rem' }}>
-          {errorMessage}
-        </div>
+        {!compact && (
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', maxWidth: '22rem' }}>
+            {errorMessage}
+          </div>
+        )}
       </div>
     );
   }
@@ -197,7 +207,7 @@ export default function CameraPlayer({
     return (
       <div
         style={{
-          aspectRatio: '16 / 9',
+          ...containerSizeStyle,
           background: '#0b0f19',
           borderRadius: 'var(--radius-md)',
           border: '1px solid rgba(239, 68, 68, 0.3)',
@@ -205,18 +215,20 @@ export default function CameraPlayer({
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '1rem',
+          padding: compact ? '0.5rem' : '1rem',
           textAlign: 'center',
-          gap: '0.5rem',
+          gap: compact ? '0.25rem' : '0.5rem',
         }}
       >
-        <ShieldAlert size={24} color="#ef4444" />
-        <div style={{ fontWeight: 600, fontSize: '0.875rem', color: '#f87171' }}>
+        <ShieldAlert size={compact ? 18 : 24} color="#ef4444" style={{ flexShrink: 0 }} />
+        <div style={{ fontWeight: 600, fontSize: compact ? '0.75rem' : '0.875rem', color: '#f87171' }}>
           {errorCode === 'DENIED' ? 'Access Restricted' : 'Stream Unavailable'}
         </div>
-        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', maxWidth: '22rem' }}>
-          {errorMessage}
-        </div>
+        {!compact && (
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', maxWidth: '22rem' }}>
+            {errorMessage}
+          </div>
+        )}
       </div>
     );
   }
@@ -227,7 +239,7 @@ export default function CameraPlayer({
     <div
       style={{
         position: 'relative',
-        aspectRatio: '16 / 9',
+        ...containerSizeStyle,
         background: '#060911',
         borderRadius: 'var(--radius-md)',
         overflow: 'hidden',

@@ -14,6 +14,7 @@ import { format, parseISO, isAfter, isBefore, startOfDay, endOfDay } from 'date-
 import { safeFormat } from '@/lib/date-utils';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '@/lib/firebase';
+import Modal from '@/components/ui/Modal';
 
 // ─── Constants & Labels ───────────────────────────────────────────────────────
 
@@ -292,6 +293,38 @@ const PAGE_SIZE = 30;
 
 export default function AccessActivityPage() {
   const { orgId } = useAuth();
+
+  const [snapshotModalEntry, setSnapshotModalEntry] = useState<AccessLogEntry | null>(null);
+  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+
+  const openSnapshotModal = useCallback(
+    async (entry: AccessLogEntry) => {
+      if (!orgId) return;
+      setSnapshotModalEntry(entry);
+      setSnapshotUrl(null);
+      setSnapshotError(null);
+      setSnapshotLoading(true);
+      try {
+        const fn = httpsCallable<
+          { orgId: string; logId: string },
+          { url: string | null; captured_at: string | null; camera_id: string | null }
+        >(functions, 'getAccessLogSnapshotUrl');
+        const res = await fn({ orgId, logId: entry.id });
+        if (res.data?.url) {
+          setSnapshotUrl(res.data.url);
+        } else {
+          setSnapshotError('Snapshot image is no longer available in storage.');
+        }
+      } catch (err: any) {
+        setSnapshotError(err?.message || 'Failed to load unlock photo.');
+      } finally {
+        setSnapshotLoading(false);
+      }
+    },
+    [orgId]
+  );
 
   const [rawLogs, setRawLogs] = useState<AccessLogEntry[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
@@ -1497,8 +1530,22 @@ export default function AccessActivityPage() {
                             </div>
                           </div>
                         ) : (
-                          <div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'flex-start' }}>
                             <div>{entry.display_message || `${entry.event_type} (${entry.event_result})`}</div>
+                            {entry.snapshot_storage_path && (
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                onClick={() => openSnapshotModal(entry)}
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                                  <circle cx="12" cy="13" r="4" />
+                                </svg>
+                                View Photo
+                              </button>
+                            )}
                           </div>
                         )}
                       </td>
@@ -1519,6 +1566,50 @@ export default function AccessActivityPage() {
           </div>
         )}
       </div>
+
+      <Modal
+        isOpen={!!snapshotModalEntry}
+        onClose={() => setSnapshotModalEntry(null)}
+        title={`Unlock Photo — ${snapshotModalEntry?.door_label || 'Door'}`}
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => setSnapshotModalEntry(null)}>
+              Close
+            </button>
+          </div>
+        }
+      >
+        {snapshotModalEntry && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <span><strong>Person:</strong> {snapshotModalEntry.user_name || 'Unknown'}</span>
+              <span><strong>Method:</strong> {snapshotModalEntry.access_method_label || snapshotModalEntry.access_method}</span>
+              <span><strong>Time:</strong> {safeFormat(snapshotModalEntry.timestamp, 'MMM d, yyyy h:mm:ss a')}</span>
+            </div>
+
+            {snapshotLoading ? (
+              <div style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                Loading photo…
+              </div>
+            ) : snapshotError ? (
+              <div className="alert alert-danger">{snapshotError}</div>
+            ) : snapshotUrl ? (
+              <img
+                src={snapshotUrl}
+                alt={`Unlock snapshot for ${snapshotModalEntry.door_label}`}
+                style={{
+                  width: '100%',
+                  maxHeight: '420px',
+                  objectFit: 'contain',
+                  borderRadius: '0.5rem',
+                  border: '1px solid var(--color-border)',
+                  backgroundColor: '#000',
+                }}
+              />
+            ) : null}
+          </div>
+        )}
+      </Modal>
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }

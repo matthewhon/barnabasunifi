@@ -260,3 +260,63 @@ export const issueCameraStreamSession = onCall<
     expires_at: expiresAtIso,
   };
 });
+
+export const getAccessLogSnapshotUrl = onCall<
+  { orgId: string; logId: string },
+  Promise<{ url: string | null; captured_at: string | null; camera_id: string | null }>
+>({ cors: true }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const { orgId, logId } = request.data || {};
+  if (!orgId || !logId) {
+    throw new HttpsError('invalid-argument', 'orgId and logId are required.');
+  }
+
+  const claims = request.auth.token as Record<string, unknown>;
+  const uid = request.auth.uid;
+  const db = getFirestore();
+
+  const claimOrgId = claims.orgId as string | undefined;
+  const role = claims.role as string | undefined;
+  let isMember = role === 'super_admin' || (claimOrgId === orgId && role !== 'camera_viewer');
+
+  if (!isMember) {
+    const userSnap = await db.doc(`users/${uid}`).get();
+    const memberships = (userSnap.data()?.org_memberships as Array<{ org_id: string; role?: string }>) || [];
+    isMember = memberships.some((m) => m.org_id === orgId && m.role !== 'camera_viewer');
+  }
+
+  if (!isMember) {
+    throw new HttpsError('permission-denied', 'You do not have permission to view access log snapshots.');
+  }
+
+  const logSnap = await db.doc(`organizations/${orgId}/access_logs/${logId}`).get();
+  if (!logSnap.exists) {
+    throw new HttpsError('not-found', 'Access log entry not found.');
+  }
+
+  const logData = logSnap.data()!;
+  const storagePath = logData.snapshot_storage_path as string | undefined;
+  if (!storagePath) {
+    return { url: null, captured_at: null, camera_id: null };
+  }
+
+  const file = getStorage().bucket().file(storagePath);
+  const [exists] = await file.exists();
+  if (!exists) {
+    return { url: null, captured_at: null, camera_id: (logData.snapshot_camera_id as string) || null };
+  }
+
+  const [signed] = await file.getSignedUrl({
+    action: 'read',
+    expires: Date.now() + 5 * 60_000,
+  });
+
+  return {
+    url: signed,
+    captured_at: (logData.snapshot_captured_at as string) || null,
+    camera_id: (logData.snapshot_camera_id as string) || null,
+  };
+});

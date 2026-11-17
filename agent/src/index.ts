@@ -356,15 +356,6 @@ async function startBridgeWorker(): Promise<void> {
     }
     const stopVisitorSync = startVisitorSyncInterval(config.orgId, unifiClient, 60 * 1000);
 
-    // Initial access log sync & recurring
-    try {
-      const logs = await syncAccessLogs(config.orgId, unifiClient);
-      logger.info(`[AccessLogSync] Initial sync completed (${logs.length} access logs found).`);
-    } catch (err: any) {
-      logger.error(`[AccessLogSync] Initial sync error: ${err.message}`);
-    }
-    const stopAccessLogSync = startAccessLogSyncInterval(config.orgId, unifiClient, 25 * 1000);
-
     const protectClient = new ProtectManager();
     if (process.env.UNIFI_PROTECT_API_KEY) {
       protectClient.setConsoles([
@@ -381,6 +372,15 @@ async function startBridgeWorker(): Promise<void> {
 
     // Initial camera sync & recurring (if Protect configured via env or cloud settings)
     const stopCameraSync = startCameraSyncIntervals(config.orgId, protectClient, go2rtcEnabled);
+
+    // Initial access log sync & recurring (10s interval for timely unlock snapshot capture)
+    try {
+      const logs = await syncAccessLogs(config.orgId, unifiClient, { protectManager: protectClient });
+      logger.info(`[AccessLogSync] Initial sync completed (${logs.length} access logs found).`);
+    } catch (err: any) {
+      logger.error(`[AccessLogSync] Initial sync error: ${err.message}`);
+    }
+    const stopAccessLogSync = startAccessLogSyncInterval(config.orgId, unifiClient, 10 * 1000, protectClient);
 
     // Start Firestore command listener
     const stopCommandListener = startCommandListener(
