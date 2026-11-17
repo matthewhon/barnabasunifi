@@ -21,8 +21,24 @@ import {
   subscribeToCameras,
   subscribeToUserCameraPermission,
   linkDoorCameras,
+  subscribeToMappings,
 } from '@/lib/firestore';
-import type { Door, Agent, UnifiSchedule, ScheduleWindow, AgentRelease, PcoCampus, PcoLocation, Camera, UserCameraPermission } from '@/lib/types';
+import type {
+  Door,
+  Agent,
+  UnifiSchedule,
+  ScheduleWindow,
+  AgentRelease,
+  PcoCampus,
+  PcoLocation,
+  Camera,
+  UserCameraPermission,
+  Mapping,
+  UnlockSnapshotConfig,
+  UnlockSnapshotRuleMode,
+  UnlockSnapshotTimeRange,
+  DayOfWeek,
+} from '@/lib/types';
 import { isDoorHidden } from '@/lib/types';
 import { safeFormatDistanceToNow, safeFormat } from '@/lib/date-utils';
 import { formatDoorDisplayName, getDoorUnlockStatus } from '@/lib/door-status-utils';
@@ -265,14 +281,15 @@ function DoorCard({
         opacity: isHidden && !selected ? 0.94 : 1,
       }}
     >
-      {/* Full-Width Header Image Banner */}
+      {/* Full-Width Header Image / Camera Banner */}
       <div
         style={{
           position: 'relative',
           width: '100%',
-          height: '145px',
-          background: activeImage
-            ? '#0f172a'
+          aspectRatio: showLiveCamera && linkedCamera && orgId ? '16 / 9' : activeImage ? '16 / 9' : undefined,
+          height: showLiveCamera && linkedCamera && orgId ? undefined : activeImage ? undefined : '145px',
+          background: activeImage || (showLiveCamera && linkedCamera)
+            ? '#060911'
             : 'linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98))',
           overflow: 'hidden',
           display: 'flex',
@@ -291,7 +308,7 @@ function DoorCard({
             style={{
               width: '100%',
               height: '100%',
-              objectFit: 'cover',
+              objectFit: 'contain',
               display: 'block',
               transition: 'transform 0.4s ease',
             }}
@@ -1191,13 +1208,29 @@ export default function DoorsPage() {
 
   // Camera Viewing & Linking
   const [cameras, setCameras] = useState<Camera[]>([]);
+  const [mappings, setMappings] = useState<Mapping[]>([]);
   const [camPerm, setCamPerm] = useState<UserCameraPermission | null | undefined>(undefined);
   const [activeCamera, setActiveCamera] = useState<Camera | null>(null);
   const [linkCameraDoor, setLinkCameraDoor] = useState<Door | null>(null);
   const [linkCameraId, setLinkCameraId] = useState<string>('');
   const [linkCardDisplayMode, setLinkCardDisplayMode] = useState<'photo' | 'camera'>('photo');
+  const [unlockSnapCfg, setUnlockSnapCfg] = useState<UnlockSnapshotConfig>({
+    enabled: false,
+    mode: 'outside_pco_windows',
+    pco_service_type_ids: [],
+    pco_group_ids: [],
+    pco_buffer_min: 15,
+    custom_ranges: [{ days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], start_time: '08:00', end_time: '18:00' }],
+    skip_during_pco_windows: true,
+    capture_on_denied: false,
+  });
   const [cardPreviewMode, setCardPreviewMode] = useState<'default' | 'photo' | 'camera'>('default');
   const [savingCameraLink, setSavingCameraLink] = useState(false);
+
+  useEffect(() => {
+    if (!orgId) return;
+    return subscribeToMappings(orgId, setMappings);
+  }, [orgId]);
 
   useEffect(() => {
     if (!orgId || !user) return;
@@ -1237,12 +1270,19 @@ export default function DoorsPage() {
     if (!orgId || !linkCameraDoor) return;
     setSavingCameraLink(true);
     try {
+      const cleanSnapCfg: UnlockSnapshotConfig | null = linkCameraId
+        ? {
+            ...unlockSnapCfg,
+            camera_id: linkCameraId,
+          }
+        : null;
       await linkDoorCameras(
         orgId,
         linkCameraDoor.id,
         linkCameraId ? [linkCameraId] : [],
         linkCameraId || null,
-        linkCameraId ? linkCardDisplayMode : 'photo'
+        linkCameraId ? linkCardDisplayMode : 'photo',
+        cleanSnapCfg
       );
       setLinkCameraDoor(null);
     } finally {
@@ -1999,6 +2039,20 @@ export default function DoorsPage() {
                   setLinkCameraDoor(d);
                   setLinkCameraId(d.primary_camera_id || d.camera_ids?.[0] || '');
                   setLinkCardDisplayMode(d.card_display_mode || 'photo');
+                  const existing = d.unlock_snapshot_config;
+                  setUnlockSnapCfg({
+                    enabled: existing?.enabled ?? false,
+                    mode: existing?.mode && existing.mode !== 'off' ? existing.mode : 'outside_pco_windows',
+                    pco_service_type_ids: existing?.pco_service_type_ids ?? [],
+                    pco_group_ids: existing?.pco_group_ids ?? [],
+                    pco_buffer_min: existing?.pco_buffer_min ?? 15,
+                    custom_ranges:
+                      existing?.custom_ranges && existing.custom_ranges.length > 0
+                        ? existing.custom_ranges
+                        : [{ days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], start_time: '08:00', end_time: '18:00' }],
+                    skip_during_pco_windows: existing?.skip_during_pco_windows ?? true,
+                    capture_on_denied: existing?.capture_on_denied ?? false,
+                  });
                 }}
                 isAdmin={isAdmin}
                 selected={selectedDoorIds.includes(door.id)}
@@ -2413,17 +2467,353 @@ export default function DoorsPage() {
           </div>
 
           {linkCameraId && (
-            <div className="form-group" style={{ margin: 0 }}>
-              <label className="form-label">Door Card Display</label>
-              <select
-                className="form-select"
-                value={linkCardDisplayMode}
-                onChange={(e) => setLinkCardDisplayMode(e.target.value as 'photo' | 'camera')}
+            <>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Door Card Display</label>
+                <select
+                  className="form-select"
+                  value={linkCardDisplayMode}
+                  onChange={(e) => setLinkCardDisplayMode(e.target.value as 'photo' | 'camera')}
+                >
+                  <option value="photo">Status Picture (click camera button to view live)</option>
+                  <option value="camera">Live Linked Camera Feed on Door Card</option>
+                </select>
+              </div>
+
+              <div
+                style={{
+                  borderTop: '1px solid var(--color-border)',
+                  paddingTop: '1rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
+                }}
               >
-                <option value="photo">Status Picture (click camera button to view live)</option>
-                <option value="camera">Live Linked Camera Feed on Door Card</option>
-              </select>
-            </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={unlockSnapCfg.enabled}
+                    onChange={(e) => setUnlockSnapCfg((prev) => ({ ...prev, enabled: e.target.checked }))}
+                  />
+                  Capture photo when door is unlocked
+                </label>
+
+                {unlockSnapCfg.enabled && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingLeft: '0.25rem' }}>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">When to Capture</label>
+                      <select
+                        className="form-select"
+                        value={unlockSnapCfg.mode}
+                        onChange={(e) =>
+                          setUnlockSnapCfg((prev) => ({ ...prev, mode: e.target.value as UnlockSnapshotRuleMode }))
+                        }
+                      >
+                        <option value="outside_pco_windows">Outside PCO Services &amp; Groups (skip during services/groups)</option>
+                        <option value="during_pco_windows">Only During PCO Services &amp; Groups</option>
+                        <option value="custom_schedule">Custom Days &amp; Time Ranges</option>
+                        <option value="always">Always (every unlock)</option>
+                      </select>
+                    </div>
+
+                    {unlockSnapCfg.mode === 'custom_schedule' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <label className="form-label" style={{ margin: 0 }}>Custom Time Ranges</label>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() =>
+                              setUnlockSnapCfg((prev) => ({
+                                ...prev,
+                                custom_ranges: [
+                                  ...(prev.custom_ranges || []),
+                                  { days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], start_time: '08:00', end_time: '18:00' },
+                                ],
+                              }))
+                            }
+                          >
+                            + Add Range
+                          </button>
+                        </div>
+
+                        {(unlockSnapCfg.custom_ranges || []).map((range: UnlockSnapshotTimeRange, idx: number) => {
+                          const allDays: { key: DayOfWeek; short: string }[] = [
+                            { key: 'sunday', short: 'Sun' },
+                            { key: 'monday', short: 'Mon' },
+                            { key: 'tuesday', short: 'Tue' },
+                            { key: 'wednesday', short: 'Wed' },
+                            { key: 'thursday', short: 'Thu' },
+                            { key: 'friday', short: 'Fri' },
+                            { key: 'saturday', short: 'Sat' },
+                          ];
+                          return (
+                            <div
+                              key={idx}
+                              style={{
+                                padding: '0.6rem',
+                                borderRadius: '0.5rem',
+                                border: '1px solid var(--color-border)',
+                                backgroundColor: 'var(--color-bg-secondary)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.5rem',
+                              }}
+                            >
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                                  {allDays.map((d) => {
+                                    const active = range.days.includes(d.key);
+                                    return (
+                                      <button
+                                        key={d.key}
+                                        type="button"
+                                        onClick={() => {
+                                          setUnlockSnapCfg((prev) => {
+                                            const next = [...(prev.custom_ranges || [])];
+                                            const cur = next[idx];
+                                            const days = active
+                                              ? cur.days.filter((x) => x !== d.key)
+                                              : [...cur.days, d.key];
+                                            next[idx] = { ...cur, days };
+                                            return { ...prev, custom_ranges: next };
+                                          });
+                                        }}
+                                        style={{
+                                          padding: '0.2rem 0.45rem',
+                                          fontSize: '0.72rem',
+                                          borderRadius: '0.3rem',
+                                          border: '1px solid var(--color-border)',
+                                          cursor: 'pointer',
+                                          backgroundColor: active ? 'var(--color-primary)' : 'transparent',
+                                          color: active ? '#fff' : 'var(--color-text-secondary)',
+                                          fontWeight: active ? 600 : 400,
+                                        }}
+                                      >
+                                        {d.short}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                {(unlockSnapCfg.custom_ranges?.length || 0) > 1 && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ color: 'var(--color-danger)', padding: '0.1rem 0.35rem', fontSize: '0.75rem' }}
+                                    onClick={() =>
+                                      setUnlockSnapCfg((prev) => ({
+                                        ...prev,
+                                        custom_ranges: (prev.custom_ranges || []).filter((_, i) => i !== idx),
+                                      }))
+                                    }
+                                  >
+                                    Remove
+                                  </button>
+                                )}
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                <input
+                                  type="time"
+                                  className="form-input"
+                                  value={range.start_time}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setUnlockSnapCfg((prev) => {
+                                      const next = [...(prev.custom_ranges || [])];
+                                      next[idx] = { ...next[idx], start_time: val };
+                                      return { ...prev, custom_ranges: next };
+                                    });
+                                  }}
+                                />
+                                <span style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>to</span>
+                                <input
+                                  type="time"
+                                  className="form-input"
+                                  value={range.end_time}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setUnlockSnapCfg((prev) => {
+                                      const next = [...(prev.custom_ranges || [])];
+                                      next[idx] = { ...next[idx], end_time: val };
+                                      return { ...prev, custom_ranges: next };
+                                    });
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.82rem' }}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(unlockSnapCfg.skip_during_pco_windows)}
+                            onChange={(e) =>
+                              setUnlockSnapCfg((prev) => ({ ...prev, skip_during_pco_windows: e.target.checked }))
+                            }
+                          />
+                          Also skip during PCO Services &amp; Groups
+                        </label>
+                      </div>
+                    )}
+
+                    {(unlockSnapCfg.mode === 'outside_pco_windows' ||
+                      unlockSnapCfg.mode === 'during_pco_windows' ||
+                      (unlockSnapCfg.mode === 'custom_schedule' && unlockSnapCfg.skip_during_pco_windows)) && (
+                      <div
+                        style={{
+                          padding: '0.65rem',
+                          borderRadius: '0.5rem',
+                          border: '1px solid var(--color-border)',
+                          backgroundColor: 'var(--color-bg-secondary)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.55rem',
+                        }}
+                      >
+                        <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                          PCO Services &amp; Groups Filter
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                          Leave all unchecked to apply to any PCO Service or Group scheduled on this door, or select specific ones below.
+                        </div>
+
+                        {mappings.filter((m) => m.source_type === 'service').length > 0 && (
+                          <div>
+                            <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: '0.25rem' }}>
+                              PCO Services
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                              {Array.from(
+                                new Map(
+                                  mappings
+                                    .filter((m) => m.source_type === 'service')
+                                    .map((m) => [m.pco_resource_id, m])
+                                ).values()
+                              ).map((m) => {
+                                const checked = (unlockSnapCfg.pco_service_type_ids || []).includes(m.pco_resource_id);
+                                return (
+                                  <label
+                                    key={m.pco_resource_id}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.3rem',
+                                      fontSize: '0.75rem',
+                                      padding: '0.2rem 0.5rem',
+                                      borderRadius: '999px',
+                                      border: '1px solid var(--color-border)',
+                                      cursor: 'pointer',
+                                      backgroundColor: checked ? 'var(--color-primary-muted, rgba(59,130,246,0.12))' : 'transparent',
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setUnlockSnapCfg((prev) => {
+                                          const cur = prev.pco_service_type_ids || [];
+                                          const next = checked
+                                            ? cur.filter((id) => id !== m.pco_resource_id)
+                                            : [...cur, m.pco_resource_id];
+                                          return { ...prev, pco_service_type_ids: next };
+                                        })
+                                      }
+                                    />
+                                    {m.pco_resource_label}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {mappings.filter((m) => m.source_type === 'group').length > 0 && (
+                          <div>
+                            <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: '0.25rem' }}>
+                              PCO Groups
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                              {Array.from(
+                                new Map(
+                                  mappings
+                                    .filter((m) => m.source_type === 'group')
+                                    .map((m) => [m.pco_resource_id, m])
+                                ).values()
+                              ).map((m) => {
+                                const checked = (unlockSnapCfg.pco_group_ids || []).includes(m.pco_resource_id);
+                                return (
+                                  <label
+                                    key={m.pco_resource_id}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.3rem',
+                                      fontSize: '0.75rem',
+                                      padding: '0.2rem 0.5rem',
+                                      borderRadius: '999px',
+                                      border: '1px solid var(--color-border)',
+                                      cursor: 'pointer',
+                                      backgroundColor: checked ? 'var(--color-primary-muted, rgba(59,130,246,0.12))' : 'transparent',
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setUnlockSnapCfg((prev) => {
+                                          const cur = prev.pco_group_ids || [];
+                                          const next = checked
+                                            ? cur.filter((id) => id !== m.pco_resource_id)
+                                            : [...cur, m.pco_resource_id];
+                                          return { ...prev, pco_group_ids: next };
+                                        })
+                                      }
+                                    />
+                                    {m.pco_resource_label}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <label className="form-label" style={{ margin: 0, fontSize: '0.75rem' }}>
+                            Buffer around PCO windows (min):
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={120}
+                            className="form-input"
+                            style={{ width: '75px', padding: '0.25rem 0.45rem', fontSize: '0.8rem' }}
+                            value={unlockSnapCfg.pco_buffer_min ?? 15}
+                            onChange={(e) =>
+                              setUnlockSnapCfg((prev) => ({
+                                ...prev,
+                                pco_buffer_min: Math.max(0, Number(e.target.value) || 0),
+                              }))
+                            }
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.82rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(unlockSnapCfg.capture_on_denied)}
+                        onChange={(e) =>
+                          setUnlockSnapCfg((prev) => ({ ...prev, capture_on_denied: e.target.checked }))
+                        }
+                      />
+                      Also capture photo on Access Denied
+                    </label>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       </Modal>

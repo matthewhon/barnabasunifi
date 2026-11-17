@@ -240,14 +240,14 @@ export default function CameraPlayer({
           autoPlay
           playsInline
           muted
-          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
         />
       ) : snapshotSrc ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={snapshotSrc}
           alt={camera.name}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
         />
       ) : (
         <div
