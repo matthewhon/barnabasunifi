@@ -20,6 +20,18 @@ interface PlatformConfigDisplay {
   updated_by?: string;
 }
 
+interface EmailPlatformConfigDisplay {
+  exists: boolean;
+  has_token?: boolean;
+  postmark_server_token_preview?: string;
+  default_from_email?: string;
+  default_from_name?: string;
+  transactional_stream?: string;
+  digest_stream?: string;
+  portal_url?: string;
+  updated_at?: string;
+}
+
 interface TenantItem {
   id: string;
   name: string;
@@ -159,6 +171,18 @@ export default function SoftwareAdminPage() {
   const [showSecret, setShowSecret] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
 
+  // Postmark Email Platform Config State
+  const [emailConfig, setEmailConfig] = useState<EmailPlatformConfigDisplay | null>(null);
+  const [postmarkToken, setPostmarkToken] = useState('');
+  const [defaultFromEmail, setDefaultFromEmail] = useState('');
+  const [defaultFromName, setDefaultFromName] = useState('UnFi-PCO');
+  const [transactionalStream, setTransactionalStream] = useState('outbound');
+  const [digestStream, setDigestStream] = useState('outbound');
+  const [portalUrl, setPortalUrl] = useState('');
+  const [savingEmailConfig, setSavingEmailConfig] = useState(false);
+  const [testPlatformEmailTo, setTestPlatformEmailTo] = useState('');
+  const [sendingTestPlatformEmail, setSendingTestPlatformEmail] = useState(false);
+
   // Search & Filter State
   const [tenantSearch, setTenantSearch] = useState('');
   const [tenantFilter, setTenantFilter] = useState<'all' | 'pco' | 'agent' | 'remote'>('all');
@@ -251,7 +275,63 @@ export default function SoftwareAdminPage() {
   useEffect(() => {
     loadOverview();
     loadConfig();
-  }, [loadOverview, loadConfig]);
+    if (isSuperAdmin || role === 'super_admin') {
+      httpsCallable<unknown, EmailPlatformConfigDisplay>(functions, 'getEmailPlatformConfigCallable')({})
+        .then(({ data }) => {
+          setEmailConfig(data);
+          if (data.default_from_email) setDefaultFromEmail(data.default_from_email);
+          if (data.default_from_name) setDefaultFromName(data.default_from_name);
+          if (data.transactional_stream) setTransactionalStream(data.transactional_stream);
+          if (data.digest_stream) setDigestStream(data.digest_stream);
+          if (data.portal_url) setPortalUrl(data.portal_url);
+        })
+        .catch(() => setEmailConfig({ exists: false }));
+    }
+  }, [loadOverview, loadConfig, isSuperAdmin, role]);
+
+  async function handleSaveEmailConfig() {
+    setSavingEmailConfig(true);
+    try {
+      const fn = httpsCallable(functions, 'updateEmailPlatformConfig');
+      const payload: Record<string, string> = {
+        default_from_email: defaultFromEmail.trim(),
+        default_from_name: defaultFromName.trim() || 'UnFi-PCO',
+        transactional_stream: transactionalStream.trim() || 'outbound',
+        digest_stream: digestStream.trim() || 'outbound',
+        portal_url: portalUrl.trim(),
+      };
+      if (postmarkToken.trim()) {
+        payload.postmark_server_token = postmarkToken.trim();
+      }
+      await fn(payload);
+      showToast('Platform Postmark email settings saved.', 'success');
+      setPostmarkToken('');
+      const { data } = await httpsCallable<unknown, EmailPlatformConfigDisplay>(functions, 'getEmailPlatformConfigCallable')({});
+      setEmailConfig(data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save Postmark settings';
+      showToast(msg, 'error');
+    } finally {
+      setSavingEmailConfig(false);
+    }
+  }
+
+  async function handleTestPlatformEmail() {
+    if (!testPlatformEmailTo.trim()) {
+      showToast('Enter a recipient email address to test.', 'error');
+      return;
+    }
+    setSendingTestPlatformEmail(true);
+    try {
+      await httpsCallable(functions, 'sendTestPlatformEmail')({ recipientEmail: testPlatformEmailTo.trim() });
+      showToast(`Test email sent to ${testPlatformEmailTo.trim()}.`, 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to send test email';
+      showToast(msg, 'error');
+    } finally {
+      setSendingTestPlatformEmail(false);
+    }
+  }
 
   // Handle Save PCO Credentials
   async function handleSaveConfig() {
@@ -1112,6 +1192,125 @@ export default function SoftwareAdminPage() {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Postmark Platform Email Configuration */}
+          <div className="card" style={{ maxWidth: 680 }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: '0.35rem' }}>
+              Platform-Wide Email (Postmark)
+            </h2>
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+              Configure a single Postmark Server Token and verified sender address used across all tenants. Tenants can customize their own logo, sender display name, and reply-to address in Settings.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label className="form-label" htmlFor="postmark-token">
+                  Postmark Server API Token {emailConfig?.has_token && <span className="badge badge-success" style={{ marginLeft: 6, fontSize: '0.7rem' }}>Configured ({emailConfig.postmark_server_token_preview})</span>}
+                </label>
+                <input
+                  id="postmark-token"
+                  className="form-input"
+                  type="password"
+                  placeholder={emailConfig?.has_token ? 'Leave blank to keep existing token' : 'pm-server-token-...'}
+                  value={postmarkToken}
+                  onChange={(e) => setPostmarkToken(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div>
+                  <label className="form-label" htmlFor="default-from-email">Verified Sender Email</label>
+                  <input
+                    id="default-from-email"
+                    className="form-input"
+                    type="email"
+                    placeholder="noreply@yourdomain.com"
+                    value={defaultFromEmail}
+                    onChange={(e) => setDefaultFromEmail(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" htmlFor="default-from-name">Default From Name</label>
+                  <input
+                    id="default-from-name"
+                    className="form-input"
+                    type="text"
+                    placeholder="UnFi-PCO"
+                    value={defaultFromName}
+                    onChange={(e) => setDefaultFromName(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div>
+                  <label className="form-label" htmlFor="tx-stream">Transactional Message Stream</label>
+                  <input
+                    id="tx-stream"
+                    className="form-input"
+                    type="text"
+                    placeholder="outbound"
+                    value={transactionalStream}
+                    onChange={(e) => setTransactionalStream(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="form-label" htmlFor="digest-stream">Digest Message Stream</label>
+                  <input
+                    id="digest-stream"
+                    className="form-input"
+                    type="text"
+                    placeholder="outbound"
+                    value={digestStream}
+                    onChange={(e) => setDigestStream(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="form-label" htmlFor="portal-url">Portal Base URL (used in email CTA buttons)</label>
+                <input
+                  id="portal-url"
+                  className="form-input"
+                  type="url"
+                  placeholder="https://app.yourdomain.com"
+                  value={portalUrl}
+                  onChange={(e) => setPortalUrl(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleSaveEmailConfig}
+                  disabled={savingEmailConfig || !defaultFromEmail.trim()}
+                >
+                  {savingEmailConfig ? 'Saving…' : 'Save Postmark Settings'}
+                </button>
+              </div>
+
+              <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '1rem', marginTop: '0.25rem' }}>
+                <label className="form-label" htmlFor="test-platform-email">Send Test Platform Email</label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <input
+                    id="test-platform-email"
+                    className="form-input"
+                    type="email"
+                    placeholder="admin@yourdomain.com"
+                    value={testPlatformEmailTo}
+                    onChange={(e) => setTestPlatformEmailTo(e.target.value)}
+                  />
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handleTestPlatformEmail}
+                    disabled={sendingTestPlatformEmail || !testPlatformEmailTo.trim()}
+                  >
+                    {sendingTestPlatformEmail ? 'Sending…' : 'Send Test'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -456,3 +456,57 @@ export const getPcoLists = onCall<GetPcoListsRequest, Promise<{ lists: PcoList[]
     }
   }
 );
+
+/**
+ * Callable Cloud Function: sendSyncedUserWelcomeEmail
+ * Sends a building access welcome/summary email to a specific PCO-synced user.
+ */
+export const sendSyncedUserWelcomeEmail = onCall<{ orgId: string; syncedUserId: string }, Promise<{ success: boolean }>>(
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'You must be signed in.');
+    }
+
+    const { orgId, syncedUserId } = request.data ?? {};
+    const tokenRole = (request.auth.token as any)?.role;
+    const tokenOrgId = (request.auth.token as any)?.orgId;
+
+    if (!orgId || !syncedUserId) {
+      throw new HttpsError('invalid-argument', 'orgId and syncedUserId are required.');
+    }
+
+    const isAllowed =
+      tokenRole === 'super_admin' ||
+      (tokenOrgId === orgId && ['org_admin', 'manager'].includes(tokenRole));
+    if (!isAllowed) {
+      throw new HttpsError('permission-denied', 'Only org admins or managers can send user emails.');
+    }
+
+    const db = getFirestore();
+    const snap = await db.doc(`organizations/${orgId}/synced_users/${syncedUserId}`).get();
+    if (!snap.exists) {
+      throw new HttpsError('not-found', 'Synced user not found.');
+    }
+
+    const userData = snap.data()!;
+    const email = userData.email as string | undefined;
+    if (!email || !email.includes('@')) {
+      throw new HttpsError('failed-precondition', 'This user does not have an email address.');
+    }
+
+    const orgCtx = await getOrgEmailContext(orgId);
+    const tmpl = buildSyncedUserWelcomeEmail({
+      orgName: orgCtx.orgName,
+      firstName: (userData.first_name as string) || 'Member',
+      policyNames: Array.isArray(userData.assigned_policy_names) ? userData.assigned_policy_names : [],
+      listNames: Array.isArray(userData.active_list_names) ? userData.active_list_names : [],
+    });
+
+    const res = await sendOrgEmail({ orgId, to: email, ...tmpl });
+    if (!res.sent) {
+      throw new HttpsError('failed-precondition', res.error || 'Failed to send welcome email.');
+    }
+
+    return { success: true };
+  }
+);

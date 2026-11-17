@@ -4,7 +4,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { httpsCallable } from 'firebase/functions';
 import { doc, onSnapshot } from 'firebase/firestore';
-import { functions, db } from '@/lib/firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { functions, db, storage } from '@/lib/firebase';
 import { getOrgSettings, updateOrgSettings, disconnectPco, getLatestAgentRelease, createDoorCommand, subscribeToAgents, approveAgentUpdate, triggerCameraSync } from '@/lib/firestore';
 import type { OrgSettings, AgentRelease, Agent, ProtectConsoleConfig } from '@/lib/types';
 import { useToast } from '@/components/ui/Toast';
@@ -189,6 +190,27 @@ export default function SettingsPage() {
   const [testingSlack, setTestingSlack] = useState(false);
   const [savingNotifications, setSavingNotifications] = useState(false);
 
+  // Postmark Event Email & Tenant Branding / Operational Alerts state
+  const [emailEnabled, setEmailEnabled] = useState(false);
+  const [emailRecipientsStr, setEmailRecipientsStr] = useState('');
+  const [emailMode, setEmailMode] = useState<'daily_digest' | 'immediate'>('daily_digest');
+  const [testEmailTo, setTestEmailTo] = useState('');
+  const [testingEmail, setTestingEmail] = useState(false);
+
+  const [logoUrl, setLogoUrl] = useState('');
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [emailFromName, setEmailFromName] = useState('');
+  const [emailReplyTo, setEmailReplyTo] = useState('');
+  const [emailFooterText, setEmailFooterText] = useState('');
+  const [alertRecipientsStr, setAlertRecipientsStr] = useState('');
+  const [notifyAgentOffline, setNotifyAgentOffline] = useState(false);
+  const [notifyCommandFailure, setNotifyCommandFailure] = useState(false);
+  const [notifyPcoSyncError, setNotifyPcoSyncError] = useState(false);
+  const [notifyUserSyncWelcome, setNotifyUserSyncWelcome] = useState(false);
+  const [notifyVisitorHost, setNotifyVisitorHost] = useState(false);
+  const [visitorHostRecipientsStr, setVisitorHostRecipientsStr] = useState('');
+  const [savingEmailBranding, setSavingEmailBranding] = useState(false);
+
   const [copied, setCopied] = useState(false);
 
   const handleTestPcoConnection = async () => {
@@ -271,6 +293,22 @@ export default function SettingsPage() {
             setNotifyInApp(Boolean(s.event_notifications.channels?.in_app ?? true));
             setSlackEnabled(Boolean(s.event_notifications.channels?.slack_webhook?.enabled));
             setSlackWebhookUrl(s.event_notifications.channels?.slack_webhook?.webhook_url ?? '');
+            setEmailEnabled(Boolean(s.event_notifications.channels?.email?.enabled));
+            setEmailRecipientsStr((s.event_notifications.channels?.email?.recipients ?? []).join(', '));
+            setEmailMode(s.event_notifications.channels?.email?.mode ?? 'daily_digest');
+          }
+          if (s.email_settings) {
+            setLogoUrl(s.email_settings.logo_url ?? '');
+            setEmailFromName(s.email_settings.from_name ?? '');
+            setEmailReplyTo(s.email_settings.reply_to ?? '');
+            setEmailFooterText(s.email_settings.footer_text ?? '');
+            setAlertRecipientsStr((s.email_settings.alert_recipients ?? []).join(', '));
+            setNotifyAgentOffline(Boolean(s.email_settings.notify_on_agent_offline));
+            setNotifyCommandFailure(Boolean(s.email_settings.notify_on_command_failure));
+            setNotifyPcoSyncError(Boolean(s.email_settings.notify_on_pco_sync_error));
+            setNotifyUserSyncWelcome(Boolean(s.email_settings.notify_on_user_sync_welcome));
+            setNotifyVisitorHost(Boolean(s.email_settings.notify_on_visitor_host));
+            setVisitorHostRecipientsStr((s.email_settings.visitor_host_recipients ?? []).join(', '));
           }
         }
       })
@@ -293,6 +331,12 @@ export default function SettingsPage() {
     };
   }, [orgId, showToast]);
 
+  const parseEmailList = (raw: string) =>
+    raw
+      .split(/[\s,;]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.includes('@'));
+
   const handleSaveNotifications = async () => {
     if (!orgId) return;
     setSavingNotifications(true);
@@ -307,6 +351,11 @@ export default function SettingsPage() {
               enabled: slackEnabled,
               webhook_url: slackWebhookUrl.trim(),
             },
+            email: {
+              enabled: emailEnabled,
+              recipients: parseEmailList(emailRecipientsStr),
+              mode: emailMode,
+            },
           },
         },
       });
@@ -315,6 +364,92 @@ export default function SettingsPage() {
       showToast(`Failed to save notification settings: ${err?.message || 'Unknown error'}`, 'error');
     } finally {
       setSavingNotifications(false);
+    }
+  };
+
+  const handleSaveEmailSettings = async () => {
+    if (!orgId) return;
+    setSavingEmailBranding(true);
+    try {
+      await updateOrgSettings(orgId, {
+        email_settings: {
+          logo_url: logoUrl.trim(),
+          from_name: emailFromName.trim(),
+          reply_to: emailReplyTo.trim(),
+          footer_text: emailFooterText.trim(),
+          alert_recipients: parseEmailList(alertRecipientsStr),
+          notify_on_agent_offline: notifyAgentOffline,
+          notify_on_command_failure: notifyCommandFailure,
+          notify_on_pco_sync_error: notifyPcoSyncError,
+          notify_on_user_sync_welcome: notifyUserSyncWelcome,
+          notify_on_visitor_host: notifyVisitorHost,
+          visitor_host_recipients: parseEmailList(visitorHostRecipientsStr),
+        },
+      });
+      showToast('Email branding and alert settings saved.', 'success');
+    } catch (err: any) {
+      showToast(`Failed to save email settings: ${err?.message || 'Unknown error'}`, 'error');
+    } finally {
+      setSavingEmailBranding(false);
+    }
+  };
+
+  const handleUploadEmailLogo = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !orgId) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('Please select an image file (PNG, JPG, SVG, or WebP).', 'error');
+      return;
+    }
+    setUploadingLogo(true);
+    try {
+      const ext = file.name.split('.').pop() || 'png';
+      const storageRef = ref(storage, `organizations/${orgId}/branding/email-logo-${Date.now()}.${ext}`);
+      await uploadBytes(storageRef, file, { contentType: file.type });
+      const downloadUrl = await getDownloadURL(storageRef);
+      setLogoUrl(downloadUrl);
+      await updateOrgSettings(orgId, {
+        email_settings: {
+          logo_url: downloadUrl,
+          from_name: emailFromName.trim(),
+          reply_to: emailReplyTo.trim(),
+          footer_text: emailFooterText.trim(),
+          alert_recipients: parseEmailList(alertRecipientsStr),
+          notify_on_agent_offline: notifyAgentOffline,
+          notify_on_command_failure: notifyCommandFailure,
+          notify_on_pco_sync_error: notifyPcoSyncError,
+          notify_on_user_sync_welcome: notifyUserSyncWelcome,
+          notify_on_visitor_host: notifyVisitorHost,
+          visitor_host_recipients: parseEmailList(visitorHostRecipientsStr),
+        },
+      });
+      showToast('Tenant email logo uploaded and saved.', 'success');
+    } catch (err: any) {
+      showToast(`Logo upload failed: ${err?.message || 'Unknown error'}`, 'error');
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
+  const handleTestEmail = async () => {
+    if (!orgId) return;
+    const recipient = testEmailTo.trim() || parseEmailList(emailRecipientsStr)[0] || '';
+    if (!recipient) {
+      showToast('Enter a test recipient email address first.', 'error');
+      return;
+    }
+    setTestingEmail(true);
+    try {
+      const fn = httpsCallable<{ orgId: string; recipientEmail: string }, { success: boolean }>(
+        functions,
+        'sendTestEmailNotification'
+      );
+      await fn({ orgId, recipientEmail: recipient });
+      showToast(`Test email sent to ${recipient}.`, 'success');
+    } catch (err: any) {
+      showToast(`Failed to send test email: ${err?.message || 'Check platform Postmark config.'}`, 'error');
+    } finally {
+      setTestingEmail(false);
     }
   };
 
@@ -1177,6 +1312,162 @@ SKIP_TLS_VERIFY=true`}</pre>
             </button>
           </div>
         </SectionCard>
+
+        <SectionCard title="Email Branding & Tenant Identity">
+          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginTop: 0, marginBottom: '1rem' }}>
+            Customize how emails sent by your organization appear to staff, members, and visitors. Emails are delivered via the platform Postmark service with your logo and reply-to address.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div>
+              <label className="form-label">Organization Email Logo</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                {logoUrl && (
+                  <div style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', background: '#ffffff' }}>
+                    <img src={logoUrl} alt="Tenant email logo" style={{ maxHeight: '44px', maxWidth: '180px', objectFit: 'contain', display: 'block' }} />
+                  </div>
+                )}
+                <label className="btn btn-secondary btn-sm" style={{ cursor: uploadingLogo ? 'wait' : 'pointer' }}>
+                  {uploadingLogo ? 'Uploading...' : logoUrl ? 'Replace Logo' : 'Upload Logo'}
+                  <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleUploadEmailLogo} disabled={uploadingLogo} />
+                </label>
+                {logoUrl && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLogoUrl('')}>
+                    Remove
+                  </button>
+                )}
+              </div>
+              <input
+                type="url"
+                className="form-input"
+                style={{ marginTop: '0.5rem' }}
+                placeholder="Or paste a public logo image URL (https://...)"
+                value={logoUrl}
+                onChange={(e) => setLogoUrl(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Sender Display Name</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Grace Church Access"
+                  value={emailFromName}
+                  onChange={(e) => setEmailFromName(e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Reply-To Email Address</label>
+                <input
+                  type="email"
+                  className="form-input"
+                  placeholder="office@yourchurch.org"
+                  value={emailReplyTo}
+                  onChange={(e) => setEmailReplyTo(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Email Footer / Visitor Arrival Instructions</label>
+              <textarea
+                className="form-input"
+                rows={2}
+                placeholder="e.g. Please enter through the North Lobby doors. Call (555) 123-4567 if you need assistance."
+                value={emailFooterText}
+                onChange={(e) => setEmailFooterText(e.target.value)}
+              />
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '1rem' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)', marginBottom: '0.5rem' }}>
+                Operational &amp; Security Email Alerts
+              </div>
+              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                <label className="form-label" style={{ fontSize: '0.75rem' }}>
+                  Alert Recipients (leave blank to notify all Org Admins)
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="it@yourchurch.org, facilities@yourchurch.org"
+                  value={alertRecipientsStr}
+                  onChange={(e) => setAlertRecipientsStr(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyAgentOffline} onChange={(e) => setNotifyAgentOffline(e.target.checked)} />
+                  <span>Alert when Local Agent goes offline (&gt; 15 min) or comes back online</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyCommandFailure} onChange={(e) => setNotifyCommandFailure(e.target.checked)} />
+                  <span>Alert when a scheduled or manual door command fails</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyPcoSyncError} onChange={(e) => setNotifyPcoSyncError(e.target.checked)} />
+                  <span>Alert when Planning Center schedule sync fails</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyUserSyncWelcome} onChange={(e) => setNotifyUserSyncWelcome(e.target.checked)} />
+                  <span>Send building access welcome email when PCO List members are newly provisioned</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorHost} onChange={(e) => setNotifyVisitorHost(e.target.checked)} />
+                  <span>Notify host / staff when a visitor pass is created or updated</span>
+                </label>
+              </div>
+
+              {notifyVisitorHost && (
+                <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Visitor Host Notification Recipients</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="reception@yourchurch.org"
+                    value={visitorHostRecipientsStr}
+                    onChange={(e) => setVisitorHostRecipientsStr(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSaveEmailSettings}
+                disabled={savingEmailBranding}
+              >
+                {savingEmailBranding ? 'Saving...' : 'Save Branding & Alert Settings'}
+              </button>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.75rem' }}>
+              <label className="form-label" style={{ fontSize: '0.75rem' }}>Test Tenant Email Branding</label>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <input
+                  type="email"
+                  className="form-input"
+                  style={{ maxWidth: '300px' }}
+                  placeholder="you@yourchurch.org"
+                  value={testEmailTo}
+                  onChange={(e) => setTestEmailTo(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleTestEmail}
+                  disabled={testingEmail}
+                >
+                  {testingEmail ? 'Sending Test...' : 'Send Test Email'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </SectionCard>
           </>
         )}
 
@@ -1387,6 +1678,162 @@ SKIP_TLS_VERIFY=true`}</pre>
               <a href="/mappings" className="btn btn-secondary btn-sm">
                 Manage List to Policy Mappings ➔
               </a>
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Email Branding & Tenant Identity">
+          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginTop: 0, marginBottom: '1rem' }}>
+            Customize how emails sent by your organization appear to staff, members, and visitors. Emails are delivered via the platform Postmark service with your logo and reply-to address.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div>
+              <label className="form-label">Organization Email Logo</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                {logoUrl && (
+                  <div style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', background: '#ffffff' }}>
+                    <img src={logoUrl} alt="Tenant email logo" style={{ maxHeight: '44px', maxWidth: '180px', objectFit: 'contain', display: 'block' }} />
+                  </div>
+                )}
+                <label className="btn btn-secondary btn-sm" style={{ cursor: uploadingLogo ? 'wait' : 'pointer' }}>
+                  {uploadingLogo ? 'Uploading...' : logoUrl ? 'Replace Logo' : 'Upload Logo'}
+                  <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleUploadEmailLogo} disabled={uploadingLogo} />
+                </label>
+                {logoUrl && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLogoUrl('')}>
+                    Remove
+                  </button>
+                )}
+              </div>
+              <input
+                type="url"
+                className="form-input"
+                style={{ marginTop: '0.5rem' }}
+                placeholder="Or paste a public logo image URL (https://...)"
+                value={logoUrl}
+                onChange={(e) => setLogoUrl(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Sender Display Name</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Grace Church Access"
+                  value={emailFromName}
+                  onChange={(e) => setEmailFromName(e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Reply-To Email Address</label>
+                <input
+                  type="email"
+                  className="form-input"
+                  placeholder="office@yourchurch.org"
+                  value={emailReplyTo}
+                  onChange={(e) => setEmailReplyTo(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Email Footer / Visitor Arrival Instructions</label>
+              <textarea
+                className="form-input"
+                rows={2}
+                placeholder="e.g. Please enter through the North Lobby doors. Call (555) 123-4567 if you need assistance."
+                value={emailFooterText}
+                onChange={(e) => setEmailFooterText(e.target.value)}
+              />
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '1rem' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)', marginBottom: '0.5rem' }}>
+                Operational &amp; Security Email Alerts
+              </div>
+              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                <label className="form-label" style={{ fontSize: '0.75rem' }}>
+                  Alert Recipients (leave blank to notify all Org Admins)
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="it@yourchurch.org, facilities@yourchurch.org"
+                  value={alertRecipientsStr}
+                  onChange={(e) => setAlertRecipientsStr(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyAgentOffline} onChange={(e) => setNotifyAgentOffline(e.target.checked)} />
+                  <span>Alert when Local Agent goes offline (&gt; 15 min) or comes back online</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyCommandFailure} onChange={(e) => setNotifyCommandFailure(e.target.checked)} />
+                  <span>Alert when a scheduled or manual door command fails</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyPcoSyncError} onChange={(e) => setNotifyPcoSyncError(e.target.checked)} />
+                  <span>Alert when Planning Center schedule sync fails</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyUserSyncWelcome} onChange={(e) => setNotifyUserSyncWelcome(e.target.checked)} />
+                  <span>Send building access welcome email when PCO List members are newly provisioned</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorHost} onChange={(e) => setNotifyVisitorHost(e.target.checked)} />
+                  <span>Notify host / staff when a visitor pass is created or updated</span>
+                </label>
+              </div>
+
+              {notifyVisitorHost && (
+                <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Visitor Host Notification Recipients</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="reception@yourchurch.org"
+                    value={visitorHostRecipientsStr}
+                    onChange={(e) => setVisitorHostRecipientsStr(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSaveEmailSettings}
+                disabled={savingEmailBranding}
+              >
+                {savingEmailBranding ? 'Saving...' : 'Save Branding & Alert Settings'}
+              </button>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.75rem' }}>
+              <label className="form-label" style={{ fontSize: '0.75rem' }}>Test Tenant Email Branding</label>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <input
+                  type="email"
+                  className="form-input"
+                  style={{ maxWidth: '300px' }}
+                  placeholder="you@yourchurch.org"
+                  value={testEmailTo}
+                  onChange={(e) => setTestEmailTo(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleTestEmail}
+                  disabled={testingEmail}
+                >
+                  {testingEmail ? 'Sending Test...' : 'Send Test Email'}
+                </button>
+              </div>
             </div>
           </div>
         </SectionCard>
@@ -1702,6 +2149,162 @@ SKIP_TLS_VERIFY=true`}</pre>
             )}
           </div>
         </SectionCard>
+
+        <SectionCard title="Email Branding & Tenant Identity">
+          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginTop: 0, marginBottom: '1rem' }}>
+            Customize how emails sent by your organization appear to staff, members, and visitors. Emails are delivered via the platform Postmark service with your logo and reply-to address.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div>
+              <label className="form-label">Organization Email Logo</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                {logoUrl && (
+                  <div style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', background: '#ffffff' }}>
+                    <img src={logoUrl} alt="Tenant email logo" style={{ maxHeight: '44px', maxWidth: '180px', objectFit: 'contain', display: 'block' }} />
+                  </div>
+                )}
+                <label className="btn btn-secondary btn-sm" style={{ cursor: uploadingLogo ? 'wait' : 'pointer' }}>
+                  {uploadingLogo ? 'Uploading...' : logoUrl ? 'Replace Logo' : 'Upload Logo'}
+                  <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleUploadEmailLogo} disabled={uploadingLogo} />
+                </label>
+                {logoUrl && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLogoUrl('')}>
+                    Remove
+                  </button>
+                )}
+              </div>
+              <input
+                type="url"
+                className="form-input"
+                style={{ marginTop: '0.5rem' }}
+                placeholder="Or paste a public logo image URL (https://...)"
+                value={logoUrl}
+                onChange={(e) => setLogoUrl(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Sender Display Name</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Grace Church Access"
+                  value={emailFromName}
+                  onChange={(e) => setEmailFromName(e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Reply-To Email Address</label>
+                <input
+                  type="email"
+                  className="form-input"
+                  placeholder="office@yourchurch.org"
+                  value={emailReplyTo}
+                  onChange={(e) => setEmailReplyTo(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Email Footer / Visitor Arrival Instructions</label>
+              <textarea
+                className="form-input"
+                rows={2}
+                placeholder="e.g. Please enter through the North Lobby doors. Call (555) 123-4567 if you need assistance."
+                value={emailFooterText}
+                onChange={(e) => setEmailFooterText(e.target.value)}
+              />
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '1rem' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)', marginBottom: '0.5rem' }}>
+                Operational &amp; Security Email Alerts
+              </div>
+              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                <label className="form-label" style={{ fontSize: '0.75rem' }}>
+                  Alert Recipients (leave blank to notify all Org Admins)
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="it@yourchurch.org, facilities@yourchurch.org"
+                  value={alertRecipientsStr}
+                  onChange={(e) => setAlertRecipientsStr(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyAgentOffline} onChange={(e) => setNotifyAgentOffline(e.target.checked)} />
+                  <span>Alert when Local Agent goes offline (&gt; 15 min) or comes back online</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyCommandFailure} onChange={(e) => setNotifyCommandFailure(e.target.checked)} />
+                  <span>Alert when a scheduled or manual door command fails</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyPcoSyncError} onChange={(e) => setNotifyPcoSyncError(e.target.checked)} />
+                  <span>Alert when Planning Center schedule sync fails</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyUserSyncWelcome} onChange={(e) => setNotifyUserSyncWelcome(e.target.checked)} />
+                  <span>Send building access welcome email when PCO List members are newly provisioned</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorHost} onChange={(e) => setNotifyVisitorHost(e.target.checked)} />
+                  <span>Notify host / staff when a visitor pass is created or updated</span>
+                </label>
+              </div>
+
+              {notifyVisitorHost && (
+                <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Visitor Host Notification Recipients</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="reception@yourchurch.org"
+                    value={visitorHostRecipientsStr}
+                    onChange={(e) => setVisitorHostRecipientsStr(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSaveEmailSettings}
+                disabled={savingEmailBranding}
+              >
+                {savingEmailBranding ? 'Saving...' : 'Save Branding & Alert Settings'}
+              </button>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.75rem' }}>
+              <label className="form-label" style={{ fontSize: '0.75rem' }}>Test Tenant Email Branding</label>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <input
+                  type="email"
+                  className="form-input"
+                  style={{ maxWidth: '300px' }}
+                  placeholder="you@yourchurch.org"
+                  value={testEmailTo}
+                  onChange={(e) => setTestEmailTo(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleTestEmail}
+                  disabled={testingEmail}
+                >
+                  {testingEmail ? 'Sending Test...' : 'Send Test Email'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </SectionCard>
           </>
         )}
 
@@ -1789,6 +2392,51 @@ SKIP_TLS_VERIFY=true`}</pre>
                   </div>
                 </div>
 
+                {/* Postmark Email Notifications */}
+                <div style={{ padding: '1rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', background: 'var(--color-bg-base)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
+                      Email Notifications (Postmark)
+                    </div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={emailEnabled}
+                        onChange={(e) => setEmailEnabled(e.target.checked)}
+                      />
+                      <span>Enable Email Alerts</span>
+                    </label>
+                  </div>
+
+                  {emailEnabled && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" style={{ fontSize: '0.75rem' }}>
+                          Recipient Email Addresses (comma-separated)
+                        </label>
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder="facilities@church.org, admin@church.org"
+                          value={emailRecipientsStr}
+                          onChange={(e) => setEmailRecipientsStr(e.target.value)}
+                        />
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" style={{ fontSize: '0.75rem' }}>Delivery Mode</label>
+                        <select
+                          className="form-input"
+                          value={emailMode}
+                          onChange={(e) => setEmailMode(e.target.value as 'daily_digest' | 'immediate')}
+                        >
+                          <option value="daily_digest">Daily Digest (8:00 AM UTC)</option>
+                          <option value="immediate">Immediate (when new unmapped events sync)</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Slack / Teams Incoming Webhook */}
                 <div style={{ padding: '1rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', background: 'var(--color-bg-base)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
@@ -1842,6 +2490,162 @@ SKIP_TLS_VERIFY=true`}</pre>
                 </div>
               </>
             )}
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Email Branding & Tenant Identity">
+          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginTop: 0, marginBottom: '1rem' }}>
+            Customize how emails sent by your organization appear to staff, members, and visitors. Emails are delivered via the platform Postmark service with your logo and reply-to address.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div>
+              <label className="form-label">Organization Email Logo</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                {logoUrl && (
+                  <div style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', background: '#ffffff' }}>
+                    <img src={logoUrl} alt="Tenant email logo" style={{ maxHeight: '44px', maxWidth: '180px', objectFit: 'contain', display: 'block' }} />
+                  </div>
+                )}
+                <label className="btn btn-secondary btn-sm" style={{ cursor: uploadingLogo ? 'wait' : 'pointer' }}>
+                  {uploadingLogo ? 'Uploading...' : logoUrl ? 'Replace Logo' : 'Upload Logo'}
+                  <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleUploadEmailLogo} disabled={uploadingLogo} />
+                </label>
+                {logoUrl && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLogoUrl('')}>
+                    Remove
+                  </button>
+                )}
+              </div>
+              <input
+                type="url"
+                className="form-input"
+                style={{ marginTop: '0.5rem' }}
+                placeholder="Or paste a public logo image URL (https://...)"
+                value={logoUrl}
+                onChange={(e) => setLogoUrl(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Sender Display Name</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Grace Church Access"
+                  value={emailFromName}
+                  onChange={(e) => setEmailFromName(e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Reply-To Email Address</label>
+                <input
+                  type="email"
+                  className="form-input"
+                  placeholder="office@yourchurch.org"
+                  value={emailReplyTo}
+                  onChange={(e) => setEmailReplyTo(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Email Footer / Visitor Arrival Instructions</label>
+              <textarea
+                className="form-input"
+                rows={2}
+                placeholder="e.g. Please enter through the North Lobby doors. Call (555) 123-4567 if you need assistance."
+                value={emailFooterText}
+                onChange={(e) => setEmailFooterText(e.target.value)}
+              />
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '1rem' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)', marginBottom: '0.5rem' }}>
+                Operational &amp; Security Email Alerts
+              </div>
+              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                <label className="form-label" style={{ fontSize: '0.75rem' }}>
+                  Alert Recipients (leave blank to notify all Org Admins)
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="it@yourchurch.org, facilities@yourchurch.org"
+                  value={alertRecipientsStr}
+                  onChange={(e) => setAlertRecipientsStr(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyAgentOffline} onChange={(e) => setNotifyAgentOffline(e.target.checked)} />
+                  <span>Alert when Local Agent goes offline (&gt; 15 min) or comes back online</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyCommandFailure} onChange={(e) => setNotifyCommandFailure(e.target.checked)} />
+                  <span>Alert when a scheduled or manual door command fails</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyPcoSyncError} onChange={(e) => setNotifyPcoSyncError(e.target.checked)} />
+                  <span>Alert when Planning Center schedule sync fails</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyUserSyncWelcome} onChange={(e) => setNotifyUserSyncWelcome(e.target.checked)} />
+                  <span>Send building access welcome email when PCO List members are newly provisioned</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notifyVisitorHost} onChange={(e) => setNotifyVisitorHost(e.target.checked)} />
+                  <span>Notify host / staff when a visitor pass is created or updated</span>
+                </label>
+              </div>
+
+              {notifyVisitorHost && (
+                <div className="form-group" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Visitor Host Notification Recipients</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="reception@yourchurch.org"
+                    value={visitorHostRecipientsStr}
+                    onChange={(e) => setVisitorHostRecipientsStr(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSaveEmailSettings}
+                disabled={savingEmailBranding}
+              >
+                {savingEmailBranding ? 'Saving...' : 'Save Branding & Alert Settings'}
+              </button>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.75rem' }}>
+              <label className="form-label" style={{ fontSize: '0.75rem' }}>Test Tenant Email Branding</label>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <input
+                  type="email"
+                  className="form-input"
+                  style={{ maxWidth: '300px' }}
+                  placeholder="you@yourchurch.org"
+                  value={testEmailTo}
+                  onChange={(e) => setTestEmailTo(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleTestEmail}
+                  disabled={testingEmail}
+                >
+                  {testingEmail ? 'Sending Test...' : 'Send Test Email'}
+                </button>
+              </div>
+            </div>
           </div>
         </SectionCard>
           </>

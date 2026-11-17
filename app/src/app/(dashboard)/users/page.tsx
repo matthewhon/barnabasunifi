@@ -207,7 +207,7 @@ export default function UsersPage() {
     try {
       const inviteUser = httpsCallable<
         { orgId: string; email: string; role: UserRole },
-        { success: boolean; uid: string; isNewUser: boolean; setupLink: string }
+        { success: boolean; uid: string; isNewUser: boolean; setupLink: string; emailSent?: boolean }
       >(functions, 'inviteUser');
       const res = await inviteUser({ orgId, email: inviteEmail.trim(), role: inviteRole });
 
@@ -218,7 +218,12 @@ export default function UsersPage() {
 
       setInviteIsNewUser(res.data.isNewUser);
       setInviteLink(res.data.setupLink);
-      showToast(`User ${inviteEmail.trim()} added. Share the setup link with them.`, 'success');
+      showToast(
+        res.data.emailSent
+          ? `Invitation email sent to ${inviteEmail.trim()}.`
+          : `User ${inviteEmail.trim()} added. Share the setup link with them.`,
+        'success'
+      );
       fetchOrgUsers();
     } catch (err: unknown) {
       const msg = (err as { message?: string }).message ?? 'Failed to invite user.';
@@ -294,7 +299,7 @@ export default function UsersPage() {
     try {
       const adminResetPassword = httpsCallable<
         { orgId: string; targetUid: string; newPassword?: string; action: 'send_email' | 'set_password' },
-        { success: boolean; message: string; resetLink?: string }
+        { success: boolean; message: string; resetLink?: string; emailSent?: boolean }
       >(functions, 'adminResetPassword');
 
       const res = await adminResetPassword({
@@ -311,7 +316,12 @@ export default function UsersPage() {
 
       if (res.data.resetLink) {
         setGeneratedLink(res.data.resetLink);
-        showToast('Password reset link generated successfully.', 'success');
+        showToast(
+          res.data.emailSent
+            ? `Password reset email sent to ${resetUser.email}.`
+            : 'Password reset link generated successfully.',
+          'success'
+        );
       } else {
         showToast(res.data.message || 'Password updated successfully.', 'success');
         setResetModalOpen(false);

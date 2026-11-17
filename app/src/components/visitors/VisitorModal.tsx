@@ -85,6 +85,7 @@ export default function VisitorModal({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [sendPassEmail, setSendPassEmail] = useState(true);
 
   const { role, isSuperAdmin } = useAuth();
   const isAdmin = role === 'org_admin' || isSuperAdmin;
@@ -245,7 +246,11 @@ export default function VisitorModal({
 
     try {
       const fn = httpsCallable(functions, 'saveUnifiVisitor');
-      await fn({ orgId, visitor: payload });
+      await fn({
+        orgId,
+        visitor: payload,
+        sendEmail: sendPassEmail && Boolean(email.trim()),
+      });
       onSaved?.();
       onClose();
     } catch (err: any) {
@@ -425,6 +430,16 @@ export default function VisitorModal({
               placeholder="visitor@example.com"
               style={{ width: '100%' }}
             />
+            {email.trim().includes('@') && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.4rem', fontSize: '0.78rem', color: 'var(--color-text-secondary)', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={sendPassEmail}
+                  onChange={(e) => setSendPassEmail(e.target.checked)}
+                />
+                <span>Email access pass &amp; PIN to visitor on save</span>
+              </label>
+            )}
           </div>
         </div>
 

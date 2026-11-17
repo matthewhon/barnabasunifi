@@ -311,6 +311,24 @@ export default function VisitorsPage() {
     setTimeout(() => setCopiedId(null), 3000);
   };
 
+  const [emailingVisitorId, setEmailingVisitorId] = useState<string | null>(null);
+  const handleEmailVisitorPass = async (visitor: UnifiVisitor) => {
+    if (!orgId || !visitor.email) return;
+    setEmailingVisitorId(visitor.id);
+    try {
+      const fn = httpsCallable<{ orgId: string; visitorId: string }, { success: boolean }>(
+        functions,
+        'sendVisitorPassEmail'
+      );
+      await fn({ orgId, visitorId: visitor.id });
+      showFeedback(`Access pass emailed to ${visitor.email}.`, true);
+    } catch (err: any) {
+      showFeedback(err?.message || 'Failed to send visitor pass email.', false);
+    } finally {
+      setEmailingVisitorId(null);
+    }
+  };
+
   // Quick Copy PIN only
   const handleCopyPinOnly = (visitor: UnifiVisitor) => {
     const pinStr = getVisitorPin(visitor.pin_code);
@@ -780,6 +798,29 @@ export default function VisitorsPage() {
                     <ShareIcon />
                     <span>{isTextCopied ? 'Copied Invitation!' : 'Copy Invitation Message'}</span>
                   </button>
+
+                  {canManage && visitor.email && (
+                    <button
+                      type="button"
+                      onClick={() => handleEmailVisitorPass(visitor)}
+                      disabled={emailingVisitorId === visitor.id}
+                      title={`Email access pass to ${visitor.email}`}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.25rem',
+                        marginTop: '0.2rem',
+                        fontSize: '0.6875rem',
+                        color: 'var(--color-text-secondary)',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: emailingVisitorId === visitor.id ? 'wait' : 'pointer',
+                        fontWeight: 600,
+                      }}
+                    >
+                      <span>{emailingVisitorId === visitor.id ? 'Sending...' : '✉ Email Pass'}</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* 4. Action Buttons */}
