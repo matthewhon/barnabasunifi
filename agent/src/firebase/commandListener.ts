@@ -300,6 +300,7 @@ export function startCommandListener(
         action: rawData.action as CommandAction,
         door_id: rawData.door_id as string | undefined,
         door_label: rawData.door_label as string | undefined,
+        camera_id: rawData.camera_id as string | undefined,
         unifi_door_id: unifiDoorId,
         schedule_id: rawData.schedule_id as string | undefined,
         schedule_data: rawData.schedule_data as Record<string, unknown> | undefined,
