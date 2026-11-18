@@ -97,6 +97,7 @@ export async function syncScheduleWindowsNow(orgId: string): Promise<number> {
     for (const doc of windowsSnap.docs) {
       const d = doc.data();
       if (!d) continue;
+      if (d.status === 'cancelled') continue;
       const doorIds = Array.isArray(d.door_ids) ? (d.door_ids as string[]) : [];
       if (doorIds.length === 0) continue;
 

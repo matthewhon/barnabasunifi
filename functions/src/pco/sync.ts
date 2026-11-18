@@ -42,6 +42,7 @@ interface MappingData {
 interface SyncResult {
   windowsCreated: number;
   windowsUpdated: number;
+  windowsCancelled: number;
 }
 
 interface TriggerPcoSyncRequest {
@@ -52,6 +53,7 @@ interface TriggerPcoSyncResponse {
   success: true;
   windowsCreated: number;
   windowsUpdated: number;
+  windowsCancelled: number;
 }
 
 export function normalizePlanTimeType(rawType: unknown, name?: string): 'service' | 'rehearsal' | 'other' {
@@ -147,6 +149,13 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
 
   let windowsCreated = 0;
   let windowsUpdated = 0;
+  let windowsCancelled = 0;
+  const seenKeys = new Set<string>();
+  let serviceFetchSucceeded = true;
+  const failedServiceTypeIds = new Set<string>();
+  const failedPlanIds = new Set<string>();
+  let groupsFetchSucceeded = true;
+  const failedGroupIds = new Set<string>();
   const newUnmappedEvents: Array<{ title: string; startsAt: string; sourceType: string }> = [];
   const changedMappedEvents: Array<{
     title: string;
@@ -173,6 +182,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       }>;
     }
   ): Promise<void> {
+    seenKeys.add(idempotencyKey);
     const defaultUnlockOffsetMin = mappingOptions?.unlock_offset_min ?? settings.unlock_buffer_before_min ?? 15;
     const defaultLockMode = mappingOptions?.lock_timing_mode ?? settings.lock_timing_mode ?? 'after_end';
     let defaultLockOffsetMin: number;
@@ -552,6 +562,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
         plans = await client.getPlansForServiceType(serviceTypeId);
       } catch (err) {
         console.error(`Failed to fetch plans for service_type ${serviceTypeId}:`, err);
+        failedServiceTypeIds.add(serviceTypeId);
         continue;
       }
 
@@ -563,6 +574,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
           planTimes = await client.getPlanTimes(serviceTypeId, planId);
         } catch (err) {
           console.error(`Failed to fetch plan_times for plan ${planId}:`, err);
+          failedPlanIds.add(planId);
           continue;
         }
 
@@ -664,6 +676,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       }
     }
   } catch (err) {
+    serviceFetchSucceeded = false;
     console.error('Error fetching service types from PCO:', err);
   }
 
@@ -688,6 +701,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
         eventsWithLocations = await client.getGroupEventsWithLocations(groupId);
       } catch (err) {
         console.error(`Failed to fetch events for group ${groupId}:`, err);
+        failedGroupIds.add(groupId);
         continue;
       }
 
@@ -740,7 +754,84 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
       }
     }
   } catch (err) {
+    groupsFetchSucceeded = false;
     console.warn('Groups API unavailable or returned error:', err);
+  }
+
+  // 5b. Reconcile deleted PCO plans / plan_times / group events:
+  // Cancel any future pending PCO-sourced schedule_windows that were not seen
+  // in this sync (provided their source PCO fetch succeeded), along with any
+  // pending door_commands queued for them.
+  try {
+    const fiftyNineDaysMs = 59 * 24 * 60 * 60 * 1000;
+    const pendingWindowsSnap = await windowsRef.where('status', '==', 'pending').get();
+
+    for (const winDoc of pendingWindowsSnap.docs) {
+      const data = winDoc.data();
+      const source = data?.source as string | undefined;
+      if (source !== 'pco_service' && source !== 'pco_group') continue;
+
+      const key = data?.idempotency_key as string | undefined;
+      if (!key || seenKeys.has(key)) continue;
+
+      const startsAtMs =
+        data?.starts_at && typeof data.starts_at.toMillis === 'function'
+          ? data.starts_at.toMillis()
+          : 0;
+      if (!startsAtMs || startsAtMs <= now || startsAtMs > now + fiftyNineDaysMs) continue;
+
+      if (source === 'pco_service') {
+        if (!serviceFetchSucceeded) continue;
+        if (data.pco_service_type_id && failedServiceTypeIds.has(String(data.pco_service_type_id))) continue;
+        if (data.pco_plan_id && failedPlanIds.has(String(data.pco_plan_id))) continue;
+      } else if (source === 'pco_group') {
+        if (!groupsFetchSucceeded) continue;
+        if (data.pco_group_id && failedGroupIds.has(String(data.pco_group_id))) continue;
+      }
+
+      await winDoc.ref.update({
+        status: 'cancelled',
+        cancelled_at: FieldValue.serverTimestamp(),
+        cancelled_reason: 'Removed from Planning Center',
+        updated_at: FieldValue.serverTimestamp(),
+      });
+      windowsCancelled++;
+
+      // Cancel any pending door_commands for this window (both field names)
+      const [cmdsByScheduleId, cmdsByWindowId] = await Promise.all([
+        commandsRef.where('schedule_window_id', '==', winDoc.id).where('status', '==', 'pending').get(),
+        commandsRef.where('window_id', '==', winDoc.id).where('status', '==', 'pending').get(),
+      ]);
+      const seenCmdRefs = new Map<string, FirebaseFirestore.DocumentReference>();
+      for (const cDoc of [...cmdsByScheduleId.docs, ...cmdsByWindowId.docs]) {
+        seenCmdRefs.set(cDoc.id, cDoc.ref);
+      }
+      if (seenCmdRefs.size > 0) {
+        const batch = db.batch();
+        for (const cmdRef of seenCmdRefs.values()) {
+          batch.update(cmdRef, {
+            status: 'cancelled',
+            result_message: 'Cancelled: event removed from Planning Center',
+            updated_at: FieldValue.serverTimestamp(),
+          });
+        }
+        await batch.commit();
+      }
+
+      const doorLabels = Array.isArray(data.door_labels) ? (data.door_labels as string[]) : [];
+      const doorIds = Array.isArray(data.door_ids) ? (data.door_ids as string[]) : [];
+      if (doorIds.length > 0 && Math.abs(startsAtMs - now) <= 48 * 60 * 60 * 1000) {
+        changedMappedEvents.push({
+          title: String(data.source_label || 'PCO Event'),
+          changeType: 'cancelled',
+          oldStart: new Date(startsAtMs).toISOString(),
+          newStart: new Date(startsAtMs).toISOString(),
+          doorLabels,
+        });
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to reconcile deleted PCO windows for org ${orgId}:`, err);
   }
 
   // 6. Write audit log
@@ -748,6 +839,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
     event: 'pco_sync',
     windows_created: windowsCreated,
     windows_updated: windowsUpdated,
+    windows_cancelled: windowsCancelled,
     synced_at: FieldValue.serverTimestamp(),
   });
 
@@ -822,7 +914,7 @@ export async function syncOrgSchedule(orgId: string): Promise<SyncResult> {
     }
   }
 
-  return { windowsCreated, windowsUpdated };
+  return { windowsCreated, windowsUpdated, windowsCancelled };
 }
 
 // ---------------------------------------------------------------------------

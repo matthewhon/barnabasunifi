@@ -106,21 +106,26 @@ export const getPcoResources = onCall<
           try {
             const plans = await client.getPlansForServiceType(item.id, 60);
             if (plans && plans.length > 0) {
-              const nextPlan = plans[0];
-              upcomingPlanTitle = (nextPlan.attributes?.dates ?? nextPlan.attributes?.title ?? nextPlan.attributes?.series_title) as string | undefined;
-              upcomingPlanDate = (nextPlan.attributes?.sort_date ?? nextPlan.attributes?.dates) as string | undefined;
+              for (const candidatePlan of plans.slice(0, 5)) {
+                const planTimes = await client.getPlanTimes(item.id, candidatePlan.id);
+                const parsedTimes = planTimes.map((pt) => {
+                  const attrs = pt.attributes as { starts_at?: string; ends_at?: string; time_type?: string | number; name?: string };
+                  return {
+                    id: pt.id,
+                    name: attrs.name,
+                    starts_at: attrs.starts_at || '',
+                    ends_at: attrs.ends_at,
+                    time_type: normalizePlanTimeType(attrs.time_type, attrs.name),
+                  };
+                }).filter((t) => !!t.starts_at);
 
-              const planTimes = await client.getPlanTimes(item.id, nextPlan.id);
-              upcomingTimes = planTimes.map((pt) => {
-                const attrs = pt.attributes as { starts_at?: string; ends_at?: string; time_type?: string | number; name?: string };
-                return {
-                  id: pt.id,
-                  name: attrs.name,
-                  starts_at: attrs.starts_at || '',
-                  ends_at: attrs.ends_at,
-                  time_type: normalizePlanTimeType(attrs.time_type, attrs.name),
-                };
-              }).filter((t) => !!t.starts_at);
+                if (parsedTimes.length > 0) {
+                  upcomingPlanTitle = (candidatePlan.attributes?.dates ?? candidatePlan.attributes?.title ?? candidatePlan.attributes?.series_title) as string | undefined;
+                  upcomingPlanDate = (candidatePlan.attributes?.sort_date ?? candidatePlan.attributes?.dates) as string | undefined;
+                  upcomingTimes = parsedTimes;
+                  break;
+                }
+              }
             }
           } catch (err) {
             console.warn(`Could not load upcoming plan times for service type ${item.id}:`, err);

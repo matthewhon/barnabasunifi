@@ -123,6 +123,7 @@ export function ActiveMappingCard({
   const now = Date.now();
   const matchingWindows = scheduleWindows
     .filter((w) => {
+      if (w.status === 'cancelled') return false;
       if (w.source_type !== mapping.source_type) return false;
       if (!Array.isArray(w.door_ids) || w.door_ids.length === 0) return false;
 
@@ -523,7 +524,7 @@ export function ActiveMappingCard({
                     nextWindow?.unlock_at ||
                     ''
                 )}
-                {upcomingPlanTitle ? ` · ${upcomingPlanTitle}` : ''}
+                {nextActivePcoTime && upcomingPlanTitle ? ` · ${upcomingPlanTitle}` : ''}
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                 {windowEarliestUnlockIso && windowLatestLockIso ? (
