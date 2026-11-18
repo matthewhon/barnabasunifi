@@ -105,6 +105,38 @@ export class PcoClient {
         'Content-Type': 'application/json',
       },
     });
+
+    // Respect PCO's 100 req / 20s rate limit:
+    // - Pause briefly when approaching the limit
+    // - Automatically retry 429 responses using Retry-After
+    this.http.interceptors.response.use(
+      async (response) => {
+        const count = Number(response.headers?.['x-pco-api-request-rate-count']);
+        const limit = Number(response.headers?.['x-pco-api-request-rate-limit']);
+        if (!isNaN(count) && !isNaN(limit) && limit > 0 && count >= limit - 5) {
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        return response;
+      },
+      async (error) => {
+        const config = error?.config as (typeof error.config & { _pcoRetryCount?: number }) | undefined;
+        if (error?.response?.status === 429 && config) {
+          const retryCount = config._pcoRetryCount ?? 0;
+          if (retryCount < 6) {
+            config._pcoRetryCount = retryCount + 1;
+            const retryAfterSec = Number(error.response.headers?.['retry-after']);
+            const waitMs =
+              (!isNaN(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec * 1000 : 5000) +
+              250 +
+              Math.floor(Math.random() * 500);
+            console.warn(`PcoClient: 429 rate limited on ${config.url}; retrying (${config._pcoRetryCount}/6) after ${waitMs}ms`);
+            await new Promise((r) => setTimeout(r, waitMs));
+            return this.http.request(config);
+          }
+        }
+        return Promise.reject(error);
+      }
+    );
   }
 
   // -------------------------------------------------------------------------
